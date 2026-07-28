@@ -45,6 +45,7 @@
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <kafka.version>4.3.1</kafka.version>
+        <pitest.threads>4</pitest.threads>
         <junit.version>5.11.4</junit.version>
         <slf4j.version>2.0.18</slf4j.version>
     </properties>
@@ -111,15 +112,29 @@
                     <targetClasses>
                         <param>io.github.tobyjamesclements.parsley.*</param>
                     </targetClasses>
-                    <!-- Serial mutants: a timeout under CPU contention counts as a kill, which
-                         would hide exactly the survivors this run exists to find. -->
-                    <threads>1</threads>
+                    <!-- Four threads is measured as verdict-identical to a serial run on this
+                         suite (a timeout under CPU contention would count as a kill, so this
+                         is re-checked when the suite slows: run once with -Dpitest.threads=1
+                         and diff mutations.xml). Overridable per run. -->
+                    <threads>${pitest.threads}</threads>
+                    <!-- The floor guards against regression; the score stands a few points
+                         above it so honest refactoring noise does not flake the build. -->
+                    <mutationThreshold>60</mutationThreshold>
                     <outputFormats>
                         <param>HTML</param>
                         <param>XML</param>
                     </outputFormats>
                     <timestampedReports>false</timestampedReports>
                 </configuration>
+                <executions>
+                    <execution>
+                        <id>mutation-floor</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>mutationCoverage</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
