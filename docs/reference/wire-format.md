@@ -85,6 +85,14 @@ bytes    value
 Non-Parsley headers are not yet part of the envelope; a held record is delivered with empty
 headers. This is a known limit of the current cut.
 
+## Fold-state store
+
+A stateful stage keeps its per-key fold state in a second store, `parsley-<stage>-fold`.
+Keys are the message key's encoded bytes with a one-byte presence prefix — `0x00` alone for
+a null key, `0x01` followed by the key bytes otherwise — so a null key folds under its own
+state without colliding with an empty key. Values are whatever the stage's state codec
+produces; Parsley adds no framing.
+
 ## Not persisted
 
 `ownOutputs` (re-seeded from sink end offsets at every init, which dominate any persisted

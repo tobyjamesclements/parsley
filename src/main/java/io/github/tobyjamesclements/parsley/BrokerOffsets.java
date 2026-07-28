@@ -15,7 +15,7 @@ import java.util.Set;
  *
  * <p>Package-private on purpose: both queries carry soundness obligations (strict end-offset
  * resolution, definitive absence) that make this a seam users must not substitute. Tests use
- * {@link CausalStage#testTopology()}, which wires a disconnected view internally.
+ * {@link Parsley#testTopology()}, which wires a disconnected view internally.
  */
 interface BrokerOffsets {
 

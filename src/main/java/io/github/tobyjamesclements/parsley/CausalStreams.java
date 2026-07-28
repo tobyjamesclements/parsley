@@ -1,75 +1,91 @@
 package io.github.tobyjamesclements.parsley;
 
 import org.apache.kafka.clients.admin.Admin;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.common.Metric;
+import org.apache.kafka.common.MetricName;
 import org.apache.kafka.streams.KafkaStreams;
-import org.apache.kafka.streams.StreamsConfig;
+import org.apache.kafka.streams.LagInfo;
+import org.apache.kafka.streams.ThreadMetadata;
+import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
+import org.apache.kafka.streams.processor.StateRestoreListener;
 
 import java.time.Duration;
-import java.util.HashMap;
 import java.util.Map;
-import java.util.Properties;
+import java.util.Set;
 
 /**
- * Production wiring and runtime for a {@link CausalStage}:
+ * The running application: a curated view of the Kafka Streams runtime, assembled by
+ * {@link Parsley#streams} and started here. The surface is an allowlist — each member is
+ * present because it is causally inert — and there is no accessor to the underlying
+ * {@code KafkaStreams}, ever: any single escape hatch would reintroduce the full inherited
+ * surface, parts of which can violate causality (pausing one instance freezes its release
+ * punctuator and causally stalls other instances; the protocol stores must not be handed
+ * out).
  *
- * <ul>
- *   <li>requires and enforces {@code processing.guarantee=exactly_once_v2} and
- *       {@code isolation.level=read_committed} — the protocol's transactional state and
- *       density adaptation are defined against them;</li>
- *   <li>installs the position-capturing client supplier ({@link Positions}) — the consumer's
- *       position advance past transaction markers is the protocol's liveness signal;</li>
- *   <li>resolves topic identity and broker offset facts through an admin client built from
- *       the same properties ({@link AdminBrokerOffsets}); own outputs are claimed in
- *       sequence space.</li>
- * </ul>
+ * <p>Absent by design, with the operational alternative: {@code pause()}/{@code resume()}
+ * (stop the instance or scale by instances), {@code store()} and interactive queries (the
+ * protocol and fold stores are internal; observe through sinks), thread add/remove
+ * (replace the instance), {@code cleanUp()} (delete the state directory of a stopped
+ * instance).
  */
 public final class CausalStreams implements AutoCloseable {
 
     private final KafkaStreams streams;
     private final Admin admin;
 
-    private CausalStreams(KafkaStreams streams, Admin admin) {
+    CausalStreams(KafkaStreams streams, Admin admin) {
         this.streams = streams;
         this.admin = admin;
     }
 
-    /** Starts a single-stage application; see {@link #start(CausalTopology, Properties)}. */
-    public static CausalStreams start(CausalStage stage, Properties props) {
-        return start(CausalTopology.of(stage), props);
+    /** Registers a state-transition listener. Before {@link #start()}. */
+    public void setStateListener(KafkaStreams.StateListener listener) {
+        streams.setStateListener(listener);
     }
 
-    public static CausalStreams start(CausalTopology causalTopology, Properties props) {
-        Properties p = new Properties();
-        p.putAll(props);
-        Object guarantee = p.get(StreamsConfig.PROCESSING_GUARANTEE_CONFIG);
-        if (guarantee != null && !StreamsConfig.EXACTLY_ONCE_V2.equals(guarantee)) {
-            throw new IllegalArgumentException("parsley requires processing.guarantee=exactly_once_v2");
-        }
-        p.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
-        p.put(StreamsConfig.consumerPrefix(ConsumerConfig.ISOLATION_LEVEL_CONFIG), "read_committed");
+    /** Registers the processing-exception handler. Before {@link #start()}. */
+    public void setUncaughtExceptionHandler(StreamsUncaughtExceptionHandler handler) {
+        streams.setUncaughtExceptionHandler(handler);
+    }
 
-        Map<String, Object> adminConfig = new HashMap<>();
-        for (String name : p.stringPropertyNames()) {
-            adminConfig.put(name, p.getProperty(name));
-        }
-        Admin admin = Admin.create(Map.of("bootstrap.servers",
-                adminConfig.get(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG)));
+    /** Registers a restore listener for the protocol and fold stores. Before {@link #start()}. */
+    public void setGlobalStateRestoreListener(StateRestoreListener listener) {
+        streams.setGlobalStateRestoreListener(listener);
+    }
 
-        TopicIds topicIds = TopicIds.fromAdmin(admin);
-        for (CausalStage stage : causalTopology.stages()) {
-            stage.wire(topicIds,
-                    (ids, sinkTopics) -> new AdminBrokerOffsets(ids, admin, sinkTopics));
-        }
+    public void start() {
+        streams.start();
+    }
 
-        KafkaStreams ks = new KafkaStreams(causalTopology.topology(), p, Positions.capturingClientSupplier());
-        ks.start();
-        return new CausalStreams(ks, admin);
+    public KafkaStreams.State state() {
+        return streams.state();
+    }
+
+    public Map<MetricName, ? extends Metric> metrics() {
+        return streams.metrics();
+    }
+
+    public Set<ThreadMetadata> metadataForLocalThreads() {
+        return streams.metadataForLocalThreads();
+    }
+
+    /** Store-partition restoration lag, keyed by store name; covers the protocol and fold stores. */
+    public Map<String, Map<Integer, LagInfo>> allLocalStorePartitionLags() {
+        return streams.allLocalStorePartitionLags();
     }
 
     @Override
     public void close() {
         streams.close();
         admin.close();
+    }
+
+    /** Bounded shutdown; {@code false} when the timeout elapsed first. */
+    public boolean close(Duration timeout) {
+        try {
+            return streams.close(timeout);
+        } finally {
+            admin.close();
+        }
     }
 }

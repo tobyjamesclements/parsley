@@ -3,7 +3,10 @@
 All causal state a node persists lives under per-channel keys in one keyed store, committed in
 the same EOS transaction as the delivery that mutated it and the sends it caused. Only entries
 that changed are written on an advance. The full byte layouts are in
-[wire format](../reference/wire-format.md).
+[wire format](../reference/wire-format.md). A stateful stage's fold state is separate — its
+own store, `parsley-<stage>-fold`, keyed by the message key's encoded bytes with a presence
+prefix and holding the user codec's bytes — but commits in the same transaction, so protocol
+state, fold state, deliveries, and emissions advance atomically together.
 
 | Key | Holds |
 |---|---|

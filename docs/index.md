@@ -31,9 +31,9 @@ traffic plays in other designs is covered by the consumer's own position advance
 transaction markers — see [liveness](foundations/liveness.md), which develops why this
 suffices.
 
-The adapter ([getting started](guide/getting-started.md)) hosts the core behind an ordinary
-Streams `Processor`, with one serialization point on each side, and enforces
-`exactly_once_v2`. Plain producers and consumers use the same stamps through the
+The adapter ([getting started](guide/getting-started.md)) hosts the core and runs user
+logic as pure functions — a `Message` in, `Emission` values out — with one serialization
+point on each side, and enforces `exactly_once_v2`. Plain producers and consumers use the same stamps through the
 [plain-client ops](guide/clients.md).
 
 ## How it is verified

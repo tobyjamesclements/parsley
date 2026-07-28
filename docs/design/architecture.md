@@ -2,11 +2,18 @@
 
 Parsley is one package, `io.github.tobyjamesclements.parsley`, with two visibility tiers.
 
-The **public tier** is the entire supported surface: the Streams runtime (`CausalTopic`,
-`CausalStage` with per-source Streams `ProcessorSupplier`s, `CausalTopology`,
-`CausalStreams`), the plain-client `CausalClock` (constructed from an `Admin`; observe,
-record own sends, stamp — fully opaque), `CausalHeaders`' names and sender/seq readers for
-observability, and `testTopology()` for broker-less `TopologyTestDriver` tests.
+The **public tier** is the entire supported surface, shaped as a functional core with
+imperative edges. The core is the user's logic vocabulary, free of Kafka types: `Topic` and
+`Codec` (typed topics with pure byte codecs; Kafka serdes bridge in at the edge), `Message`
+(a delivery with its own coordinate), `Emission` (an output as a value, minted by
+`Topic.send`), `Handler` (message to emissions), and `Fold` with `Step` (pure per-key state
+step). The edges run it: `Stage` wires logic to topics, `Parsley` composes stages and is the
+front door (`testTopology()` for broker-less `TopologyTestDriver` tests, `streams(props)`
+for production), `CausalStreams` is the running application (a curated allowlist over Kafka
+Streams — lifecycle, state, listeners, metrics, lag — with no accessor to the underlying
+instance), and the plain-client `CausalClock` (constructed from an `Admin`; observe, record
+own sends, stamp — fully opaque) with `CausalHeaders`' names and sender/seq readers for
+observability.
 No protocol vocabulary escapes: the vector clock and channel types are internal. The
 **package-private tier** is the protocol core, the adapter's plumbing, and every seam — the
 offset queries carry soundness obligations (strict end-offset resolution, definitive absence)
@@ -117,27 +124,31 @@ retention actually keeps.
 
 ## The Kafka Streams adapter
 
-`CausalStage` assembles its sub-topology: sources fetched as raw bytes, one adapter
-processor, sinks written as raw bytes. Topics are typed values (`CausalTopic`); each source
-pairs with an ordinary Streams `ProcessorSupplier`, so user processors keep the platform's
-full contract — one instance per task, `init`/`close` lifecycle, connected stores,
-punctuators, metrics, stream time. The context they receive is real except for the three
-members that could misstate or violate causality: `forward` is the stamping door (serialized
-with the sink topic's serdes, partitioned deterministically before stamping, undeclared
-sinks fail loudly), `getStateStore` refuses the protocol's own store, and `recordMetadata`
-reports the delivered record's true coordinate rather than the release trigger's.
-Serialization happens exactly once on each side, inside the stage, so the stamp travels with
-the exact bytes it claims.
+`Stage` assembles its sub-topology: sources fetched as raw bytes, one adapter processor,
+sinks written as raw bytes. Between them, user logic runs as pure functions: a delivery is
+decoded with the source topic's codecs into a `Message` carrying its own coordinate (for a
+record released from the hold queue, its own, not the release trigger's), the handler or
+fold is applied, and the returned emissions go through the stamping door — encoded with the
+sink topic's codecs, partitioned deterministically before stamping, undeclared sinks failing
+loudly. A stateful stage's fold state lives in a second RocksDB store keyed by the message
+key's encoded bytes, read before and written after each application, in the same transaction
+as the delivery — causal order plus a pure fold makes the state a deterministic function of
+the delivered history. Serialization happens exactly once on each side, inside the stage, so
+the stamp travels with the exact bytes it claims. Stages are immutable: wiring is captured
+by the topology's node suppliers at assembly, never stored on the stage.
 
-`CausalStreams.start` supplies the production wiring: it enforces `exactly_once_v2` and
+`Parsley.streams` supplies the production wiring: it enforces `exactly_once_v2` and
 `read_committed`, installs a client supplier whose main consumers record their post-poll
 positions into a thread-local (the `positionAdvance` feed — `position()` read on the polling
 thread is the only sound source; see
 [liveness](../foundations/liveness.md#position-advance-bridging)), and resolves topic identity
-and broker offset facts through an admin client. `TopologyTestDriver` runs without a broker
-through `testTopology()`, which wires the internal seams itself.
+and broker offset facts through an admin client. The adapter self-checks both at runtime —
+EOS from the task's configuration at init, captured positions at the first delivered
+record — so a topology run outside `Parsley.streams` fails closed instead of wedging.
+`TopologyTestDriver` runs without a broker through `testTopology()`, which assembles a fresh
+broker-less topology per call.
 
-Stages compose: `CausalTopology.of(stageA, stageB, ...)` assembles several named stages into
+Stages compose: `Parsley.of(stageA, stageB, ...)` assembles several named stages into
 one Streams topology, connected through ordinary topics — one stage's sink is another's
 source, and the connecting topic is a causal channel like any other, stamped on write and
 gated on read. Hops add no acknowledgement waits (stamping is synchronous under sequence

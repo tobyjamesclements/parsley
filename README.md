@@ -55,32 +55,36 @@ mvn verify
 
 ## Using it
 
-Topics are typed values declared once; a stage pairs each source topic with an ordinary
-Kafka Streams `Processor` — full Streams lifecycle, stores, punctuators — and the context's
-`forward` goes through the stamping door. The runtime enforces `exactly_once_v2` and wires
-position capture and topic identity:
+The API is a functional core with imperative edges. Topics are typed values declared once;
+your logic is a pure function from a causally delivered `Message` to `Emission` values —
+with per-key state, a pure fold that also returns the next state — testable with plain
+equality and no runtime. The runtime enforces `exactly_once_v2` and wires position capture
+and topic identity:
 
 ```java
-CausalTopic<String, Order>   orders      = CausalTopic.of("orders", Serdes.String(), orderSerde);
-CausalTopic<String, Payment> payments    = CausalTopic.of("payments", Serdes.String(), paymentSerde);
-CausalTopic<String, Settled> settlements = CausalTopic.of("settlements", Serdes.String(), settledSerde);
+Topic<String, Order>   orders      = Topic.of("orders", Codec.utf8(), orderCodec);
+Topic<String, Payment> payments    = Topic.of("payments", Codec.utf8(), paymentCodec);
+Topic<String, Settled> settlements = Topic.of("settlements", Codec.utf8(), settledCodec);
 
-CausalStage settlement = CausalStage.builder("settlement")
-        .source(orders, SettlementProcessor::new)
-        .source(payments, PaymentProcessor::new)
-        .sink(settlements)
+Stage settlement = Stage.named("settlement")
+        .state(balanceCodec, Balance::zero)
+        .on(orders,   (bal, m) -> Step.of(bal.minus(m.value().total()),
+                                          settlements.send(m.key(), settle(bal, m))))
+        .on(payments, (bal, m) -> Step.of(bal.plus(m.value().amount())))
+        .into(settlements)
         .build();
 
-try (CausalStreams app = CausalStreams.start(settlement, props)) {
-    // records reach each processor in causal order; forwards are stamped automatically
+try (CausalStreams app = Parsley.of(settlement).streams(props)) {
+    app.start();
+    // messages reach each handler in causal order; emissions are stamped automatically
 }
 ```
 
-Stages compose into pipelines within one application — a hop is the same `CausalTopic`
-appearing as one stage's sink and another's source, an ordinary causal channel:
+Stages compose into pipelines within one application — a hop is the same `Topic` appearing
+as one stage's sink and another's source, an ordinary causal channel:
 
 ```java
-CausalStreams.start(CausalTopology.of(enrichment, settlement), props);
+Parsley.of(enrichment, settlement).streams(props).start();
 ```
 
 Plain producers stamp with a `CausalClock` — `observe` consumed records, `recordProduced` your

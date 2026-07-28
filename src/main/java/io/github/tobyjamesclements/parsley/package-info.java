@@ -1,18 +1,28 @@
 /**
  * Causal delivery order for Kafka stream processing.
  *
- * <p>One package, two tiers. The public types are the entire supported surface:
- * {@link io.github.tobyjamesclements.parsley.CausalTopic} /
- * {@link io.github.tobyjamesclements.parsley.CausalStage} /
- * {@link io.github.tobyjamesclements.parsley.CausalTopology} /
- * {@link io.github.tobyjamesclements.parsley.CausalStreams} (the Kafka Streams runtime;
- * user logic is ordinary Streams processors supplied per source, receiving a context whose
- * forward is the stamping door),
- * {@link io.github.tobyjamesclements.parsley.CausalClock} (plain-client stamping),
- * {@link io.github.tobyjamesclements.parsley.CausalHeaders} (header names and observability
- * readers), and {@link io.github.tobyjamesclements.parsley.CausalStage#testTopology()} for
- * broker-less {@code TopologyTestDriver} tests — no seam is injectable from outside, and no
- * protocol vocabulary (the vector clock, channels, the node) escapes.
+ * <p>One package, two tiers, shaped as a functional core with imperative edges.
+ *
+ * <p>The functional core is the user's logic vocabulary, free of Kafka types:
+ * {@link io.github.tobyjamesclements.parsley.Topic} /
+ * {@link io.github.tobyjamesclements.parsley.Codec} /
+ * {@link io.github.tobyjamesclements.parsley.Message} /
+ * {@link io.github.tobyjamesclements.parsley.Emission} /
+ * {@link io.github.tobyjamesclements.parsley.Handler} /
+ * {@link io.github.tobyjamesclements.parsley.Fold} /
+ * {@link io.github.tobyjamesclements.parsley.Step}. Logic is a pure function from a delivered
+ * message to emission values (and, for folds, the next per-key state), testable with plain
+ * equality and no runtime.
+ *
+ * <p>The imperative edges run it: {@link io.github.tobyjamesclements.parsley.Stage} wires
+ * logic to topics, {@link io.github.tobyjamesclements.parsley.Parsley} composes stages and
+ * is the front door — {@code testTopology()} for broker-less {@code TopologyTestDriver}
+ * tests, {@code streams(props)} for the
+ * {@link io.github.tobyjamesclements.parsley.CausalStreams} runtime (a curated allowlist
+ * over Kafka Streams with no escape hatch). Plain producers and consumers at the
+ * application's borders stamp and observe through
+ * {@link io.github.tobyjamesclements.parsley.CausalClock} and
+ * {@link io.github.tobyjamesclements.parsley.CausalHeaders}.
  *
  * <p>Everything else is package-private on purpose. The protocol core is only sound under a
  * host contract no API can enforce — per-channel offset order in, atomic commit of store,
