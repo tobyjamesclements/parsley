@@ -69,7 +69,6 @@ public final class CausalStage<K, V, KO, VO> {
     private final Map<String, SourceDef<K, V>> sources;
     private final Map<String, SinkDef<KO, VO>> sinks;
     private final ProcessorSupplier<K, V, KO, VO> userSupplier;
-    private final int maxHeldPerChannel;
     private final Duration truncationInterval;
     private TopicIds topicIds;
     private SendTrackers sendTrackers;
@@ -78,7 +77,6 @@ public final class CausalStage<K, V, KO, VO> {
         this.sources = b.sources;
         this.sinks = b.sinks;
         this.userSupplier = b.userSupplier;
-        this.maxHeldPerChannel = b.maxHeldPerChannel;
         this.truncationInterval = b.truncationInterval;
         this.topicIds = b.topicIds;
         this.sendTrackers = b.sendTrackers;
@@ -92,7 +90,6 @@ public final class CausalStage<K, V, KO, VO> {
         private final Map<String, SourceDef<K, V>> sources = new LinkedHashMap<>();
         private final Map<String, SinkDef<KO, VO>> sinks = new LinkedHashMap<>();
         private ProcessorSupplier<K, V, KO, VO> userSupplier;
-        private int maxHeldPerChannel = 10_000;
         private Duration truncationInterval = Duration.ofMinutes(10);
         private TopicIds topicIds;
         private SendTrackers sendTrackers;
@@ -109,11 +106,6 @@ public final class CausalStage<K, V, KO, VO> {
 
         public Builder<K, V, KO, VO> sink(String topic, Serde<KO> keySerde, Serde<VO> valueSerde) {
             sinks.put(topic, new SinkDef<>(keySerde, valueSerde));
-            return this;
-        }
-
-        public Builder<K, V, KO, VO> maxHeldPerChannel(int max) {
-            this.maxHeldPerChannel = max;
             return this;
         }
 
@@ -247,7 +239,7 @@ public final class CausalStage<K, V, KO, VO> {
                     (context.applicationId() + "/" + context.taskId()).getBytes());
             node = new CausalNode(
                     new NodeConfig("task-" + context.taskId(), senderId, consumed, sinkIds,
-                            taskPartition, maxHeldPerChannel),
+                            taskPartition),
                     new KafkaStateStore(kv), tracker);
 
             userProcessor = userSupplier.get();

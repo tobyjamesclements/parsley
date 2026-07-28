@@ -13,23 +13,18 @@ import java.util.UUID;
  * @param consumed the channels this node consumes (its declared input topics at its own task
  *     partition)
  * @param sinkTopics the topic UUIDs this node may produce to
- * @param taskPartition the task's own partition number; null messages route to this partition
- *     (modulo each sink's partition count) so per-partition progress coverage is deterministic
- * @param maxHeldPerChannel hold-queue depth above which {@code pauseWanted} turns on for a
- *     channel (backpressure, never a safety bound — records are never dropped)
+ * @param taskPartition the task's own partition number
  */
 public record NodeConfig(
         String nodeId,
         UUID senderId,
         Set<Channel> consumed,
         Set<UUID> sinkTopics,
-        int taskPartition,
-        int maxHeldPerChannel) {
+        int taskPartition) {
 
     public NodeConfig {
         if (senderId == null) throw new NullPointerException("senderId");
         consumed = Set.copyOf(consumed);
         sinkTopics = Set.copyOf(sinkTopics);
-        if (maxHeldPerChannel < 1) throw new IllegalArgumentException("maxHeldPerChannel " + maxHeldPerChannel);
     }
 }

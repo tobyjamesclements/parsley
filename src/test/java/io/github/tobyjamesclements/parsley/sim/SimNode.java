@@ -87,7 +87,7 @@ final class SimNode {
     }
 
     boolean hasFetchWork(Channel c) {
-        return up && world.broker.nextFetchable(c, positions.get(c)) >= 0 && !protocol.pauseWanted(c);
+        return up && world.broker.nextFetchable(c, positions.get(c)) >= 0;
     }
 
     /**

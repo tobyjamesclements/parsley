@@ -40,11 +40,6 @@ final class EagerProtocol implements DeliveryProtocol {
     }
 
     @Override
-    public boolean pauseWanted(Channel channel) {
-        return false;
-    }
-
-    @Override
     public Map<Channel, Long> resumePositions() {
         return Map.of();
     }

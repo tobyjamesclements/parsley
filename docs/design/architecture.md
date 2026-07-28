@@ -2,18 +2,25 @@
 
 Parsley is two packages with a hard boundary between them.
 
-`io.github.tobyjamesclements.parsley.core` is the protocol: no Kafka dependency, driven
-synchronously by a host through pulled indications. `io.github.tobyjamesclements.parsley.kafka`
-is one host — the Kafka Streams adapter plus the edge ops. The test tree contains a second
-host, the simulator, which is the primary correctness gate
+`io.github.tobyjamesclements.parsley.core` is the protocol: no Kafka dependency on the
+classpath, driven synchronously by a host through pulled indications.
+`io.github.tobyjamesclements.parsley.kafka` is the Kafka Streams adapter plus the edge ops.
+The test tree contains a second host, the simulator, which is the primary correctness gate
 ([verification](verification.md)).
+
+The boundary is a **simulator seam, not transport abstraction**. Kafka's semantics are
+load-bearing throughout the core: offsets are broker-assigned (hence sequence claims),
+visibility is transactional (hence the density adaptation and step-atomic recovery), and
+liveness rides the consumer's position (hence position-advance bridging). Porting the core to
+another transport would mean re-deriving the protocol, not re-implementing an interface — the
+seam's real value is that the deterministic simulator can be the host.
 
 ## The core surface
 
 | Type | Role |
 |---|---|
 | `Channel`, `Clock` | `(topicId, partition)` identity; vector clocks with max-merge, dominance, restriction, truncation, and a sorted, versioned wire form |
-| `DeliveryProtocol` | The host-facing surface: `onRecord`, `positionAdvance`, `prepareSend`, `pauseWanted`, `resumePositions`, `truncate` |
+| `DeliveryProtocol` | The host-facing surface: `onRecord`, `positionAdvance`, `prepareSend`, `resumePositions`, `truncate` |
 | `CausalNode` | The implementation: gate, hold queues, density adaptation, stamp, rescope, restore |
 | `StateStore` (SPI) | Keyed bytes, transactional with delivery — the host commits it atomically with consumed offsets and sends |
 | `SendTracker` (SPI) | Acknowledgements of own sends (offset upgrades) and sink end offsets |
@@ -22,10 +29,10 @@ host, the simulator, which is the primary correctness gate
 The host contract, in one paragraph: feed records per channel in offset order through
 `onRecord`; report consumer position advances through `positionAdvance`; stamp and tag every
 outbound send with `prepareSend` (against its concrete destination channel — the host
-partitions before stamping); process the returned `Delivery` list in order; commit the store, the
-consumed offsets, and the sends atomically (EOS); honour `pauseWanted` for backpressure.
-Indications are pulled — deliveries come back as ordered return values — because both Kafka
-Streams processing and the simulator are synchronous.
+partitions before stamping); process the returned `Delivery` list in order; commit the store,
+the consumed offsets, and the sends atomically (EOS). Indications are pulled — deliveries come
+back as ordered return values — because both Kafka Streams processing and the simulator are
+synchronous.
 
 ## Receive path
 
@@ -67,12 +74,16 @@ anything a persisted copy could have held, so persisting it would be redundant. 
 heals every restart-shaped gap: acknowledgements lost with a crash, and former sinks
 ([scope changes](state.md#scope-changes)).
 
-## Backpressure
+## Hold queues are unbounded, and disk-backed
 
-`pauseWanted(channel)` turns on when a channel's hold queue exceeds the configured bound. The
-host pauses fetching that channel; causes never arrive on the channel whose head is blocked,
-so pausing it cannot starve the release. Records are never dropped — this bounds memory, not
-safety.
+There is deliberately no backpressure surface. Per-channel fetch pausing cannot be honoured
+from inside a Kafka Streams task — the poll loop's own pause/resume bookkeeping, the task's
+internal buffers, and lag-aware record scheduling all sit between a processor and the fetch
+layer, and all belong to Streams. Rather than ship a signal the primary host cannot act on,
+the hold queue is unbounded and lives in the state store: a lagging cause channel grows disk
+and changelog, never heap, and the operational response is monitoring hold depth and sizing
+retention — the same economics that already bound the causal history a deployment keeps.
+Records are never dropped, and a wedge is a loud stall, not a silent loss.
 
 ## Truncation: log-start stability
 

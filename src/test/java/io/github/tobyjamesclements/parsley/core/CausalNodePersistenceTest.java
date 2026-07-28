@@ -75,7 +75,7 @@ class CausalNodePersistenceTest {
 
     private static NodeConfig config() {
         return new NodeConfig("persist-test", UUID.nameUUIDFromBytes("self".getBytes()),
-                Set.of(C1, C2), Set.of(SINK), 0, 64);
+                Set.of(C1, C2), Set.of(SINK), 0);
     }
 
     private static InboundRecord record(Channel c, long offset, Clock clock, UUID sender, long seq,

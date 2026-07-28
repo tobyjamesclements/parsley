@@ -83,7 +83,7 @@ final class SimWorld {
         Set<UUID> sinks = new HashSet<>();
         for (String t : sinkTopics) sinks.add(broker.topicId(t));
         UUID senderId = UUID.nameUUIDFromBytes(("sender:" + name).getBytes());
-        return new NodeConfig(name, senderId, consumed, sinks, taskPartition, 64);
+        return new NodeConfig(name, senderId, consumed, sinks, taskPartition);
     }
 
     /** Adds a causal node consuming the given (topic, partition) channels. */

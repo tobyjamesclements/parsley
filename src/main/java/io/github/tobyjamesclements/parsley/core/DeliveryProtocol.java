@@ -38,9 +38,6 @@ public interface DeliveryProtocol {
      */
     SendStamp prepareSend(Channel destination);
 
-    /** Backpressure signal: the host should pause fetching {@code channel} while true. */
-    boolean pauseWanted(Channel channel);
-
     /**
      * Where the host's consumer should (re)start fetching each consumed channel, computed at
      * init from restored state: one past the frontier for a channel grown into scope (skip what

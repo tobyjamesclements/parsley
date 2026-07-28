@@ -14,7 +14,10 @@ correctly gated everywhere from its first emission.
 
 ## Shape of the system
 
-Parsley is a **transport-agnostic protocol core** plus a **Kafka Streams adapter**.
+Parsley is a **protocol core** plus a **Kafka Streams adapter**. The core carries no Kafka
+dependency, but it is not transport-agnostic — Kafka's semantics (broker-assigned offsets,
+transactional visibility, consumer positions) are load-bearing throughout. The seam exists so
+the deterministic simulator can host the protocol, not so other transports can.
 
 The core ([architecture](design/architecture.md)) gates delivery with head-of-line blocking
 per channel: each `(topicId, partition)` channel has a FIFO hold queue, only queue heads are

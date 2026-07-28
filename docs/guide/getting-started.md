@@ -68,9 +68,10 @@ claims silently off.
 
 ## Operational notes
 
-- **Held records are backpressured, not unbounded**: when a channel's hold queue exceeds the
-  configured bound (`maxHeldPerChannel`), the core signals a pause for that channel. Missing
-  causes never arrive on the paused channel itself, so this cannot starve a release.
+- **Hold queues are unbounded and disk-backed.** Held records live in the RocksDB state
+  store (and its changelog), not on the heap, so a lagging cause channel grows state rather
+  than exhausting memory. Watch hold depth as the operational signal of a lagging cause;
+  retention economics are the real bound.
 - **A blocked head blocks its channel** (head-of-line blocking, by design). If a producer
   stamps claims that are far ahead of what its consumers can fetch, convoying on that channel
   is the expected symptom.

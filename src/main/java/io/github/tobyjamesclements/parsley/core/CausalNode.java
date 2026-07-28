@@ -302,13 +302,7 @@ public final class CausalNode implements DeliveryProtocol {
         }
     }
 
-    // ------------------------------------------------------------------ backpressure, truncation
-
-    @Override
-    public boolean pauseWanted(Channel c) {
-        Queue q = queues.get(c);
-        return q != null && q.held.size() > config.maxHeldPerChannel();
-    }
+    // ------------------------------------------------------------------ truncation
 
     @Override
     public Map<Channel, Long> resumePositions() {

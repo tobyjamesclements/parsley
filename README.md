@@ -13,8 +13,9 @@ correctly gated everywhere from its first emission.
 
 ## How it works
 
-A **transport-agnostic protocol core** implements causal delivery with head-of-line blocking
-per channel. A channel is one partition of one topic, identified by the topic's stable UUID;
+A **protocol core with no Kafka dependency** implements causal delivery with head-of-line
+blocking per channel; its host seam exists so the deterministic simulator can drive it, and
+Kafka's semantics remain load-bearing throughout. A channel is one partition of one topic, identified by the topic's stable UUID;
 each channel has a FIFO hold queue, and only queue heads are gated against the node's
 contiguous delivered frontier. A delivery advances the frontier and cascades releases across
 channels to fixpoint.
@@ -33,9 +34,9 @@ moving past markers is the protocol's entire liveness mechanism. Business topics
 protocol records**; plain consumers need no Parsley awareness at all.
 
 All causal state persists under per-channel keys and commits in the same EOS transaction as
-the delivery that mutated it, so crash recovery is a pure restore. Hold queues are
-backpressured by pausing the flooding channel — a held head's missing causes never arrive on
-its own channel, so pausing cannot starve a release.
+the delivery that mutated it, so crash recovery is a pure restore. Hold queues are unbounded
+and disk-backed: a lagging cause channel grows state, never heap, and is bounded by the same
+retention economics that bound the causal history itself.
 
 ## Verification
 
