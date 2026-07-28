@@ -80,6 +80,11 @@ The guarantee holds under these environmental conditions:
   stamps its outputs (Parsley stages do this automatically; plain producers use a
   [`CausalClock`](../guide/clients.md)). An absent stamp claims nothing — safe for the record
   itself, invisible to downstream ordering.
+- **Closed processor effects.** A handler's logic is arbitrary, but the guarantee covers
+  only effects that leave through the stage's emit: those are stamped, claimed, and ordered
+  downstream. An effect that bypasses the boundary — a write to an external system, a send
+  through the handler's own producer — is invisible to the causal model; no stamp claims it
+  and no gate can order against it. Route causally significant effects through emit.
 - **Co-partitioning by key across a stage's input topics.** A task consumes partition *p* of
   every source topic, and the guarantee is per task: every cause *this task* consumes is
   delivered first. Causally related records keyed to different partition slices land in
