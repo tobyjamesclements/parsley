@@ -1014,11 +1014,13 @@ a timeout. Joining a running topology needs no coordination — a new applicatio
 consuming, self-gates into causal order during replay, and its stamps make its outputs
 correctly gated everywhere from its first emission.</p>
 <h2 id="shape-of-the-system">Shape of the system</h2>
-<p>Parsley is a <strong>protocol core</strong> plus a <strong>Kafka Streams adapter</strong>. The core carries no Kafka
-dependency, but it is not transport-agnostic — Kafka's semantics (broker-assigned offsets,
-transactional visibility, consumer positions) are load-bearing throughout. The seam exists so
-the deterministic simulator can host the protocol, not so other transports can.</p>
-<p>The core (<a href="design/architecture/">architecture</a>) gates delivery with head-of-line blocking
+<p>Parsley is a small public API — pure user logic over typed topics, run by a Kafka Streams
+adapter — around a package-private causal delivery protocol. The protocol implementation
+carries no compile-time Kafka dependency, but it is not transport-agnostic — Kafka's
+semantics (broker-assigned offsets, transactional visibility, consumer positions) are
+load-bearing throughout. That freedom exists so the deterministic simulator can host the
+protocol, not so other transports can.</p>
+<p>The protocol (<a href="design/architecture/">architecture</a>) gates delivery with head-of-line blocking
 per channel: each <code>(topicId, partition)</code> channel has a FIFO hold queue, only queue heads are
 evaluated against the contiguous delivered frontier, and a delivery cascades releases to
 fixpoint. Outbound records carry a single header — a vector clock over channels — computed at
@@ -1028,7 +1030,7 @@ the delivery that mutated it.</p>
 traffic plays in other designs is covered by the consumer's own position advance past
 transaction markers — see <a href="foundations/liveness/">liveness</a>, which develops why this
 suffices.</p>
-<p>The adapter (<a href="guide/getting-started/">getting started</a>) hosts the core and runs user
+<p>The adapter (<a href="guide/getting-started/">getting started</a>) hosts the protocol and runs user
 logic as pure functions — a <code>Message</code> in, <code>Emission</code> values out — with one serialization
 point on each side, and enforces <code>exactly_once_v2</code>. Plain producers and consumers use the same stamps through the
 <a href="guide/clients/">plain-client ops</a>.</p>

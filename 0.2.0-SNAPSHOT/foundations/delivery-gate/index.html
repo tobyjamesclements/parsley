@@ -1022,7 +1022,7 @@
 
 <h1 id="the-delivery-gate">The delivery gate</h1>
 <p>The gate is the predicate that decides whether a received record may reach the user processor.
-Everything else in the core exists to make this predicate sound and its inputs cheap.</p>
+Everything else in the protocol exists to make this predicate sound and its inputs cheap.</p>
 <h2 id="head-of-line-blocking">Head-of-line blocking</h2>
 <p>Each consumed channel has a FIFO hold queue. Records enter in receive order — which is offset
 order, because Kafka delivers a partition in order — and only the <strong>head</strong> of each queue is

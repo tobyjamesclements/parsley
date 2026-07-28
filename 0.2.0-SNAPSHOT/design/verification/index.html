@@ -1162,8 +1162,11 @@ cycles, truncation mid-history, log-start stability (full-retention truncation e
 stamp-side clocks, and a from-earliest joiner arriving after truncation), scope shrink across
 a restart, and the wide soak combining most of the above.</p>
 <h2 id="mutation-testing">Mutation testing</h2>
-<p>PIT runs over the core (<code>mvn org.pitest:pitest-maven:mutationCoverage</code>, serial mutants so a
-timeout cannot masquerade as a kill). The delivery gate itself has no surviving mutants; the
+<p>PIT runs over the whole package inside <code>mvn verify</code>, at four threads with a 60% floor. Four
+threads is measured verdict-identical to a serial run on this suite; the hazard being checked
+is that a timeout under CPU contention counts as a kill, so the comparison is repeated
+(one <code>-Dpitest.threads=1</code> run, diff <code>mutations.xml</code>) whenever the suite slows appreciably.
+The delivery gate itself has no surviving mutants; the
 survivors that remain cluster where randomized schedules structurally under-discriminate —
 persistence (killed instead by the directed <code>CausalNodePersistenceTest</code>), redundancy-masked
 paths (removing acknowledgement folding survives because sequence claims soundly cover it),
