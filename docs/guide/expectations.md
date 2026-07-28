@@ -127,3 +127,11 @@ holds the formal versions; the links under each item lead to the reasoning.
   state, metrics, and lag, and withholds members that can violate causality; the withheld
   members and their operational alternatives are on its Javadoc and in
   [getting started](getting-started.md#what-the-runtime-wires-for-you).
+- **Logging is metadata-only.** Parsley logs through SLF4J and ships no binding; logger
+  names are the class names under `io.github.tobyjamesclements.parsley`. INFO covers
+  lifecycle: application assembly, task and node initialisation with the source-topic to
+  channel mapping, restored hold queues, scope changes, and truncation on a destroyed
+  topic. WARN covers a skipped truncation sweep. DEBUG traces each record's hold and
+  delivery with its coordinate, dependency clock, and sender claim, which is the level to
+  enable when diagnosing why a channel is holding. No level logs payload bytes; every line
+  carries coordinates that point at the durable record instead.

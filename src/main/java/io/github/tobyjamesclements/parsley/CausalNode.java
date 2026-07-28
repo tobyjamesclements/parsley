@@ -36,6 +36,8 @@ import java.util.UUID;
  */
 final class CausalNode implements DeliveryProtocol {
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(CausalNode.class);
+
     private static final String KEY_SCOPE = "scope";
     private static final String KEY_CARRIED = "ca";
     private static final String PREFIX_FRONTIER = "f/";
@@ -103,6 +105,8 @@ final class CausalNode implements DeliveryProtocol {
             rescope(recorded);
         }
         writeScope();
+        LOG.info("{}: initialised: frontier {}, carried ancestry {}, send counters {}",
+                config.nodeId(), frontier, carriedAncestry, sendSeq);
     }
 
     private record Scope(Set<Channel> consumed, Set<UUID> sinks) {}
@@ -137,8 +141,11 @@ final class CausalNode implements DeliveryProtocol {
             putClock(PREFIX_CHANNEL_CLOCK + c.key(), cc);
         }
 
-        enqueue(c, new Held(r.offset(), r.clock() == null ? new VectorClock() : r.clock().copy(),
-                r.senderId(), r.senderSeq(), r.key(), r.value(), r.timestamp()));
+        Held h = new Held(r.offset(), r.clock() == null ? new VectorClock() : r.clock().copy(),
+                r.senderId(), r.senderSeq(), r.key(), r.value(), r.timestamp());
+        enqueue(c, h);
+        LOG.debug("{}: held {} offset {}: deps {}, sender {} seq {}",
+                config.nodeId(), c, h.offset(), h.clock(), h.senderId(), h.senderSeq());
         notePosition(c, r.offset() + 1);
         return cascade();
     }
@@ -174,6 +181,7 @@ final class CausalNode implements DeliveryProtocol {
                         noteDeliveredSeq(c, h.senderId(), h.senderSeq(), h.offset());
                     }
                     out.add(new Delivery(c, h.offset(), h.key(), h.value(), h.timestamp()));
+                    LOG.debug("{}: delivered {} offset {}", config.nodeId(), c, h.offset());
                     changed = true;
                 }
                 if (q.held.isEmpty()) {
@@ -335,8 +343,10 @@ final class CausalNode implements DeliveryProtocol {
         });
         for (Channel c : confirmedAbsent) {
             stability.advanceTo(c, Long.MAX_VALUE);
+            LOG.info("{}: topic of {} confirmed destroyed; its claims truncate entirely", config.nodeId(), c);
         }
         if (!stability.isEmpty()) truncate(stability);
+        LOG.debug("{}: truncation sweep applied stability bound {}", config.nodeId(), stability);
     }
 
     // ------------------------------------------------------------------ state plumbing
@@ -441,6 +451,7 @@ final class CausalNode implements DeliveryProtocol {
             entries.forEach((idx, h) -> {
                 if (idx >= q.headIndex && idx < q.tailIndex) q.held.addLast(h);
             });
+            if (!q.held.isEmpty()) LOG.info("{}: restored {} held records on {}", config.nodeId(), q.held.size(), c);
             if (q.held.size() != q.tailIndex - q.headIndex) {
                 throw new IllegalStateException(config.nodeId() + ": hold queue for " + c
                         + " restored " + q.held.size() + " of " + (q.tailIndex - q.headIndex) + " entries");
@@ -458,6 +469,8 @@ final class CausalNode implements DeliveryProtocol {
                 if (end > 0) carriedAncestry.advanceTo(c, end - 1);
             });
             putClock(KEY_CARRIED, carriedAncestry);
+            LOG.info("{}: rescope: former sinks {} healed into carried ancestry",
+                    config.nodeId(), formerSinks);
         }
 
         // Shrunk inputs: the delivered past may be skipped, never dropped — max-merge into
@@ -485,6 +498,8 @@ final class CausalNode implements DeliveryProtocol {
                 }
             }
             putClock(KEY_CARRIED, carriedAncestry);
+            LOG.info("{}: rescope: input {} removed; its delivered past is carried ancestry",
+                    config.nodeId(), gone);
         }
 
         // Grown inputs: seed at the node's carried knowledge — skip what was already ignored,
@@ -496,6 +511,8 @@ final class CausalNode implements DeliveryProtocol {
             if (seed >= 0) {
                 advanceFrontier(grown, seed);
                 resumePositions.put(grown, seed + 1);
+                LOG.info("{}: rescope: input {} added; frontier seeded at {}",
+                        config.nodeId(), grown, seed);
             }
         }
     }

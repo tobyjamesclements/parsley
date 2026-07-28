@@ -374,6 +374,9 @@ public final class Stage {
                     new NodeConfig(name + "-task-" + context.taskId(), senderId, consumed, sinkIds,
                             taskPartition),
                     new KafkaStateStore(kv), offsets);
+            // The channel ids in protocol log lines decode through this mapping.
+            LOG.info("{}: task {} initialised: sender {}, sources {}, sinks {}",
+                    name, context.taskId(), senderId, channelByTopic, sinks.keySet());
 
             context.schedule(Duration.ofMillis(500), PunctuationType.WALL_CLOCK_TIME,
                     ts -> sweepPositions());

@@ -28,6 +28,8 @@ import java.util.Set;
  */
 public final class Parsley {
 
+    private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(Parsley.class);
+
     private final Map<String, Stage> stages;
 
     private Parsley(Map<String, Stage> stages) {
@@ -98,6 +100,8 @@ public final class Parsley {
                         (ids, sinkTopics) -> new AdminBrokerOffsets(ids, admin, sinkTopics), false);
             }
             KafkaStreams streams = new KafkaStreams(t, p, Positions.capturingClientSupplier());
+            LOG.info("assembled application {} with stages {}",
+                    p.getProperty(StreamsConfig.APPLICATION_ID_CONFIG), stages.keySet());
             return new CausalStreams(streams, admin);
         } catch (RuntimeException e) {
             admin.close();
