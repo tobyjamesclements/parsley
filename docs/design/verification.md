@@ -82,7 +82,9 @@ a restart, and the wide soak combining most of the above.
 
 ## Mutation testing
 
-PIT runs over the whole package inside `mvn verify`, at four threads with a 60% floor. Four
+PIT runs over the whole package inside `mvn verify`, at four threads with a 60% mutation
+floor and a 70% line-coverage floor, both a few points below the standing scores so
+refactoring noise does not flake the build. Four
 threads is measured verdict-identical to a serial run on this suite; the hazard being checked
 is that a timeout under CPU contention counts as a kill, so the comparison is repeated
 (one `-Dpitest.threads=1` run, diff `mutations.xml`) whenever the suite slows appreciably.

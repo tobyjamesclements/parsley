@@ -117,9 +117,10 @@
                          is re-checked when the suite slows: run once with -Dpitest.threads=1
                          and diff mutations.xml). Overridable per run. -->
                     <threads>${pitest.threads}</threads>
-                    <!-- The floor guards against regression; the score stands a few points
-                         above it so honest refactoring noise does not flake the build. -->
+                    <!-- Both floors guard against regression; the scores stand a few points
+                         above them so honest refactoring noise does not flake the build. -->
                     <mutationThreshold>60</mutationThreshold>
+                    <coverageThreshold>70</coverageThreshold>
                     <outputFormats>
                         <param>HTML</param>
                         <param>XML</param>
