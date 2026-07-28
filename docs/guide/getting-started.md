@@ -39,7 +39,10 @@ By the time a record reaches its handler, every cause the stage consumes has bee
 The `StageContext` is deliberately narrow: `emit` (stamped, deterministically partitioned,
 timestamped like the record in flight — or explicitly, which punctuators must use), `store`
 for state stores declared via `Builder.stores`, and `schedule` for punctuators. There is no
-raw forward and no processor context; the stage owns the causal boundary. Serialization
+raw forward and no processor context; the stage owns the causal boundary. One handler
+instance is shared by every task and thread running the stage, so keep handlers stateless —
+per-task mutable state belongs in state stores, which `ctx.store` scopes to the executing
+task. Serialization
 happens inside the stage — handlers never see bytes, and the dependency-clock header travels
 with the exact bytes it claims. The stage name keys its state store, so keep it stable
 across deployments.

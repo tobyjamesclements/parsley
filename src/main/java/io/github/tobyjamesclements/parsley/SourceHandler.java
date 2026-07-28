@@ -10,6 +10,11 @@ import org.apache.kafka.streams.processor.api.Record;
  * <p>By the time a record reaches its handler, every cause the stage consumes has already
  * been delivered here. Emit through the {@link StageContext}; outputs are stamped and routed
  * by the stage.
+ *
+ * <p>One handler instance is shared by every task and stream thread running the stage — keep
+ * handlers stateless (or thread-safe). Per-task mutable state belongs in state stores
+ * declared via {@code Builder.stores} and reached through {@link StageContext#store}, which
+ * is scoped to the executing task.
  */
 @FunctionalInterface
 public interface SourceHandler<K, V> {
