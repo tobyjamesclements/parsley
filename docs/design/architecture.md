@@ -1,19 +1,22 @@
 # Architecture
 
-Parsley is two packages with a hard boundary between them.
+Parsley is one package, `io.github.tobyjamesclements.parsley`, with two visibility tiers.
 
-`io.github.tobyjamesclements.parsley.core` is the protocol: no Kafka dependency on the
-classpath, driven synchronously by a host through pulled indications.
-`io.github.tobyjamesclements.parsley.kafka` is the Kafka Streams adapter plus the edge ops.
-The test tree contains a second host, the simulator, which is the primary correctness gate
-([verification](verification.md)).
+The **public tier** is the entire supported surface: the Streams runtime (`CausalStage`,
+`CausalStreams`), the plain-client ops (`EdgeClock`, the read side of `CausalHeaders`, with
+`Clock` and `Channel` as their vocabulary), and the seams a `TopologyTestDriver` test injects
+(`TopicIds`, `SendTracker`). The **package-private tier** is the protocol core and the
+adapter's plumbing. The core is hidden deliberately: it is only sound under a host contract
+no API can enforce — per-channel offset order in, atomic commit of store, offsets, and sends,
+position advances from the real consumer, partitioning before stamping — and the one host
+that upholds that contract ships in the same package.
 
-The boundary is a **simulator seam, not transport abstraction**. Kafka's semantics are
-load-bearing throughout the core: offsets are broker-assigned (hence sequence claims),
-visibility is transactional (hence the density adaptation and step-atomic recovery), and
-liveness rides the consumer's position (hence position-advance bridging). Porting the core to
-another transport would mean re-deriving the protocol, not re-implementing an interface — the
-seam's real value is that the deterministic simulator can be the host.
+Kafka's semantics are load-bearing throughout the core: offsets are broker-assigned (hence
+sequence claims), visibility is transactional (hence the density adaptation and step-atomic
+recovery), and liveness rides the consumer's position (hence position-advance bridging). The
+core's freedom from a compile-time Kafka dependency is a **simulator seam, not transport
+abstraction** — the deterministic simulator, the protocol's primary verifier
+([verification](verification.md)), hosts the core from the test tree of the same package.
 
 ## The core surface
 

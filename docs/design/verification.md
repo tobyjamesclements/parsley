@@ -1,7 +1,7 @@
 # Verification
 
 Parsley's primary correctness gate is a deterministic simulator with a ground-truth oracle,
-in the test tree under `parsley.sim`. Broker integration tests exercise plumbing; the
+in the test tree of the `parsley` package. Broker integration tests exercise plumbing; the
 simulator exercises the protocol, because only a simulator controls interleavings, injects
 crashes at chosen points, and knows the real causal history to judge deliveries against.
 

@@ -82,7 +82,7 @@
                 </dependencies>
                 <configuration>
                     <targetClasses>
-                        <param>io.github.tobyjamesclements.parsley.core.*</param>
+                        <param>io.github.tobyjamesclements.parsley.*</param>
                     </targetClasses>
                     <!-- Serial mutants: a timeout under CPU contention counts as a kill, which
                          would hide exactly the survivors this run exists to find. -->
