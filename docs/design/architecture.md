@@ -26,7 +26,7 @@ abstraction** — the deterministic simulator, the protocol's primary verifier
 
 | Type | Role |
 |---|---|
-| `Channel`, `CausalClock` | `(topicId, partition)` identity; vector clocks with max-merge, dominance, restriction, truncation, and a sorted, versioned wire form |
+| `Channel`, `VectorClock` | `(topicId, partition)` identity; vector clocks with max-merge, dominance, truncation, and a sorted, versioned wire form |
 | `DeliveryProtocol` | The host-facing surface: `onRecord`, `positionAdvance`, `prepareSend`, `resumePositions`, `truncate` |
 | `CausalNode` | The implementation: gate, hold queues, density adaptation, stamp, rescope, restore |
 | `StateStore` (SPI) | Keyed bytes, transactional with delivery — the host commits it atomically with consumed offsets and sends |

@@ -103,7 +103,7 @@ The verification obligations the test suite enforces are catalogued in
 - Non-Parsley headers on held records are not carried through delivery.
 - Sequence claims carry a late-joiner caveat: consumers joining at the log end should
   baseline at the last stable offset (see the liveness page).
-- CausalClock truncation is driven by log-start stability: retention-deleted records sit below
+- Vector-clock truncation is driven by log-start stability: retention-deleted records sit below
   every reachable baseline, so stamp width is garbage-collected as fast as retention
   advances, with zero coordination. Faster-than-retention truncation would need a membership
   protocol, which is deliberately not included.
