@@ -128,5 +128,5 @@ Real broker behaviour outside the model: rebalances and task migration, consumer
 protocol edge cases, and timing that depends on actual I/O. The broker smoke suite covers
 the seam contract and the assembled plumbing on a live cluster; `TopologyTestDriver` smoke
 tests cover the adapter's plumbing (hold-and-release, stamp content, fail-closed corrupt
-headers) without a broker. Rebalance and task-migration behaviour has no automated
+headers, the buffered-batch position guard) without a broker. Rebalance and task-migration behaviour has no automated
 coverage.

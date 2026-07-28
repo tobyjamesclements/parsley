@@ -317,9 +317,11 @@ class StageTest {
             t2.pipeInput(new TestRecord<>("k", "b", headers, 2000L));
             assertTrue(t3.readRecordsToList().isEmpty(), "the claim is unmet, so the record holds");
 
-            // The consumer's position moved past t1@0 (marker or aborted batch): the sweep
-            // driven by the punctuator must account for the skipped run and release.
-            Positions.forCurrentThread().put(new TopicPartition("t1", 0), 1L);
+            // The consumer's position moved past t1@0 (marker or aborted batch, no record
+            // ever returned): the sweep driven by the punctuator must account for the
+            // skipped run and release.
+            Positions.forCurrentThread().put(new TopicPartition("t1", 0),
+                    new Positions.PollView(1L, -1L));
             driver.advanceWallClockTime(Duration.ofMillis(500));
             assertEquals(List.of("out:b"),
                     t3.readRecordsToList().stream().map(TestRecord::value).toList(),
@@ -347,13 +349,45 @@ class StageTest {
             t2.pipeInput(new TestRecord<>("k", "b", headers, 2000L));
             assertTrue(t3.readRecordsToList().isEmpty(), "the claim is unmet, so the record holds");
 
-            // The position is past the claim before the next record; without the punctuator
-            // firing, the end-of-process sweep alone must pick it up and release.
-            Positions.forCurrentThread().put(new TopicPartition("t1", 0), 6L);
+            // The position is past the claim (markers behind the returned record at t1@1);
+            // without the punctuator firing, the end-of-process sweep alone must pick it up
+            // and release once that record has been fed.
+            Positions.forCurrentThread().put(new TopicPartition("t1", 0),
+                    new Positions.PollView(6L, 1L));
             t1.pipeInput("k", "c", 3000L);
             assertEquals(List.of("out:c", "out:b"),
                     t3.readRecordsToList().stream().map(TestRecord::value).toList(),
                     "the process-end sweep must release the held record in the same call");
+        }
+    }
+
+    /**
+     * A poll's post-poll position runs ahead of returned records the task has not yet
+     * processed; the sweep must withhold that position until the whole batch is fed. Applied
+     * early, the frontier jumps the buffered records and they are dropped as replays — lost,
+     * with their offsets committed.
+     */
+    @Test
+    void positionSweepWaitsForBufferedRecordsOfTheBatch() {
+        try (TopologyTestDriver driver = statelessDriver()) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> t3 =
+                    driver.createOutputTopic("t3", new StringDeserializer(), new StringDeserializer());
+
+            // One poll returned t1@0..2 and left the position at 3 before any process call.
+            Positions.forCurrentThread().put(new TopicPartition("t1", 0),
+                    new Positions.PollView(3L, 2L));
+            // The wall-clock punctuator can fire between the poll and the first process call;
+            // its sweep must withhold the position, not advance the frontier to 2.
+            driver.advanceWallClockTime(Duration.ofMillis(500));
+
+            t1.pipeInput("k", "a", 1000L);
+            t1.pipeInput("k", "b", 1001L);
+            t1.pipeInput("k", "c", 1002L);
+            assertEquals(List.of("out:a", "out:b", "out:c"),
+                    t3.readRecordsToList().stream().map(TestRecord::value).toList(),
+                    "every record of the polled batch must deliver; none may be dropped as a replay");
         }
     }
 

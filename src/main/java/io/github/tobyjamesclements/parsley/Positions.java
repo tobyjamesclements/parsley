@@ -13,26 +13,40 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Captures the main consumer's post-poll positions per stream thread. The consumer's position
+ * Captures the main consumer's post-poll view per stream thread: for each assigned partition,
+ * the consumer position and the highest record offset any poll has returned. The position
  * advances past transaction markers and aborted batches even when a poll returns no records —
  * that advance is the protocol's liveness signal ({@code positionAdvance}), and
  * {@code position()} read on the polling thread is its only sound source.
+ *
+ * <p>A post-poll position also runs ahead of returned records the task has buffered but not
+ * yet processed, and {@code positionAdvance} asserts the opposite — everything below a
+ * reported position is fetched-and-fed or consumer-skipped. The captured last-returned offset
+ * is what lets the adapter honour that contract: a position is reported only once every
+ * returned record at or below it has been fed through the protocol. Reported early, the
+ * frontier would jump the buffered records and they would be dropped as replays.
  *
  * <p>The processor adapter reads the map from the same stream thread that polls, so a plain
  * thread-local is race-free.
  */
 final class Positions {
 
-    private static final ThreadLocal<Map<TopicPartition, Long>> POSITIONS =
+    /**
+     * One partition's post-poll view: the consumer position, and the highest record offset
+     * polls have returned ({@code -1} until a poll returns one).
+     */
+    record PollView(long position, long lastReturned) {}
+
+    private static final ThreadLocal<Map<TopicPartition, PollView>> POSITIONS =
             ThreadLocal.withInitial(HashMap::new);
 
     private Positions() {}
 
-    static Map<TopicPartition, Long> forCurrentThread() {
+    static Map<TopicPartition, PollView> forCurrentThread() {
         return POSITIONS.get();
     }
 
-    /** Wraps the default client supplier so main consumers record positions after each poll. */
+    /** Wraps the default client supplier so main consumers record their view after each poll. */
     static KafkaClientSupplier capturingClientSupplier() {
         DefaultKafkaClientSupplier delegate = new DefaultKafkaClientSupplier();
         return new KafkaClientSupplier() {
@@ -72,10 +86,17 @@ final class Positions {
             } catch (java.lang.reflect.InvocationTargetException e) {
                 throw e.getCause();
             }
-            if (method.getName().equals("poll") && result instanceof ConsumerRecords<?, ?>) {
-                Map<TopicPartition, Long> map = POSITIONS.get();
+            if (method.getName().equals("poll") && result instanceof ConsumerRecords<?, ?> records) {
+                Map<TopicPartition, PollView> map = POSITIONS.get();
                 for (TopicPartition tp : inner.assignment()) {
-                    map.put(tp, inner.position(tp));
+                    PollView prior = map.get(tp);
+                    long last = prior == null ? -1 : prior.lastReturned();
+                    var batch = records.records(tp);
+                    if (!batch.isEmpty()) {
+                        // Per-partition batches are in offset order: the last one is the max.
+                        last = Math.max(last, batch.get(batch.size() - 1).offset());
+                    }
+                    map.put(tp, new PollView(inner.position(tp), last));
                 }
             }
             return result;

@@ -34,18 +34,18 @@ class PositionsTest {
     @Test
     void capturedPositionsAreThreadLocal() throws InterruptedException {
         TopicPartition tp = new TopicPartition("t1", 0);
-        Positions.forCurrentThread().put(tp, 42L);
-        assertEquals(42L, Positions.forCurrentThread().get(tp),
+        Positions.forCurrentThread().put(tp, new Positions.PollView(42L, -1L));
+        assertEquals(new Positions.PollView(42L, -1L), Positions.forCurrentThread().get(tp),
                 "the same thread must read back what it recorded");
 
-        Long[] seenElsewhere = new Long[1];
+        Positions.PollView[] seenElsewhere = new Positions.PollView[1];
         Thread other = new Thread(() -> seenElsewhere[0] = Positions.forCurrentThread().get(tp));
         other.start();
         other.join();
         assertNull(seenElsewhere[0], "another thread must see its own empty map");
     }
 
-    /** After a poll returns, the proxy records the post-poll position of every assignment. */
+    /** After a poll returns, the proxy records position and last returned offset per assignment. */
     @Test
     void capturingProxyRecordsPositionsAfterPoll() {
         TopicPartition tp = new TopicPartition("t1", 0);
@@ -58,8 +58,46 @@ class PositionsTest {
         var records = proxy.poll(Duration.ZERO);
 
         assertEquals(1, records.count(), "the proxy must pass the poll result through");
-        assertEquals(1L, Positions.forCurrentThread().get(tp),
-                "the position after consuming offset 0 must be captured as 1");
+        assertEquals(new Positions.PollView(1L, 0L), Positions.forCurrentThread().get(tp),
+                "consuming offset 0 must capture position 1 and last returned offset 0");
+    }
+
+    /** A batch captures its highest offset, so the sweep can tell buffered records apart. */
+    @Test
+    void captureRecordsTheBatchHighWater() {
+        TopicPartition tp = new TopicPartition("t1", 0);
+        MockConsumer<byte[], byte[]> inner = new MockConsumer<>("earliest");
+        inner.assign(List.of(tp));
+        inner.updateBeginningOffsets(Map.of(tp, 0L));
+        inner.addRecord(new ConsumerRecord<>("t1", 0, 0L, new byte[0], new byte[0]));
+        inner.addRecord(new ConsumerRecord<>("t1", 0, 1L, new byte[0], new byte[0]));
+        inner.addRecord(new ConsumerRecord<>("t1", 0, 2L, new byte[0], new byte[0]));
+
+        Consumer<byte[], byte[]> proxy = Positions.capturing(inner);
+        assertEquals(3, proxy.poll(Duration.ZERO).count(), "the whole batch must pass through");
+
+        assertEquals(new Positions.PollView(3L, 2L), Positions.forCurrentThread().get(tp),
+                "a three-record batch must capture position 3 and last returned offset 2");
+    }
+
+    /** An empty poll advances the position but keeps the last returned offset. */
+    @Test
+    void emptyPollKeepsTheLastReturnedOffset() {
+        TopicPartition tp = new TopicPartition("t1", 0);
+        MockConsumer<byte[], byte[]> inner = new MockConsumer<>("earliest");
+        inner.assign(List.of(tp));
+        inner.updateBeginningOffsets(Map.of(tp, 0L));
+        inner.addRecord(new ConsumerRecord<>("t1", 0, 0L, new byte[0], new byte[0]));
+
+        Consumer<byte[], byte[]> proxy = Positions.capturing(inner);
+        proxy.poll(Duration.ZERO);
+        // The consumer position moves past a run the broker never returns as records
+        // (transaction markers, aborted batches); the next poll comes back empty.
+        inner.seek(tp, 6L);
+        proxy.poll(Duration.ZERO);
+
+        assertEquals(new Positions.PollView(6L, 0L), Positions.forCurrentThread().get(tp),
+                "an empty poll must advance the position and keep last returned offset 0");
     }
 
     /** Non-poll calls pass through without touching the captured positions. */

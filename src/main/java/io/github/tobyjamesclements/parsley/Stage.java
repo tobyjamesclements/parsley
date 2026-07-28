@@ -319,6 +319,8 @@ public final class Stage {
         private KeyValueStore<Bytes, byte[]> foldStore;
         private final Map<String, Channel> channelByTopic = new HashMap<>();
         private final Map<Channel, String> topicByChannel = new HashMap<>();
+        /** Highest offset fed through {@code onRecord} per channel, this task incarnation. */
+        private final Map<Channel, Long> fedThrough = new HashMap<>();
         private int taskPartition;
         private boolean positionCaptureChecked;
 
@@ -348,6 +350,10 @@ public final class Stage {
                 consumed.add(c);
                 channelByTopic.put(topic, c);
                 topicByChannel.put(c, topic);
+                // A view captured by a previous incarnation of this task on this thread pairs
+                // a position with another consumer session's returned records; only views this
+                // incarnation's polls capture may feed the sweep.
+                Positions.forCurrentThread().remove(new TopicPartition(topic, taskPartition));
             }
             Set<UUID> sinkIds = new HashSet<>();
             for (String topic : sinks.keySet()) {
@@ -406,6 +412,7 @@ public final class Stage {
             VectorClock clock = CausalHeaders.read(r.headers());
             UUID sender = CausalHeaders.readSender(r.headers());
             long seq = CausalHeaders.readSeq(r.headers());
+            fedThrough.put(c, meta.offset());
             deliverAll(node.onRecord(new InboundRecord(
                     c, meta.offset(), clock, sender, sender == null ? -1 : seq,
                     r.key(), r.value(), r.timestamp())));
@@ -413,12 +420,17 @@ public final class Stage {
         }
 
         private void sweepPositions() {
-            Map<TopicPartition, Long> positions = Positions.forCurrentThread();
+            Map<TopicPartition, Positions.PollView> positions = Positions.forCurrentThread();
             for (Map.Entry<String, Channel> e : channelByTopic.entrySet()) {
-                Long pos = positions.get(new TopicPartition(e.getKey(), taskPartition));
-                if (pos != null) {
-                    deliverAll(node.positionAdvance(e.getValue(), pos));
-                }
+                Positions.PollView view = positions.get(new TopicPartition(e.getKey(), taskPartition));
+                if (view == null) continue;
+                // A post-poll position runs ahead of returned records still buffered between
+                // poll and process; positionAdvance asserts everything below is fed or
+                // consumer-skipped, so reporting early would jump the frontier past the
+                // buffered records and drop them as replays. Report only once every returned
+                // record at or below the position has been fed.
+                if (view.lastReturned() > fedThrough.getOrDefault(e.getValue(), -1L)) continue;
+                deliverAll(node.positionAdvance(e.getValue(), view.position()));
             }
         }
 

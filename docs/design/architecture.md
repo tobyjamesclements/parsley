@@ -140,11 +140,15 @@ the stamp travels with the exact bytes it claims. Stages are immutable: wiring i
 by the topology's node suppliers at assembly, never stored on the stage.
 
 `Parsley.streams` supplies the production wiring: it enforces `exactly_once_v2` and
-`read_committed`, installs a client supplier whose main consumers record their post-poll
-positions into a thread-local (the `positionAdvance` feed — `position()` read on the polling
-thread is the only sound source; see
+`read_committed`, installs a client supplier whose main consumers record a post-poll view
+into a thread-local — the consumer position paired with the highest record offset the polls
+have returned, the `positionAdvance` feed (`position()` read on the polling thread is its
+only sound source; see
 [liveness](../foundations/liveness.md#position-advance-bridging)), and resolves topic identity
-and broker offset facts through an admin client. The adapter self-checks both at runtime —
+and broker offset facts through an admin client. The adapter reports a captured position
+only once every returned record at or below it has been fed through the protocol: a
+post-poll position runs ahead of records still buffered between poll and process, and
+reported early it would jump the frontier past them and drop them as replays. The adapter self-checks both at runtime —
 EOS from the task's configuration at init, captured positions at the first delivered
 record — so a topology run outside `Parsley.streams` fails closed instead of wedging.
 `TopologyTestDriver` runs without a broker through `testTopology()`, which assembles a fresh
