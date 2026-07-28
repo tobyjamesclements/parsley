@@ -35,10 +35,9 @@ producers whose ordering matters, one at a time.
 
 ## Consuming
 
-Plain consumers need no Parsley awareness. Business topics carry no protocol records — the
-only trace of Parsley on the wire is a few headers (`CausalHeaders.CLOCK` and the sender tag,
-readable via `CausalHeaders.readSender` / `readSeq` for observability), which a consumer may
-ignore entirely.
+Plain consumers need no Parsley awareness. The only trace of Parsley on the wire is a few
+headers (`CausalHeaders.CLOCK` and the sender tag, readable via `CausalHeaders.readSender` /
+`readSeq` for observability), which a consumer may ignore entirely.
 
 A plain consumer that wants causal *observation* — so that records it later produces claim
 what it read — uses `observe` as above. A plain consumer that wants causal *delivery order*

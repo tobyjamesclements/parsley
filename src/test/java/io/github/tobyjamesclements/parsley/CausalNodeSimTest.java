@@ -274,9 +274,9 @@ class CausalNodeSimTest {
             w.node("L", 0, List.of("t3:0", "t2:1"), List.of(), SimBehavior.consumeOnly(), real());
         }
 
-        // Phase 1: first a record A forwards to t2:1 — minting a sequence claim that never
-        // normalises sender-side (there is no acknowledgement feed) — then t2:0 traffic whose
-        // stamps carry that claim into B's custody.
+        // Phase 1: first a record A forwards to t2:1 — minting a sequence claim the sender
+        // itself never normalises (only a consuming hop rewrites claims) — then t2:0 traffic
+        // whose stamps carry that claim into B's custody.
         EdgeProducer p = w.producer("edge");
         p.produce("t1", 0, keyForPartition(w, 1, "a"), "v0", 1000);
         for (int i = 0, sent = 1; sent < 6; i++) {

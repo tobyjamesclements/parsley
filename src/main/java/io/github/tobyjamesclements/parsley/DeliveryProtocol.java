@@ -23,9 +23,9 @@ interface DeliveryProtocol {
     /**
      * Tells the protocol the host consumer's position on {@code channel} advanced to
      * {@code position} without returning records: everything below is fetched or
-     * consumer-skipped (transaction markers, aborted records). This is the liveness signal that
-     * bridges trailing markers — the only thing the original architecture needed a gossip
-     * layer of in-band null messages for. May release held records, so it returns deliveries.
+     * consumer-skipped (transaction markers, aborted records). This is the liveness signal
+     * that bridges trailing markers — the one skip no later-fetched record reveals. May
+     * release held records, so it returns deliveries.
      */
     List<Delivery> positionAdvance(Channel channel, long position);
 

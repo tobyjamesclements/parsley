@@ -45,7 +45,7 @@ as empty ([fail closed](../foundations/delivery-gate.md#the-predicate)).
 | `parsley-sender` | The producing node's stable sender identity: 16 bytes, UUID most- then least-significant. Absent on edge-produced records. |
 | `parsley-seq` | The record's per-channel send sequence at its sender: 8 bytes. Present exactly when `parsley-sender` is. |
 
-There are no other protocol headers and no protocol records.
+These headers, plus the state stores below, are Parsley's entire byte footprint.
 
 ## State-store keys
 

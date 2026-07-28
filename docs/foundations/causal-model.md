@@ -12,8 +12,8 @@ through them.
 
 In the consistency hierarchy this sits above eventual consistency, which constrains no order,
 and below linearisability, which forces a single global timeline. Causal consistency is the
-strongest model maintainable without coordination, which is what lets Parsley deliver it with
-no membership, no admission barrier, and no configuration handshake.
+strongest model maintainable without coordination, which is what lets a new application join
+by simply starting to consume.
 
 ## Channels, coordinates, clocks
 

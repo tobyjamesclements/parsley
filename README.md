@@ -19,18 +19,19 @@ each channel has a FIFO hold queue, and only queue heads are gated against the n
 contiguous delivered frontier. A delivery advances the frontier and cascades releases across
 channels to fixpoint.
 
-Outbound records carry a single header, `parsley-clock` — a vector clock folded from the
+Outbound records carry their stamp in record headers — a vector clock folded from the
 frontier, the per-channel advertised clocks, ancestry carried across scope changes, and the
-node's own sends. Stamping happens at one site and never blocks: a node claims its own
-in-flight sends in its own send-sequence space (assigned synchronously), and receivers resolve
-those claims from the sender tag each record carries. There is no acknowledgement feed
-anywhere in the node: broker offset facts (end offsets, log starts) are all it ever asks for.
+node's own sends, plus a sender tag. Stamping happens at one site and never blocks: a node
+claims its own in-flight sends in its own send-sequence space (assigned synchronously), and
+receivers resolve those claims from the sender tag each record carries. Beyond ordinary
+fetch, broker offset facts (end offsets, log starts) are all the node ever asks of Kafka.
 
 Kafka's non-density under exactly-once — transaction markers and aborted records occupy
 offsets a `read_committed` consumer never returns — is repaired at receive time by seeding and
 bridging, and at the trailing edge by **position-advance bridging**: the consumer's position
-moving past markers is the protocol's entire liveness mechanism. Business topics carry **no
-protocol records**; plain consumers need no Parsley awareness at all.
+moving past markers is the protocol's entire liveness mechanism. Parsley's whole on-wire
+footprint is the headers on your own records, so plain consumers need no Parsley awareness
+at all.
 
 All causal state persists under per-channel keys and commits in the same EOS transaction as
 the delivery that mutated it, so crash recovery is a pure restore. Hold queues are unbounded
@@ -100,7 +101,7 @@ The docs site under `docs/` (mkdocs) covers the model and the design:
 
 - **Foundations** — [the causal model](docs/foundations/causal-model.md),
   [the delivery gate](docs/foundations/delivery-gate.md), and
-  [liveness without gossip](docs/foundations/liveness.md).
+  [liveness](docs/foundations/liveness.md).
 - **Design** — [architecture](docs/design/architecture.md),
   [state and recovery](docs/design/state.md), and
   [verification](docs/design/verification.md).
@@ -116,9 +117,8 @@ The verification obligations the test suite enforces are catalogued in
 - Non-Parsley headers on held records are not carried through delivery.
 - Sequence claims carry a late-joiner caveat: consumers joining at the log end should
   baseline at the last stable offset (see the liveness page).
-- Vector-clock truncation is driven by log-start stability: retention-deleted records sit below
-  every reachable baseline, so stamp width is garbage-collected as fast as retention
-  advances, with zero coordination. Faster-than-retention truncation would need a membership
-  protocol, which is deliberately not included.
+- Vector-clock truncation advances exactly as fast as retention, with zero coordination:
+  retention-deleted records sit below every reachable baseline, so stamp width is
+  garbage-collected at retention speed — and no faster.
 - Correctness under a live broker's rebalances and task migration is exercised only by the
   adapter's design, not yet by broker integration tests.

@@ -1,8 +1,8 @@
-# Liveness without gossip
+# Liveness
 
-Parsley appends no protocol records to any topic. This page develops why that is possible: why
-every held record is eventually released, why nothing deadlocks, and what closed the one
-genuine gap that in-band protocol traffic covers in other designs.
+This page develops why every held record is eventually released and nothing deadlocks: what a
+gate waits on, how the consumer's position reveals offsets that never arrive as records, and
+why the wait graph cannot cycle.
 
 ## What a gate can wait on
 
@@ -24,10 +24,10 @@ record is consumer-skipped, and the skip is observable: the next fetched record'
 (bridged at receive), or — when nothing follows — the consumer's position advances past it
 anyway.
 
-**Custody needs no side channel.** Knowledge dissemination beyond business paths would matter
-only if some gate waited on it, and no gate does. Stamps stay sound along exactly the paths
-causality travels (the induction in
-[the delivery gate](delivery-gate.md#why-the-ignore-branch-is-sound)).
+**Gates are locally satisfiable.** Stamps stay sound along exactly the paths causality
+travels (the induction in
+[the delivery gate](delivery-gate.md#why-the-ignore-branch-is-sound)), so a gate never needs
+knowledge that arrives by any route other than its own consumed channels.
 
 ## Position-advance bridging
 
@@ -42,12 +42,8 @@ returns no records. A position of `p` is proof that everything below `p` was fet
 consumer-skipped. The host reports it through one method — `positionAdvance(channel, p)` —
 and when the channel's hold queue is empty the frontier rises to `p − 1` and the cascade runs.
 
-That method is the entire liveness mechanism. What it replaces in a gossip-based design: null
-messages occupying sink offsets, an emission rule for quiet deliveries, a relay rule and its
-cycle-quiescence argument, protocol-record filtering at every plain consumer, trigger
-timestamps to protect downstream stream time, and retention sizing coupled to protocol
-traffic. None of that has a remaining consumer once gates wait only on local frontiers and
-skips are observable from position.
+That method is the entire liveness mechanism: gates wait only on local frontiers, and skips
+are observable from position.
 
 ## Why over-claims cannot deadlock
 

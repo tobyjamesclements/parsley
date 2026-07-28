@@ -43,7 +43,7 @@ nav:
   - Foundations:
     - The causal model: foundations/causal-model.md
     - The delivery gate: foundations/delivery-gate.md
-    - Liveness without gossip: foundations/liveness.md
+    - Liveness: foundations/liveness.md
   - Design:
     - Architecture: design/architecture.md
     - State and recovery: design/state.md

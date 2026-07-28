@@ -28,10 +28,10 @@ fixpoint. Outbound records carry a single header — a vector clock over channel
 one stamping site. All causal state persists under per-channel keys in the same transaction as
 the delivery that mutated it.
 
-There are **no protocol records on any topic**. The liveness role that in-band protocol
-traffic plays in other designs is covered by the consumer's own position advance past
-transaction markers — see [liveness](foundations/liveness.md), which develops why this
-suffices.
+Parsley's entire on-wire footprint is record headers on business topics. Liveness rides the
+consumer's own position advance past transaction markers — see
+[liveness](foundations/liveness.md), which develops why every held record is eventually
+released.
 
 The adapter ([getting started](guide/getting-started.md)) hosts the protocol and runs user
 logic as pure functions — a `Message` in, `Emission` values out — with one serialization
@@ -53,8 +53,8 @@ enforced, including the self-test that proves the oracle catches a broken protoc
    model.
 2. [The delivery gate](foundations/delivery-gate.md) — the predicate, its normalisation, and
    why ignoring unconsumed coordinates is sound.
-3. [Liveness without gossip](foundations/liveness.md) — why nothing wedges and nothing
-   deadlocks, with no protocol traffic.
+3. [Liveness](foundations/liveness.md) — why every held record is released and nothing
+   deadlocks.
 4. [Architecture](design/architecture.md) and [state](design/state.md) — the classes, the
    store layout, crash recovery, scope changes, truncation.
 5. [Verification](design/verification.md) — the simulator, the oracle, and the obligations.

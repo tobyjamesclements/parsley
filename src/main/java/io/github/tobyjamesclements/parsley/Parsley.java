@@ -20,7 +20,7 @@ import java.util.Set;
  * <p>Stages connect through ordinary topics: one stage's sink is another's source, and the
  * connecting topic is a causal channel like any other — stamped on write, gated on read, and
  * required to exist before the application starts. Stamping is synchronous at every hop
- * (sequence claims), so a pipeline of stages adds no acknowledgement waits.
+ * (sequence claims), so a pipeline of stages costs only the broker round trip per hop.
  *
  * <p>Constraints checked at composition: stage names must be distinct (each names its state
  * stores), and source topics must be disjoint across stages — Kafka Streams allows a topic to

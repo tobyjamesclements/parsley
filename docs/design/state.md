@@ -81,7 +81,7 @@ advertised clocks — the two stamp-side clocks whose width otherwise grows mono
 the node's transitive upstream. The frontier and `ownOutputs` stay: their width is bounded by
 the node's own channels. The shipped stability source is the log-start offset
 ([architecture](architecture.md#truncation-log-start-stability)): retention-deleted records
-are below every reachable baseline, so the bound needs no coordination and no membership. The
+are below every reachable baseline, so the bound holds with no coordination. The
 simulator verifies both that full-retention truncation empties the stamp-side clocks with
 later traffic staying causal, and that a from-earliest joiner arriving after truncation is
 correctly ordered (its baseline is the log start).

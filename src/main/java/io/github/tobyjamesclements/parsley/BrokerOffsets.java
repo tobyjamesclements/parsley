@@ -11,7 +11,7 @@ import java.util.Set;
  *
  * <p>Nothing here observes individual sends. The node's own in-flight outputs are claimed in
  * sequence space, assigned synchronously at the stamping site, and resolved by receivers from
- * the sender tag each record carries — no acknowledgement feed exists.
+ * the sender tag each record carries.
  *
  * <p>Package-private on purpose: both queries carry soundness obligations (strict end-offset
  * resolution, definitive absence) that make this a seam users must not substitute. Tests use

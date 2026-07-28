@@ -27,7 +27,7 @@ import java.util.UUID;
  * unconsumed coordinate directly). Delivering advances the frontier, which can release other
  * heads; the cascade runs to fixpoint.
  *
- * <p>Liveness needs no protocol records: every claim names a really-appended offset, and the
+ * <p>Liveness rides append-time facts: every claim names a really-appended offset, and the
  * host's position advances bridge runs of offsets a {@code read_committed} consumer skips
  * (transaction markers, aborted records). The wait graph is acyclic because every wait edge —
  * a dependency wait or a head-of-line wait — points from a later-appended record to an
@@ -231,9 +231,9 @@ final class CausalNode implements DeliveryProtocol {
         stamp.mergeMax(ownOutputs);
         normalize(stamp);
 
-        // Claim this incarnation's own sends in sequence space — nothing waits, and there is
-        // no acknowledgement feed. Prior incarnations' sends are committed and covered by the
-        // init end-offset seed in offset space.
+        // Claim this incarnation's own sends in sequence space — assigned synchronously, so
+        // nothing waits. Prior incarnations' sends are committed and covered by the init
+        // end-offset seed in offset space.
         for (Map.Entry<Channel, Long> e : sendSeq.entrySet()) {
             Channel c = e.getKey();
             long issued = e.getValue();

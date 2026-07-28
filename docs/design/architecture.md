@@ -73,7 +73,7 @@ escape the claim:
 | ownOutputs | The node's committed prior-incarnation sends (the init end-offset seed) | Own outputs carry no order across partitions and sink topics |
 
 The broker performs the sender's clock increment (offset assignment), which the sender never
-observes — there is no acknowledgement feed, and the stamping path never waits. Clocks carry a
+observes — the stamping path never waits on it. Clocks carry a
 second claim kind, **sequence claims**: `(channel, sender, seq)` claims every record the
 sender sent to that channel up to its per-channel send sequence, assigned synchronously at
 `prepareSend`. Every outbound record carries its sender tag, and a receiver resolves a
@@ -153,7 +153,7 @@ broker-less topology per call.
 Stages compose: `Parsley.of(stageA, stageB, ...)` assembles several named stages into
 one Streams topology, connected through ordinary topics — one stage's sink is another's
 source, and the connecting topic is a causal channel like any other, stamped on write and
-gated on read. Hops add no acknowledgement waits (stamping is synchronous under sequence
+gated on read. Hops cost only the broker round trip (stamping is synchronous under sequence
 claims), custody carries transitively across them, and each stage keeps its own state store
 keyed by its name. Stage-connecting topics are explicit and must pre-exist — there are no
 automatic repartition topics, which keeps the co-partitioning precondition visible at each
@@ -162,6 +162,6 @@ it survives topology evolution (task ids embed the sub-topology index, which ren
 stages are added).
 
 Current adapter limits: non-Parsley headers on held records are not carried through delivery,
-and the adapter runs without an acknowledgement feed (own outputs stay in sequence space — see
-the stamp section — because Streams attributes producer acknowledgements per thread, not per
-task).
+and own outputs are claimed in sequence space rather than folded from producer
+acknowledgements (Streams attributes acknowledgements per thread, not per task — see the
+stamp section).
