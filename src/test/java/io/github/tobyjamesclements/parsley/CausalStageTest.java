@@ -8,6 +8,10 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.processor.api.Processor;
+import org.apache.kafka.streams.processor.api.ProcessorContext;
+import org.apache.kafka.streams.processor.api.ProcessorSupplier;
+import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.test.TestRecord;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Adapter smoke tests under TopologyTestDriver, driven the way a user would: typed topics,
- * per-source handlers, the broker-less {@code testTopology()} wiring. Protocol correctness
+ * per-source Streams processors, the broker-less {@code testTopology()} wiring. Protocol correctness
  * under concurrency, crashes, and EOS lives in the simulator suite — TTD is single-threaded
  * and transactionless, so these tests only assert the adapter's plumbing.
  */
@@ -45,13 +49,28 @@ class CausalStageTest {
     private TestInputTopic<String, String> t2;
     private TestOutputTopic<String, String> t3;
 
+    /** An ordinary Streams processor prefixing values and forwarding to the named sink. */
+    static ProcessorSupplier<String, String, String, String> prefixTo(String prefix, String sink) {
+        return () -> new Processor<>() {
+            private ProcessorContext<String, String> context;
+
+            @Override
+            public void init(ProcessorContext<String, String> context) {
+                this.context = context;
+            }
+
+            @Override
+            public void process(Record<String, String> r) {
+                context.forward(r.withValue(prefix + r.value()), sink);
+            }
+        };
+    }
+
     @BeforeEach
     void setUp() {
-        SourceHandler<String, String> forward = (r, ctx) ->
-                ctx.emit(T3, r.key(), "out:" + r.value());
         CausalStage stage = CausalStage.builder("stage")
-                .source(T1, forward)
-                .source(T2, forward)
+                .source(T1, prefixTo("out:", "t3"))
+                .source(T2, prefixTo("out:", "t3"))
                 .sink(T3)
                 .build();
 

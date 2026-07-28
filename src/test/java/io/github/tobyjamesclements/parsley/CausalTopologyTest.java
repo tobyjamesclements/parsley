@@ -7,6 +7,10 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.TopologyTestDriver;
+import org.apache.kafka.streams.processor.api.Processor;
+import org.apache.kafka.streams.processor.api.ProcessorContext;
+import org.apache.kafka.streams.processor.api.ProcessorSupplier;
+import org.apache.kafka.streams.processor.api.Record;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -37,15 +41,32 @@ class CausalTopologyTest {
     @TempDir
     Path stateDir;
 
+    /** An ordinary Streams processor suffixing values and forwarding to the named sink. */
+    static ProcessorSupplier<String, String, String, String> suffixTo(String suffix, String sink) {
+        return () -> new Processor<>() {
+            private ProcessorContext<String, String> context;
+
+            @Override
+            public void init(ProcessorContext<String, String> context) {
+                this.context = context;
+            }
+
+            @Override
+            public void process(Record<String, String> r) {
+                context.forward(r.withValue(r.value() + suffix), sink);
+            }
+        };
+    }
+
     /** Records traverse both stages; the final stamp claims the original t1 coordinate. */
     @Test
     void pipelineCarriesCustodyAcrossStages() {
         CausalStage first = CausalStage.builder("first")
-                .source(T1, (r, ctx) -> ctx.emit(MID, r.key(), r.value() + ":a"))
+                .source(T1, suffixTo(":a", "mid"))
                 .sink(MID)
                 .build();
         CausalStage second = CausalStage.builder("second")
-                .source(MID, (r, ctx) -> ctx.emit(T3, r.key(), r.value() + ":b"))
+                .source(MID, suffixTo(":b", "t3"))
                 .sink(T3)
                 .build();
 
@@ -83,7 +104,7 @@ class CausalTopologyTest {
     /** Composition validation: duplicate names and shared source topics fail loudly. */
     @Test
     void compositionValidatesNamesAndSources() {
-        SourceHandler<String, String> drop = (r, ctx) -> {};
+        ProcessorSupplier<String, String, String, String> drop = () -> r -> {};
 
         CausalStage a = CausalStage.builder("same").source(T1, drop).build();
         CausalStage b = CausalStage.builder("same").source(MID, drop).build();
@@ -96,12 +117,12 @@ class CausalTopologyTest {
                 "two stages sourcing one topic must be rejected (one source node per topic)");
     }
 
-    /** An emit to an undeclared sink fails loudly at the stamping site. */
+    /** A forward to an undeclared sink fails loudly at the stamping site. */
     @Test
     void emitToUndeclaredSinkFailsClosed() {
         CausalStage stage = CausalStage.builder("stage")
-                .source(T1, (r, ctx) -> ctx.emit(T3, r.key(), r.value()))
-                .sink(MID) // T3 deliberately not declared
+                .source(T1, suffixTo("", "t3"))
+                .sink(MID) // t3 deliberately not declared
                 .build();
 
         Properties props = new Properties();

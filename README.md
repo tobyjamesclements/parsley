@@ -55,9 +55,10 @@ mvn verify
 
 ## Using it
 
-Topics are typed values declared once; a stage pairs each source topic with a handler and
-emits to declared sinks — the runtime enforces `exactly_once_v2` and wires position capture
-and topic identity:
+Topics are typed values declared once; a stage pairs each source topic with an ordinary
+Kafka Streams `Processor` — full Streams lifecycle, stores, punctuators — and the context's
+`forward` goes through the stamping door. The runtime enforces `exactly_once_v2` and wires
+position capture and topic identity:
 
 ```java
 CausalTopic<String, Order>   orders      = CausalTopic.of("orders", Serdes.String(), orderSerde);
@@ -65,13 +66,13 @@ CausalTopic<String, Payment> payments    = CausalTopic.of("payments", Serdes.Str
 CausalTopic<String, Settled> settlements = CausalTopic.of("settlements", Serdes.String(), settledSerde);
 
 CausalStage settlement = CausalStage.builder("settlement")
-        .source(orders,   (rec, ctx) -> ctx.emit(settlements, rec.key(), settle(rec.value())))
-        .source(payments, (rec, ctx) -> apply(rec.value()))
+        .source(orders, SettlementProcessor::new)
+        .source(payments, PaymentProcessor::new)
         .sink(settlements)
         .build();
 
 try (CausalStreams app = CausalStreams.start(settlement, props)) {
-    // records reach each handler in causal order; emits are stamped automatically
+    // records reach each processor in causal order; forwards are stamped automatically
 }
 ```
 

@@ -4,39 +4,62 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.processor.Cancellable;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.Punctuator;
+import org.apache.kafka.streams.processor.TaskId;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
 import org.apache.kafka.streams.processor.api.Record;
+import org.apache.kafka.streams.processor.api.RecordMetadata;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.state.StoreBuilder;
 import org.apache.kafka.streams.state.Stores;
 
+import java.io.File;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
+import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
 /**
- * One causal processing stage: typed source topics each with their own {@link SourceHandler},
- * typed sink topics, and the causal boundary in between — the protocol core gating and
- * ordering deliveries on the source side, the single stamping site on the sink side.
+ * One causal processing stage: typed source topics, each processed by an ordinary Kafka
+ * Streams {@link Processor} supplied per source, and typed sink topics — with the causal
+ * boundary in between. The protocol core gates and orders deliveries on the source side; the
+ * single stamping site sits on the sink side.
+ *
+ * <p>User processors are full Streams citizens: supplied per task ({@code supplier.get()}),
+ * with {@code init}/{@code close} lifecycle, connected stores via
+ * {@code ProcessorSupplier.stores()}, and a real {@link ProcessorContext} — punctuators,
+ * task metadata, metrics, stream time all behave as in any Streams application. Exactly the
+ * capabilities that could violate causality are re-routed or withheld:
+ *
+ * <ul>
+ *   <li>{@code forward} goes through the stamping door: serialized with the sink topic's
+ *       serdes, deterministically partitioned before stamping, clock and sender tag attached.
+ *       A named forward addresses a declared sink by topic name; an unnamed forward goes to
+ *       every declared sink (Streams' fan-out semantics). Forwarding to an undeclared sink
+ *       fails loudly.</li>
+ *   <li>{@code getStateStore} refuses the stage's own protocol store.</li>
+ *   <li>{@code recordMetadata} reports the coordinate of the record being delivered — for a
+ *       record released from the hold queue, that is its own coordinate, not the coordinate
+ *       of whichever later record triggered the release.</li>
+ * </ul>
  *
  * <p>Serialization happens exactly once on each side, inside the stage: inbound bytes are held
- * verbatim while gated and deserialized at delivery with the source topic's serdes; emits are
- * serialized with the sink topic's serdes at the stamping site, so the clock travels with the
- * exact bytes it claims. Note that non-Parsley headers of a held record are not carried
+ * verbatim while gated and deserialized at delivery with the source topic's serdes; forwards
+ * are serialized with the sink topic's serdes at the stamping site, so the clock travels with
+ * the exact bytes it claims. Note that non-Parsley headers of a held record are not carried
  * through delivery.
  *
  * <p>Stages compose into a {@link CausalTopology}; a stage corresponds to one Kafka Streams
@@ -47,19 +70,11 @@ public final class CausalStage {
 
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(CausalStage.class);
 
-    private record SourceDef<K, V>(CausalTopic<K, V> topic, SourceHandler<K, V> handler) {
-
-        void dispatch(Record<byte[], byte[]> raw, StageContext ctx) {
-            K key = topic.keySerde().deserializer().deserialize(topic.name(), raw.key());
-            V value = topic.valueSerde().deserializer().deserialize(topic.name(), raw.value());
-            handler.handle(new Record<>(key, value, raw.timestamp(), raw.headers()), ctx);
-        }
-    }
+    private record SourceDef<K, V>(CausalTopic<K, V> topic, ProcessorSupplier<K, V, ?, ?> supplier) {}
 
     private final String name;
     private final Map<String, SourceDef<?, ?>> sources;
     private final Map<String, CausalTopic<?, ?>> sinks;
-    private final List<StoreBuilder<?>> userStores;
     private final Duration truncationInterval;
     private TopicIds topicIds;
     private BrokerOffsetsProvider brokerOffsets;
@@ -73,7 +88,6 @@ public final class CausalStage {
         this.name = b.name;
         this.sources = b.sources;
         this.sinks = b.sinks;
-        this.userStores = b.userStores;
         this.truncationInterval = b.truncationInterval;
     }
 
@@ -85,7 +99,6 @@ public final class CausalStage {
         private final String name;
         private final Map<String, SourceDef<?, ?>> sources = new LinkedHashMap<>();
         private final Map<String, CausalTopic<?, ?>> sinks = new LinkedHashMap<>();
-        private final List<StoreBuilder<?>> userStores = new ArrayList<>();
         private Duration truncationInterval = Duration.ofMinutes(10);
 
         private Builder(String name) {
@@ -95,23 +108,22 @@ public final class CausalStage {
             this.name = name;
         }
 
-        /** Declares a source topic and the handler its causally delivered records run. */
-        public <K, V> Builder source(CausalTopic<K, V> topic, SourceHandler<K, V> handler) {
-            if (sources.put(topic.name(), new SourceDef<>(topic, handler)) != null) {
+        /**
+         * Declares a source topic and the processor its causally delivered records run
+         * through. The supplier is an ordinary Streams {@link ProcessorSupplier}: one
+         * processor instance per task, {@code init}/{@code close} lifecycle, connected state
+         * stores via {@code stores()}.
+         */
+        public <K, V> Builder source(CausalTopic<K, V> topic, ProcessorSupplier<K, V, ?, ?> supplier) {
+            if (sources.put(topic.name(), new SourceDef<>(topic, supplier)) != null) {
                 throw new IllegalArgumentException("duplicate source topic: " + topic.name());
             }
             return this;
         }
 
-        /** Declares a sink topic; handlers emit to it via {@link StageContext#emit}. */
+        /** Declares a sink topic; processors forward to it by topic name. */
         public Builder sink(CausalTopic<?, ?> topic) {
             sinks.put(topic.name(), topic);
-            return this;
-        }
-
-        /** Declares state stores the stage's handlers use via {@link StageContext#store}. */
-        public Builder stores(StoreBuilder<?>... builders) {
-            userStores.addAll(List.of(builders));
             return this;
         }
 
@@ -214,7 +226,7 @@ public final class CausalStage {
             int partitions = topicIds.resolve(sink).partitions();
             org.apache.kafka.streams.processor.StreamPartitioner<byte[], byte[]> partitioner =
                     (topic, key, value, numPartitions) ->
-                            java.util.Optional.of(Set.of(partitionFor(key, partitions)));
+                            Optional.of(Set.of(partitionFor(key, partitions)));
             t.addSink(sinkNode(sink), sink, new ByteArraySerializer(), new ByteArraySerializer(),
                     partitioner, processorNode());
         }
@@ -237,10 +249,21 @@ public final class CausalStage {
 
         @Override
         public Set<StoreBuilder<?>> stores() {
-            Set<StoreBuilder<?>> all = new HashSet<>(userStores);
+            Set<StoreBuilder<?>> all = new HashSet<>();
             all.add(Stores.keyValueStoreBuilder(
                             Stores.persistentKeyValueStore(storeName()), Serdes.Bytes(), Serdes.ByteArray())
                     .withCachingDisabled());
+            for (SourceDef<?, ?> def : sources.values()) {
+                Set<StoreBuilder<?>> user = def.supplier().stores();
+                if (user == null) continue;
+                for (StoreBuilder<?> sb : user) {
+                    if (sb.name().startsWith("parsley-")) {
+                        throw new IllegalStateException("user store name collides with the"
+                                + " protocol's namespace: " + sb.name());
+                    }
+                    all.add(sb);
+                }
+            }
             return all;
         }
 
@@ -254,12 +277,15 @@ public final class CausalStage {
 
         private ProcessorContext<byte[], byte[]> context;
         private CausalNode node;
-        private StageContextImpl stageContext;
+        private CausalContext userContext;
         private final Map<String, Channel> channelByTopic = new HashMap<>();
         private final Map<Channel, String> topicByChannel = new HashMap<>();
+        /** One user processor per source topic, instantiated per task (Streams lifecycle). */
+        private final Map<String, Processor<Object, Object, Object, Object>> userProcessors = new HashMap<>();
         private int taskPartition;
 
         @Override
+        @SuppressWarnings("unchecked")
         public void init(ProcessorContext<byte[], byte[]> context) {
             this.context = context;
             this.taskPartition = context.taskId().partition();
@@ -287,7 +313,14 @@ public final class CausalStage {
                     new NodeConfig(name + "-task-" + context.taskId(), senderId, consumed, sinkIds,
                             taskPartition),
                     new KafkaStateStore(kv), offsets);
-            stageContext = new StageContextImpl();
+            userContext = new CausalContext();
+
+            for (Map.Entry<String, SourceDef<?, ?>> e : sources.entrySet()) {
+                Processor<Object, Object, Object, Object> p =
+                        (Processor<Object, Object, Object, Object>) e.getValue().supplier().get();
+                p.init((ProcessorContext<Object, Object>) (ProcessorContext<?, ?>) userContext);
+                userProcessors.put(e.getKey(), p);
+            }
 
             context.schedule(Duration.ofMillis(500), PunctuationType.WALL_CLOCK_TIME,
                     ts -> sweepPositions());
@@ -322,6 +355,11 @@ public final class CausalStage {
             sweepPositions();
         }
 
+        @Override
+        public void close() {
+            userProcessors.values().forEach(Processor::close);
+        }
+
         private void sweepPositions() {
             Map<TopicPartition, Long> positions = Positions.forCurrentThread();
             for (Map.Entry<String, Channel> e : channelByTopic.entrySet()) {
@@ -332,58 +370,159 @@ public final class CausalStage {
             }
         }
 
+        @SuppressWarnings("unchecked")
         private void deliverAll(List<Delivery> deliveries) {
             for (Delivery d : deliveries) {
                 String topic = topicByChannel.get(d.channel());
                 SourceDef<?, ?> def = sources.get(topic);
-                stageContext.inFlightTimestamp = d.timestamp();
+                Object key = def.topic().keySerde().deserializer().deserialize(topic, d.key());
+                Object value = def.topic().valueSerde().deserializer().deserialize(topic, d.value());
+                userContext.inFlight = d;
                 try {
-                    def.dispatch(new Record<>(d.key(), d.value(), d.timestamp(), new RecordHeaders()),
-                            stageContext);
+                    userProcessors.get(topic).process(
+                            new Record<>(key, value, d.timestamp(), new RecordHeaders()));
                 } finally {
-                    stageContext.inFlightTimestamp = null;
+                    userContext.inFlight = null;
                 }
             }
         }
 
-        /** The narrow surface handed to handlers: emit, stores, punctuators — nothing else. */
-        private final class StageContextImpl implements StageContext {
+        /**
+         * The Streams context handed to user processors: everything delegates to the task's
+         * real context except the three members that could misstate or violate causality —
+         * forward (the stamping door), getStateStore (the protocol store is off limits), and
+         * recordMetadata (the delivered record's own coordinate, not the release trigger's).
+         */
+        private final class CausalContext implements ProcessorContext<Object, Object> {
 
-            private Long inFlightTimestamp;
+            private Delivery inFlight;
 
             @Override
-            public <K, V> void emit(CausalTopic<K, V> topic, K key, V value) {
-                if (inFlightTimestamp == null) {
-                    throw new IllegalStateException("no record in flight (punctuator?): use the"
-                            + " timestamped emit overload");
+            public <K1, V1> void forward(Record<K1, V1> record) {
+                for (String sink : sinks.keySet()) {
+                    forwardTo(sink, record);
                 }
-                emit(topic, key, value, inFlightTimestamp);
             }
 
             @Override
-            public <K, V> void emit(CausalTopic<K, V> topic, K key, V value, long timestamp) {
-                if (!sinks.containsKey(topic.name())) {
-                    throw new IllegalStateException("emit to undeclared sink topic " + topic.name()
-                            + " (declare it with Builder.sink)");
+            public <K1, V1> void forward(Record<K1, V1> record, String childName) {
+                if (!sinks.containsKey(childName)) {
+                    throw new IllegalArgumentException("unknown sink topic: " + childName
+                            + " (forward by declared sink topic name; declared: " + sinks.keySet() + ")");
                 }
-                byte[] keyBytes = topic.keySerde().serializer().serialize(topic.name(), key);
-                byte[] valueBytes = topic.valueSerde().serializer().serialize(topic.name(), value);
-                var resolved = topicIds.resolve(topic.name());
-                Channel dest = new Channel(resolved.id(), partitionFor(keyBytes, resolved.partitions()));
-                var headers = new RecordHeaders();
+                forwardTo(childName, record);
+            }
+
+            @SuppressWarnings("unchecked")
+            private void forwardTo(String sink, Record<?, ?> record) {
+                CausalTopic<Object, Object> topic = (CausalTopic<Object, Object>) sinks.get(sink);
+                byte[] key = topic.keySerde().serializer().serialize(sink, record.key());
+                byte[] value = topic.valueSerde().serializer().serialize(sink, record.value());
+                var resolved = topicIds.resolve(sink);
+                Channel dest = new Channel(resolved.id(), partitionFor(key, resolved.partitions()));
+                var headers = new RecordHeaders(record.headers());
                 CausalHeaders.write(headers, node.prepareSend(dest));
-                context.forward(new Record<>(keyBytes, valueBytes, timestamp, headers),
-                        sinkNode(topic.name()));
+                context.forward(new Record<>(key, value, record.timestamp(), headers), sinkNode(sink));
             }
 
             @Override
-            public <S extends org.apache.kafka.streams.processor.StateStore> S store(String storeName) {
+            public <S extends org.apache.kafka.streams.processor.StateStore> S getStateStore(String storeName) {
+                if (storeName.equals(CausalStage.this.storeName())) {
+                    throw new IllegalArgumentException(
+                            "the protocol's state store is not accessible to user processors");
+                }
                 return context.getStateStore(storeName);
+            }
+
+            @Override
+            public Optional<RecordMetadata> recordMetadata() {
+                if (inFlight == null) return Optional.empty();
+                String topic = topicByChannel.get(inFlight.channel());
+                long offset = inFlight.offset();
+                return Optional.of(new RecordMetadata() {
+                    @Override
+                    public String topic() {
+                        return topic;
+                    }
+
+                    @Override
+                    public int partition() {
+                        return taskPartition;
+                    }
+
+                    @Override
+                    public long offset() {
+                        return offset;
+                    }
+                });
+            }
+
+            // ---- pure delegation below ----
+
+            @Override
+            public String applicationId() {
+                return context.applicationId();
+            }
+
+            @Override
+            public TaskId taskId() {
+                return context.taskId();
+            }
+
+            @Override
+            public Serde<?> keySerde() {
+                return context.keySerde();
+            }
+
+            @Override
+            public Serde<?> valueSerde() {
+                return context.valueSerde();
+            }
+
+            @Override
+            public File stateDir() {
+                return context.stateDir();
+            }
+
+            @Override
+            public org.apache.kafka.streams.StreamsMetrics metrics() {
+                return context.metrics();
             }
 
             @Override
             public Cancellable schedule(Duration interval, PunctuationType type, Punctuator callback) {
                 return context.schedule(interval, type, callback);
+            }
+
+            @Override
+            public Cancellable schedule(java.time.Instant startTime, Duration interval,
+                                        PunctuationType type, Punctuator callback) {
+                return context.schedule(startTime, interval, type, callback);
+            }
+
+            @Override
+            public void commit() {
+                context.commit();
+            }
+
+            @Override
+            public Map<String, Object> appConfigs() {
+                return context.appConfigs();
+            }
+
+            @Override
+            public Map<String, Object> appConfigsWithPrefix(String prefix) {
+                return context.appConfigsWithPrefix(prefix);
+            }
+
+            @Override
+            public long currentSystemTimeMs() {
+                return context.currentSystemTimeMs();
+            }
+
+            @Override
+            public long currentStreamTimeMs() {
+                return context.currentStreamTimeMs();
             }
         }
     }

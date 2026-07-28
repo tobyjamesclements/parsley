@@ -12,8 +12,9 @@
 
 Topics are typed values declared once — serdes live with the declaration, and a pipeline hop
 is the same `CausalTopic` appearing as one stage's sink and another's source, which makes
-serde agreement across the hop hold by construction. A stage pairs each source with a
-handler; every source is typed independently:
+serde agreement across the hop hold by construction. A stage pairs each source with an
+ordinary Kafka Streams `Processor`, supplied per source so every source is typed
+independently:
 
 ```java
 CausalTopic<String, Order>   orders      = CausalTopic.of("orders", Serdes.String(), orderSerde);
@@ -21,8 +22,8 @@ CausalTopic<String, Payment> payments    = CausalTopic.of("payments", Serdes.Str
 CausalTopic<String, Settled> settlements = CausalTopic.of("settlements", Serdes.String(), settledSerde);
 
 CausalStage settlement = CausalStage.builder("settlement")
-        .source(orders,   (rec, ctx) -> ctx.emit(settlements, rec.key(), settle(rec.value())))
-        .source(payments, (rec, ctx) -> apply(rec.value()))
+        .source(orders, SettlementProcessor::new)
+        .source(payments, PaymentProcessor::new)
         .sink(settlements)
         .build();
 
@@ -35,17 +36,37 @@ try (CausalStreams app = CausalStreams.start(settlement, props)) {
 }
 ```
 
-By the time a record reaches its handler, every cause the stage consumes has been delivered.
-The `StageContext` is deliberately narrow: `emit` (stamped, deterministically partitioned,
-timestamped like the record in flight — or explicitly, which punctuators must use), `store`
-for state stores declared via `Builder.stores`, and `schedule` for punctuators. There is no
-raw forward and no processor context; the stage owns the causal boundary. One handler
-instance is shared by every task and thread running the stage, so keep handlers stateless —
-per-task mutable state belongs in state stores, which `ctx.store` scopes to the executing
-task. Serialization
-happens inside the stage — handlers never see bytes, and the dependency-clock header travels
-with the exact bytes it claims. The stage name keys its state store, so keep it stable
-across deployments.
+Processors are full Streams citizens — one instance per task, `init`/`close` lifecycle,
+connected stores via `ProcessorSupplier.stores()`, punctuators, metrics, task metadata and
+stream time on the context, exactly as in any Streams application:
+
+```java
+final class SettlementProcessor implements Processor<String, Order, String, Settled> {
+
+    private ProcessorContext<String, Settled> context;
+
+    @Override
+    public void init(ProcessorContext<String, Settled> context) {
+        this.context = context;   // schedule punctuators here, fetch your stores, as usual
+    }
+
+    @Override
+    public void process(Record<String, Order> record) {
+        // Every cause this stage consumes has already been delivered here.
+        context.forward(record.withValue(settle(record.value())), "settlements");
+    }
+}
+```
+
+Three context members behave causally rather than raw: `forward` goes through the stamping
+door — serialized with the sink topic's serdes, deterministically partitioned before
+stamping, clock attached; a named forward addresses a declared sink by topic name, an
+unnamed forward goes to every declared sink, and an undeclared sink fails loudly.
+`getStateStore` refuses the stage's protocol store. `recordMetadata` reports the delivered
+record's own coordinate — for a record released from the hold queue, that is its coordinate,
+not the release trigger's. Serialization happens inside the stage — processors never see
+bytes, and the dependency-clock header travels with the exact bytes it claims. The stage
+name keys its state store, so keep it stable across deployments.
 
 ## What the runtime wires for you
 
