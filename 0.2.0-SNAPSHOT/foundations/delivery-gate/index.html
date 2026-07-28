@@ -6,15 +6,15 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Causal consistency for Kafka">
+        <meta name="description" content="Causal delivery order for Kafka stream processing">
       
       
       
       
-        <link rel="prev" href="../causal-consistency/">
+        <link rel="prev" href="../causal-model/">
       
       
-        <link rel="next" href="../assumptions/">
+        <link rel="next" href="../liveness/">
       
       
         
@@ -84,10 +84,6 @@
     <div data-md-component="announce">
       
     </div>
-    
-      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
-        
-      </div>
     
     
       
@@ -248,7 +244,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../causal-consistency/" class="md-tabs__link">
+        <a href="../causal-model/" class="md-tabs__link">
           
   
   
@@ -270,13 +266,13 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../protocols/" class="md-tabs__link">
+        <a href="../../design/architecture/" class="md-tabs__link">
           
   
   
     
   
-  The three protocols
+  Design
 
         </a>
       </li>
@@ -314,7 +310,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../reference/processor/" class="md-tabs__link">
+        <a href="../../reference/wire-format/" class="md-tabs__link">
           
   
   
@@ -419,8 +415,6 @@
       
         
       
-        
-      
     
     
     
@@ -474,14 +468,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../causal-consistency/" class="md-nav__link">
+      <a href="../causal-model/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Causal consistency
+    The causal model
   
 
     
@@ -562,10 +556,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#why-local-delivery-is-required" class="md-nav__link">
+  <a href="#head-of-line-blocking" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why local delivery is required
+        Head-of-line blocking
       
     </span>
   </a>
@@ -573,10 +567,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#why-ignoring-unconsumed-coordinates-is-sound" class="md-nav__link">
+  <a href="#the-predicate" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why ignoring unconsumed coordinates is sound
+        The predicate
       
     </span>
   </a>
@@ -584,10 +578,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-outbound-stamp" class="md-nav__link">
+  <a href="#why-the-ignore-branch-is-sound" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The outbound stamp
+        Why the ignore branch is sound
       
     </span>
   </a>
@@ -595,10 +589,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#violations" class="md-nav__link">
+  <a href="#replays" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Violations
+        Replays
       
     </span>
   </a>
@@ -621,42 +615,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../assumptions/" class="md-nav__link">
+      <a href="../liveness/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Environmental assumptions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../invariants/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Named invariants
+    Liveness without gossip
   
 
     
@@ -685,10 +651,6 @@
   
     
     
-      
-        
-          
-        
       
         
       
@@ -710,15 +672,14 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <div class="md-nav__link md-nav__container">
-            <a href="../../protocols/" class="md-nav__link ">
-              
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
     
   
-    The three protocols
+    Design
   
 
     
@@ -726,43 +687,35 @@
   
   
 
-            </a>
-            
-              
-              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
-                <span class="md-nav__icon md-icon"></span>
-              </label>
-            
-          </div>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
-    The three protocols
+    Design
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
               
-            
-              
                 
   
   
   
   
     <li class="md-nav__item">
-      <a href="../../protocols/channels/" class="md-nav__link">
+      <a href="../../design/architecture/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    1 · Channels
+    Architecture
   
 
     
@@ -783,14 +736,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../protocols/causal-broadcast/" class="md-nav__link">
+      <a href="../../design/state/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    2 · Causal broadcast
+    State and recovery
   
 
     
@@ -811,14 +764,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../protocols/gossip/" class="md-nav__link">
+      <a href="../../design/verification/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    3 · Gossip
+    Verification
   
 
     
@@ -847,12 +800,6 @@
   
     
     
-      
-        
-      
-        
-      
-        
       
         
       
@@ -936,98 +883,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guide/streams/" class="md-nav__link">
+      <a href="../../guide/clients/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Streams integration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guide/adoption/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Incremental adoption
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guide/configuration/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guide/troubleshooting/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Troubleshooting
+    Plain clients
   
 
     
@@ -1059,16 +922,6 @@
       
         
       
-        
-      
-        
-      
-        
-      
-        
-          
-        
-      
     
     
     
@@ -1083,9 +936,8 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
-          <div class="md-nav__link md-nav__container">
-            <a href="../../api/" class="md-nav__link ">
-              
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
@@ -1099,14 +951,8 @@
   
   
 
-            </a>
-            
-              
-              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
-                <span class="md-nav__icon md-icon"></span>
-              </label>
-            
-          </div>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_5">
@@ -1118,34 +964,6 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/processor/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The processor
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
             
               
                 
@@ -1173,64 +991,6 @@
     </li>
   
 
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/naming/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Naming
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../reference/bibliography/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Bibliography
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
               
             
           </ul>
@@ -1261,105 +1021,66 @@
 
 
 <h1 id="the-delivery-gate">The delivery gate</h1>
-<p>The delivery gate is the predicate Parsley delivers under. It is the point where the
-<a href="../../protocols/causal-broadcast/">causal-broadcast module</a> decides whether a received record may
-reach the user's processor now or must wait. The whole guarantee rests on it being sound without
-the total-visibility assumption that <a href="../causal-consistency/">classical algorithms</a> require.</p>
-<blockquote>
-<p>A dependency on a coordinate this node consumes is satisfied only by this node's own contiguous
-delivered frontier reaching it. A dependency on any other coordinate is ignored, unconditionally.</p>
-</blockquote>
-<p>Evaluated over the normalised dependency clock (the record's exact self-cycle stripped), the gate
-is two branches, and it is total:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>for each coordinate c in deps:
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    if consumed(c):  require frontier(c) &gt;= deps[c]   # local delivery, never hearsay
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    else:            ignore                            # counted by a metric, never a failure
-</code></pre></div>
-<p><code>consumed(c)</code> means an input channel of this task, on a partition this task owns. A record carrying
-no clock at all (a plain Kafka producer on a consumed topic) is causally minimal by definition, a
-producer that stamps nothing claims nothing, and is deliverable immediately.</p>
-<h2 id="why-local-delivery-is-required">Why local delivery is required</h2>
-<p>This is the Birman–Schiper–Stephenson CBCAST delivery condition,<sup id="fnref:bss"><a class="footnote-ref" href="#fn:bss">1</a></sup> instantiated on Kafka's own
-<code>(topicId, partition)</code> coordinates. In BSS a process delivers a message only once <em>its own</em>
-delivered vector covers the message's timestamp. The condition is over the receiver's own delivery
-history, never over what a peer reports having delivered.</p>
-<p>The distinction matters because the guarantee Parsley makes is about the <em>order this node's
-processor observes events in</em>, not merely about whether an event exists somewhere. "K reached
-offset k" being true at some peer does not mean this node's delegate has processed K@k yet. If a
-claim carried on a sibling channel could satisfy the gate, a record caused by K@k could reach the
-delegate before K@k itself does on this node's own K subscription, an effect delivered before its
-cause to a processor subscribed to both. So the gate checks the local frontier exclusively, and an
-advertised claim is only ever <em>carried</em> in the outbound stamp, for downstream nodes to verify
-against their own frontiers in turn.</p>
-<h2 id="why-ignoring-unconsumed-coordinates-is-sound">Why ignoring unconsumed coordinates is sound</h2>
-<p>A producer stamps a clock spanning everything it consumed, so a record routinely names coordinates
-a narrower downstream consumer has no subscription to. Ignoring them is sound, not vacuous
-satisfaction, and the argument is a transitivity theorem over two invariants of the stamp:</p>
+<p>The gate is the predicate that decides whether a received record may reach the user processor.
+Everything else in the core exists to make this predicate sound and its inputs cheap.</p>
+<h2 id="head-of-line-blocking">Head-of-line blocking</h2>
+<p>Each consumed channel has a FIFO hold queue. Records enter in receive order — which is offset
+order, because Kafka delivers a partition in order — and only the <strong>head</strong> of each queue is
+ever evaluated. A blocked head blocks its channel; it never blocks other channels.</p>
+<p>This is the design's central structural choice. Delivering out of order within a partition
+would buy lower convoying latency, at the price of a second projection of the delivered
+vector, an index of ahead-of-frontier deliveries, and a gap-absorption walk on every advance.
+Head-of-line blocking collapses all of that: one frontier per channel, one queue per channel,
+and a gate that only ever looks at heads. Convoying within a channel is the accepted cost.</p>
+<p>Two consequences fall out for free:</p>
 <ul>
-<li><strong>Transitive completeness.</strong> Every node's outbound stamp dominates the dependency clocks <em>and the
-  coordinates</em> of every event it has delivered.</li>
-<li><strong>Unconditional merge.</strong> Every clock fold, the channel folds, the advertised state, every
-  outbound stamp, merges the entire inbound clock, including coordinates on channels the node does
-  not consume. The gate may ignore; the merge may not.</li>
+<li><strong>Per-channel FIFO delivery</strong> at every consumer, so a record never needs to claim its own
+  channel's earlier offsets — same-channel order is structural.</li>
+<li><strong>The frontier is contiguous by construction</strong>: it advances only when the head delivers, or
+  when a known-clean prefix folds in (seed, bridge, position advance).</li>
 </ul>
-<p>Together these mean that for any causal chain m₁ → m₂ → m₃ that passes through an unconsumed middle
-channel, every intermediate node delivered its predecessor and merged unconditionally, so m₃'s
-clock claims m₁ <em>directly</em>. An unconsumed entry in a clock only ever proxies ancestry the same
-clock already states explicitly, and ignoring it loses no ordering observable at this node. Each
-ignore is counted by the <code>deps-out-of-scope-ignored</code> metric. These two properties are the invariants
-<a href="../invariants/">I2 and I9</a>.</p>
-<p>The ignore branch is also what makes joins coordination-free. A new application's stamps routinely
-circulate coordinates that incumbent nodes have no channel for, and the gate ignores those soundly
-instead of treating them as an error, so joining a running topology needs no admission, no barrier,
-and no membership (see <a href="../../guide/streams/#evolving-a-running-topology">Streams integration</a>).</p>
-<h2 id="the-outbound-stamp">The outbound stamp</h2>
-<p>The gate consults the local frontier; the stamp is what carries a node's knowledge onward. The
-stamp attached to every outbound record, business forwards and protocol null messages alike, through
-one stamping site, is the node's vector time, the max-merge of:</p>
-<ul>
-<li><strong>the contiguous frontier, the carried ancestry</strong> from any retired channels, <strong>and every input
-  channel's advertised clock</strong>. This is transitive ancestry, carried downstream for
-  each receiver's own gate to verify locally.</li>
-<li><strong>ownOutputs</strong>: the node's own acknowledged output positions. The broker performs the sender's
-  clock increment (offset assignment), learned via producer acknowledgements, so a node's second
-  output provably claims its first, including across sink topics and partitions, which a pre-stamp
-  crossing wait covers.</li>
-<li><strong>highestDelivered</strong>: the max projection of the delivered set, so an output emitted from a
-  record delivered above a contiguous-frontier gap still claims that record.</li>
-</ul>
-<p>Some stamp entries deliberately over-claim: the init-time end-offset seed, an aborted transaction's
-acknowledgements, the gap offsets below an above-gap claim. Every such entry names a position at or
-below a real appended offset, so an over-claim can only <em>delay</em> downstream delivery, until the
-position is delivered or bridged, never reorder it. The gate is monotone in the dependency clock and
-frontiers advance only on physically received offsets, so raising a stamp entry can only move
-outcomes toward holding, which is fail-safe, never unsafe (invariant <a href="../invariants/">I8</a>). The delay
-is unbounded if the claimed channel goes permanently silent; a record held on a dependency above its
-channel's highest received offset beyond a threshold is surfaced by the
-<code>records-held-above-highest-received</code> gauge, since that is the exact signature of a claim nothing
-received so far can satisfy.</p>
-<h2 id="violations">Violations</h2>
-<p>There is no path that breaks Lamport's happened-before guarantee. Delivery is unconditionally
-fail-closed: there is no eviction and no configuration that trades causal order for availability. A
-record that can be proven impossible to evaluate, an undecodable payload or dependency header, fails
-the task fast rather than being delivered out of order or dropped; the task restarts, and the record
-stays in the buffer changelog for recovery. A dependency on a coordinate this node does not consume
-is not a violation and not a failure: it falls to the gate's ignore branch, which the transitivity
-theorem above makes sound.</p>
-<p>This takes the consistency side of the trade-off described in the CAP theorem and in the
-causal-consistency literature unconditionally: Parsley has no policy knob that spends causal order
-for liveness. A genuinely stuck dependency (a lagging partition, a co-partitioning gap, a producing
-topic that was deleted) shows up as unbounded buffer growth or a fail-closed task restart, never as
-a silent reordering. See <a href="../../guide/troubleshooting/">Troubleshooting</a>.</p>
-<div class="footnote">
-<hr />
+<h2 id="the-predicate">The predicate</h2>
+<p>A record <code>m</code> arrives on consumed channel <code>c</code> carrying dependency clock <code>D</code> (absent header
+means the empty clock — a producer that stamps nothing claims nothing). When <code>m</code> reaches the
+head of <code>c</code>'s queue:</p>
 <ol>
-<li id="fn:bss">
-<p>Kenneth Birman, André Schiper, and Pat Stephenson, "Lightweight Causal and Atomic Group
-Multicast", <em>ACM Transactions on Computer Systems</em>, 1991. The ISIS system's CBCAST protocol. See
-the <a href="../../reference/bibliography/">bibliography</a>.&#160;<a class="footnote-backref" href="#fnref:bss" title="Jump back to footnote 1 in the text">&#8617;</a></p>
-</li>
+<li><strong>Normalise</strong>: ignore <code>D</code>'s entry for <code>c</code> itself. At or above <code>m</code>'s own offset it is a
+   self-cycle (an event cannot precede itself); below it, per-channel FIFO has already
+   delivered everything the entry could name. Either way the entry carries no information the
+   structure has not already enforced.</li>
+<li><strong>Restrict</strong>: keep only entries whose channel this node consumes. Unconsumed entries are
+   <strong>ignored</strong> — the ignore branch, justified below.</li>
+<li><strong>Gate</strong>: <code>m</code> is deliverable iff the frontier dominates the restricted clock pointwise —
+   for every entry <code>(ch, n)</code>, <code>frontier[ch] ≥ n</code>.</li>
 </ol>
-</div>
+<p>Delivering <code>m</code> advances <code>frontier[c]</code> to <code>m</code>'s offset and re-evaluates every other head; the
+cascade runs to fixpoint. A delivery can release a chain of held heads across channels in one
+step.</p>
+<p>Fail closed: a present but undecodable clock header fails the task. Treating it as empty would
+silently drop the sender's claims and let an effect precede its cause; failing leaves the
+offset uncommitted for a retried, successful decode.</p>
+<h2 id="why-the-ignore-branch-is-sound">Why the ignore branch is sound</h2>
+<p>The gate ignores dependency entries on channels the node does not consume. This is safe only
+if every <em>consumed</em> ancestor hiding behind an unconsumed coordinate is claimed <strong>directly</strong> in
+the same clock — otherwise ignoring would open a hole exactly one hop wide.</p>
+<p>That directness is an induction along business paths. Consider any real ancestor <code>a</code> of <code>m</code>
+with <code>a</code> consumed here. Causality flows only through business records, so there is a chain
+<code>a → x₁ → … → m</code> of deliveries and emissions. The node that delivered <code>a</code> has <code>a</code> in its
+frontier; its stamp folds the frontier, so <code>x₁</code>'s clock claims <code>a</code>. Every downstream node
+folds the <strong>full</strong> clock of every record it receives into its per-channel advertised clocks,
+and its own stamps fold those — so the claim on <code>a</code> survives every hop to <code>m</code>'s clock,
+whether or not any intermediate node consumed <code>a</code>'s channel. The restricted comparison in step
+3 therefore sees <code>a</code> directly, and the unconsumed entries it skipped carried nothing the gate
+needed.</p>
+<p>This is also why the per-channel advertised clocks fold at <strong>receive</strong> rather than delivery:
+the stamp of any output emitted after delivering a record must dominate that record's entire
+clock, and folding early only ever over-claims real appended offsets — a delay, never a
+reorder (see <a href="../liveness/#why-over-claims-cannot-deadlock">liveness</a>).</p>
+<h2 id="replays">Replays</h2>
+<p>A received offset at or below the channel's frontier is dropped without effect. Offsets only
+reach that state through a committed delivery, a seed, or a scope-growth resume, so the drop
+is a replay guard, not a filter — under exactly-once commits it fires only when a scope change
+deliberately re-reads a prefix the node has already accounted for.</p>
 
 
 
@@ -1395,7 +1116,7 @@ the <a href="../../reference/bibliography/">bibliography</a>.&#160;<a class="foo
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../causal-consistency/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Causal consistency">
+          <a href="../causal-model/" class="md-footer__link md-footer__link--prev" aria-label="Previous: The causal model">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1405,20 +1126,20 @@ the <a href="../../reference/bibliography/">bibliography</a>.&#160;<a class="foo
                 Previous
               </span>
               <div class="md-ellipsis">
-                Causal consistency
+                The causal model
               </div>
             </div>
           </a>
         
         
           
-          <a href="../assumptions/" class="md-footer__link md-footer__link--next" aria-label="Next: Environmental assumptions">
+          <a href="../liveness/" class="md-footer__link md-footer__link--next" aria-label="Next: Liveness without gossip">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Environmental assumptions
+                Liveness without gossip
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1455,7 +1176,7 @@ the <a href="../../reference/bibliography/">bibliography</a>.&#160;<a class="foo
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.indexes", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.indexes", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>

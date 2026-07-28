@@ -6,13 +6,13 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Causal consistency for Kafka">
+        <meta name="description" content="Causal delivery order for Kafka stream processing">
       
       
       
       
       
-        <link rel="next" href="foundations/causal-consistency/">
+        <link rel="next" href="foundations/causal-model/">
       
       
         
@@ -82,10 +82,6 @@
     <div data-md-component="announce">
       
     </div>
-    
-      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
-        
-      </div>
     
     
       
@@ -246,7 +242,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="foundations/causal-consistency/" class="md-tabs__link">
+        <a href="foundations/causal-model/" class="md-tabs__link">
           
   
   
@@ -268,13 +264,13 @@
     
     
       <li class="md-tabs__item">
-        <a href="protocols/" class="md-tabs__link">
+        <a href="design/architecture/" class="md-tabs__link">
           
   
   
     
   
-  The three protocols
+  Design
 
         </a>
       </li>
@@ -312,7 +308,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="reference/processor/" class="md-tabs__link">
+        <a href="reference/wire-format/" class="md-tabs__link">
           
   
   
@@ -440,10 +436,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#the-problem" class="md-nav__link">
+  <a href="#shape-of-the-system" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The problem
+        Shape of the system
       
     </span>
   </a>
@@ -451,10 +447,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#where-the-guarantee-sits" class="md-nav__link">
+  <a href="#how-it-is-verified" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Where the guarantee sits
+        How it is verified
       
     </span>
   </a>
@@ -462,43 +458,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#why-kafka-streams-needs-a-protocol" class="md-nav__link">
+  <a href="#reading-order" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Why Kafka Streams needs a protocol
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-three-protocols" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The three protocols
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-public-surface" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The public surface
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#reading-paths" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reading paths
+        Reading order
       
     </span>
   </a>
@@ -521,8 +484,6 @@
   
     
     
-      
-        
       
         
       
@@ -580,14 +541,14 @@
   
   
     <li class="md-nav__item">
-      <a href="foundations/causal-consistency/" class="md-nav__link">
+      <a href="foundations/causal-model/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Causal consistency
+    The causal model
   
 
     
@@ -636,42 +597,14 @@
   
   
     <li class="md-nav__item">
-      <a href="foundations/assumptions/" class="md-nav__link">
+      <a href="foundations/liveness/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Environmental assumptions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="foundations/invariants/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Named invariants
+    Liveness without gossip
   
 
     
@@ -700,10 +633,6 @@
   
     
     
-      
-        
-          
-        
       
         
       
@@ -725,15 +654,14 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <div class="md-nav__link md-nav__container">
-            <a href="protocols/" class="md-nav__link ">
-              
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
     
   
-    The three protocols
+    Design
   
 
     
@@ -741,43 +669,35 @@
   
   
 
-            </a>
-            
-              
-              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
-                <span class="md-nav__icon md-icon"></span>
-              </label>
-            
-          </div>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
-    The three protocols
+    Design
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
               
-            
-              
                 
   
   
   
   
     <li class="md-nav__item">
-      <a href="protocols/channels/" class="md-nav__link">
+      <a href="design/architecture/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    1 · Channels
+    Architecture
   
 
     
@@ -798,14 +718,14 @@
   
   
     <li class="md-nav__item">
-      <a href="protocols/causal-broadcast/" class="md-nav__link">
+      <a href="design/state/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    2 · Causal broadcast
+    State and recovery
   
 
     
@@ -826,14 +746,14 @@
   
   
     <li class="md-nav__item">
-      <a href="protocols/gossip/" class="md-nav__link">
+      <a href="design/verification/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    3 · Gossip
+    Verification
   
 
     
@@ -862,12 +782,6 @@
   
     
     
-      
-        
-      
-        
-      
-        
       
         
       
@@ -951,98 +865,14 @@
   
   
     <li class="md-nav__item">
-      <a href="guide/streams/" class="md-nav__link">
+      <a href="guide/clients/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Streams integration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="guide/adoption/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Incremental adoption
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="guide/configuration/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="guide/troubleshooting/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Troubleshooting
+    Plain clients
   
 
     
@@ -1074,16 +904,6 @@
       
         
       
-        
-      
-        
-      
-        
-      
-        
-          
-        
-      
     
     
     
@@ -1098,9 +918,8 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
-          <div class="md-nav__link md-nav__container">
-            <a href="api/" class="md-nav__link ">
-              
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
@@ -1114,14 +933,8 @@
   
   
 
-            </a>
-            
-              
-              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
-                <span class="md-nav__icon md-icon"></span>
-              </label>
-            
-          </div>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_5">
@@ -1133,34 +946,6 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="reference/processor/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The processor
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
             
               
                 
@@ -1188,64 +973,6 @@
     </li>
   
 
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="reference/naming/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Naming
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="reference/bibliography/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Bibliography
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
               
             
           </ul>
@@ -1276,117 +1003,54 @@
 
 
 <h1 id="parsley">Parsley</h1>
-<p>Parsley provides causal delivery order for Kafka Streams processors. Producers stamp each record
-with its causal dependencies, and Parsley holds back any record whose dependencies a consumer has
-not yet observed, releasing it once the consumer's frontier catches up. The guarantee is the one
-from the distributed-systems literature: if event A causally precedes event B, every processor
-that subscribes to both of their topics processes A before B.</p>
-<p>This site is organised around that guarantee. <a href="foundations/causal-consistency/">Foundations</a>
-develops the theory, <a href="protocols/">The three protocols</a> describes the layered algorithm
-that delivers it, and <a href="guide/getting-started/">Using Parsley</a> covers building and operating a
-topology.</p>
-<h2 id="the-problem">The problem</h2>
-<p>Kafka orders records only within a single partition. A system that derives decisions from events
-across several topics is not protected by that guarantee.</p>
-<p>Consider two topics, <code>prices</code> and <code>orders</code>. A consumer reads a price from <code>prices-0</code> at offset 27
-and, on the basis of that price, writes a record to <code>orders</code>. A downstream consumer of <code>orders</code>
-processes that order while its own <code>prices</code> consumer has only reached offset 24. It is acting on an
-order whose cause, the price at offset 27, it has not yet seen.</p>
-<p>In Lamport's terms the price update happened before the order, so a causally consistent system
-processes the price first regardless of which topic each record arrived on. The violation happens
-under ordinary Kafka operation whenever consumer lag on one topic races ahead of a write to
-another. Per-partition ordering does not prevent it. Parsley does.</p>
-<h2 id="where-the-guarantee-sits">Where the guarantee sits</h2>
-<p>Causal consistency is the strongest model that can be maintained without coordination. It sits
-above eventual consistency, which constrains no order, and below linearisability, which orders
-every event through a single global timeline. Parsley delivers causal consistency for the specific
-setting of Kafka Streams: the ordering unit is a <code>(topic, partition)</code> coordinate rather than a
-process, and dependencies are carried as broker offsets.
-<a href="foundations/causal-consistency/">Foundations</a> develops Lamport's happened-before relation,
-vector clocks, and this instantiation in full.</p>
-<h2 id="why-kafka-streams-needs-a-protocol">Why Kafka Streams needs a protocol</h2>
-<p>Classical causal-broadcast algorithms rest on two assumptions, and Kafka stream processing
-satisfies neither.</p>
-<ul>
-<li><strong>Total visibility.</strong> Every node that must enforce causal order receives every message. A Kafka
-  consumer subscribes to a subset of topics and partitions, so a dependency clock routinely names
-  coordinates the consumer has no channel for.</li>
-<li><strong>Reliable FIFO channels with stable identity.</strong> Vector-clock protocols assume dense, gap-free,
-  permanently-identified channels. Kafka partitions rebind identity when a topic is recreated,
-  expose offsets that commit markers and aborted records occupy but a consumer never returns,
-  truncate history under retention, and, in Parsley, deliver out of order within a partition.</li>
-</ul>
-<p>Parsley restores both assumptions and delivers under them, in three layers.</p>
-<h2 id="the-three-protocols">The three protocols</h2>
-<p>The implementation is a stack of three protocols, each presented in the module style of Cachin,
-Guerraoui, and Rodrigues: requests in, indications out, properties guaranteed. Each layer consumes
-the guarantees of the one below it and offers a clean assumption set to the one above.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>┌──────────────────────────────────────────────────────────────────┐
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>│ gossip              clock dissemination / liveness                │
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>│   Chandy–Misra–Bryant null messages, Demers epidemic spread       │
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>├──────────────────────────────────────────────────────────────────┤
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>│ causal broadcast    receive / deliver in causal order             │
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>│   Birman–Schiper–Stephenson CBCAST                                │
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>├──────────────────────────────────────────────────────────────────┤
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>│ channels            Kafka partition → reliable FIFO channel       │
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>│   Hadzilacos–Toueg reliable channels                              │
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>└──────────────────────────────────────────────────────────────────┘
-</code></pre></div>
-<ul>
-<li><strong><a href="protocols/channels/">Channels</a></strong> repairs the transport assumption. UUID-keyed coordinates,
-  seeding and bridging for density, the contiguous frontier, and own-output tracking turn Kafka
-  topic-partitions into the reliable FIFO channels the layer above assumes.</li>
-<li><strong><a href="protocols/causal-broadcast/">Causal broadcast</a></strong> is the core guarantee: the
-  Birman–Schiper–Stephenson delivery gate, the unbounded hold-back buffer, the release cascade, and
-  the single stamping site. It repairs the visibility assumption not by restoring total visibility
-  but by making the delivery predicate sound without it.</li>
-<li><strong><a href="protocols/gossip/">Gossip</a></strong> keeps causal progress observable through processors that emit
-  no business output, using protocol null messages, and quiesces on any topology shape including
-  cycles.</li>
-</ul>
-<p>The <a href="protocols/">protocols overview</a> gives the module boxes, the class map, and the cost
-model of the stack.</p>
-<h2 id="the-public-surface">The public surface</h2>
-<p>Parsley is a single jar built around one topology-level entry point and a set of edge operations
-over a shared vocabulary of value types.</p>
-<table>
-<thead>
-<tr>
-<th>API</th>
-<th>Purpose</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>CausalStreamsBuilder</code> / <code>CausalTopology</code></td>
-<td>Declare a causal topology: one stage of source topics feeding a processor and forwarding to one or more sinks, the way <code>StreamsBuilder</code>/<code>Topology</code> declare a plain Kafka Streams one.</td>
-</tr>
-<tr>
-<td><code>CausalStreams</code></td>
-<td>The runtime: wraps the underlying <code>KafkaStreams</code> instance and owns graceful causal drain on <code>close()</code>.</td>
-</tr>
-<tr>
-<td><code>CausalClock</code></td>
-<td>Maintain a consumer-side frontier and stamp causal context onto records produced to plain Kafka clients at the topology edge. Topic names resolve to their stable Kafka UUIDs internally.</td>
-</tr>
-<tr>
-<td><code>CausalDeliveryException</code> hierarchy</td>
-<td>The typed exceptions Parsley's fail-closed protocol throws out of a task, for an uncaught-exception handler to decide on. See <a href="guide/streams/#failure-handling">failure handling</a>.</td>
-</tr>
-</tbody>
-</table>
-<p>There is no low-level public entry point to assemble a topology by hand. The processor decorator,
-the buffer, and the shutdown drain are internal machinery <code>CausalStreams</code> composes.</p>
-<h2 id="reading-paths">Reading paths</h2>
-<ul>
-<li>To understand the guarantee, read <a href="foundations/causal-consistency/">Foundations</a> and then
-  <a href="protocols/">The three protocols</a>.</li>
-<li>To build a topology, start with <a href="guide/getting-started/">Getting started</a> and
-  <a href="guide/streams/">Streams integration</a>.</li>
-<li>To operate one, see <a href="guide/configuration/">Configuration</a> and
-  <a href="guide/troubleshooting/">Troubleshooting</a>.</li>
-<li>The <a href="api/">API reference</a> is the full Javadoc.</li>
-</ul>
+<p>Parsley provides causal delivery order for Kafka stream processing: a record reaches your
+processor only after every cause your processor consumes has been delivered locally. The
+guarantee is the causal-consistency model of the distributed-systems literature — Lamport's
+happened-before relation, realised with vector clocks — instantiated on Kafka coordinates.
+When A causally precedes B, every processor that subscribes to both of their topics processes
+A before B.</p>
+<p>Causal safety is inviolable: Parsley blocks or fails, and never reorders, drops, or guesses on
+a timeout. Joining a running topology needs no coordination — a new application starts
+consuming, self-gates into causal order during replay, and its stamps make its outputs
+correctly gated everywhere from its first emission.</p>
+<h2 id="shape-of-the-system">Shape of the system</h2>
+<p>Parsley is a <strong>protocol core</strong> plus a <strong>Kafka Streams adapter</strong>. The core carries no Kafka
+dependency, but it is not transport-agnostic — Kafka's semantics (broker-assigned offsets,
+transactional visibility, consumer positions) are load-bearing throughout. The seam exists so
+the deterministic simulator can host the protocol, not so other transports can.</p>
+<p>The core (<a href="design/architecture/">architecture</a>) gates delivery with head-of-line blocking
+per channel: each <code>(topicId, partition)</code> channel has a FIFO hold queue, only queue heads are
+evaluated against the contiguous delivered frontier, and a delivery cascades releases to
+fixpoint. Outbound records carry a single header — a vector clock over channels — computed at
+one stamping site. All causal state persists under per-channel keys in the same transaction as
+the delivery that mutated it.</p>
+<p>There are <strong>no protocol records on any topic</strong>. The liveness role that in-band protocol
+traffic plays in other designs is covered by the consumer's own position advance past
+transaction markers — see <a href="foundations/liveness/">liveness</a>, which develops why this
+suffices.</p>
+<p>The adapter (<a href="guide/getting-started/">getting started</a>) hosts the core and runs user
+logic as pure functions — a <code>Message</code> in, <code>Emission</code> values out — with one serialization
+point on each side, and enforces <code>exactly_once_v2</code>. Plain producers and consumers use the same stamps through the
+<a href="guide/clients/">plain-client ops</a>.</p>
+<h2 id="how-it-is-verified">How it is verified</h2>
+<p>The primary correctness gate is a deterministic simulator with a ground-truth causal oracle —
+not broker integration tests. The simulator models EOS transactions, marker and aborted
+offsets, asynchronous acknowledgements, crashes with transactional rollback, and seeded random
+interleavings; the oracle tracks real happened-before ancestry outside the protocol and checks
+every delivery. <a href="design/verification/">Verification</a> states the obligations and how each is
+enforced, including the self-test that proves the oracle catches a broken protocol.</p>
+<h2 id="reading-order">Reading order</h2>
+<ol>
+<li><a href="foundations/causal-model/">The causal model</a> — what is promised, and against what fault
+   model.</li>
+<li><a href="foundations/delivery-gate/">The delivery gate</a> — the predicate, its normalisation, and
+   why ignoring unconsumed coordinates is sound.</li>
+<li><a href="foundations/liveness/">Liveness without gossip</a> — why nothing wedges and nothing
+   deadlocks, with no protocol traffic.</li>
+<li><a href="design/architecture/">Architecture</a> and <a href="design/state/">state</a> — the classes, the
+   store layout, crash recovery, scope changes, truncation.</li>
+<li><a href="design/verification/">Verification</a> — the simulator, the oracle, and the obligations.</li>
+</ol>
 
 
 
@@ -1423,13 +1087,13 @@ the buffer, and the shutdown drain are internal machinery <code>CausalStreams</c
         
         
           
-          <a href="foundations/causal-consistency/" class="md-footer__link md-footer__link--next" aria-label="Next: Causal consistency">
+          <a href="foundations/causal-model/" class="md-footer__link md-footer__link--next" aria-label="Next: The causal model">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Causal consistency
+                The causal model
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1466,7 +1130,7 @@ the buffer, and the shutdown drain are internal machinery <code>CausalStreams</c
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.indexes", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "content.code.copy"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.indexes", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "content.code.copy"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="assets/javascripts/bundle.d7400e89.min.js"></script>

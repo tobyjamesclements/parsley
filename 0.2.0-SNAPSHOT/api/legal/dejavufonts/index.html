@@ -6,7 +6,7 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Causal consistency for Kafka">
+        <meta name="description" content="Causal delivery order for Kafka stream processing">
       
       
       
@@ -80,10 +80,6 @@
     <div data-md-component="announce">
       
     </div>
-    
-      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
-        
-      </div>
     
     
       
@@ -242,7 +238,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../foundations/causal-consistency/" class="md-tabs__link">
+        <a href="../../../foundations/causal-model/" class="md-tabs__link">
           
   
   
@@ -264,13 +260,13 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../protocols/" class="md-tabs__link">
+        <a href="../../../design/architecture/" class="md-tabs__link">
           
   
   
     
   
-  The three protocols
+  Design
 
         </a>
       </li>
@@ -308,7 +304,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../../reference/processor/" class="md-tabs__link">
+        <a href="../../../reference/wire-format/" class="md-tabs__link">
           
   
   
@@ -411,8 +407,6 @@
       
         
       
-        
-      
     
     
     
@@ -463,14 +457,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../foundations/causal-consistency/" class="md-nav__link">
+      <a href="../../../foundations/causal-model/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Causal consistency
+    The causal model
   
 
     
@@ -519,42 +513,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../foundations/assumptions/" class="md-nav__link">
+      <a href="../../../foundations/liveness/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Environmental assumptions
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../foundations/invariants/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Named invariants
+    Liveness without gossip
   
 
     
@@ -583,10 +549,6 @@
   
     
     
-      
-        
-          
-        
       
         
       
@@ -608,15 +570,14 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <div class="md-nav__link md-nav__container">
-            <a href="../../../protocols/" class="md-nav__link ">
-              
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
     
   
-    The three protocols
+    Design
   
 
     
@@ -624,43 +585,35 @@
   
   
 
-            </a>
-            
-              
-              <label class="md-nav__link " for="__nav_3" id="__nav_3_label" tabindex="0">
-                <span class="md-nav__icon md-icon"></span>
-              </label>
-            
-          </div>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
   
-    The three protocols
+    Design
   
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
               
-            
-              
                 
   
   
   
   
     <li class="md-nav__item">
-      <a href="../../../protocols/channels/" class="md-nav__link">
+      <a href="../../../design/architecture/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    1 · Channels
+    Architecture
   
 
     
@@ -681,14 +634,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protocols/causal-broadcast/" class="md-nav__link">
+      <a href="../../../design/state/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    2 · Causal broadcast
+    State and recovery
   
 
     
@@ -709,14 +662,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../protocols/gossip/" class="md-nav__link">
+      <a href="../../../design/verification/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    3 · Gossip
+    Verification
   
 
     
@@ -745,12 +698,6 @@
   
     
     
-      
-        
-      
-        
-      
-        
       
         
       
@@ -834,98 +781,14 @@
   
   
     <li class="md-nav__item">
-      <a href="../../../guide/streams/" class="md-nav__link">
+      <a href="../../../guide/clients/" class="md-nav__link">
         
   
   
   <span class="md-ellipsis">
     
   
-    Streams integration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../guide/adoption/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Incremental adoption
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../guide/configuration/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Configuration
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../guide/troubleshooting/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Troubleshooting
+    Plain clients
   
 
     
@@ -957,16 +820,6 @@
       
         
       
-        
-      
-        
-      
-        
-      
-        
-          
-        
-      
     
     
     
@@ -981,9 +834,8 @@
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
         
           
-          <div class="md-nav__link md-nav__container">
-            <a href="../../" class="md-nav__link ">
-              
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
@@ -997,14 +849,8 @@
   
   
 
-            </a>
-            
-              
-              <label class="md-nav__link " for="__nav_5" id="__nav_5_label" tabindex="0">
-                <span class="md-nav__icon md-icon"></span>
-              </label>
-            
-          </div>
+            <span class="md-nav__icon md-icon"></span>
+          </label>
         
         <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_5">
@@ -1016,34 +862,6 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../reference/processor/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The processor
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
             
               
                 
@@ -1071,64 +889,6 @@
     </li>
   
 
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../reference/naming/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Naming
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../../reference/bibliography/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Bibliography
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
               
             
           </ul>
@@ -1407,7 +1167,7 @@ given a different name.
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.indexes", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.indexes", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "content.code.copy"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
       <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
