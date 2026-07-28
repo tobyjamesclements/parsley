@@ -45,10 +45,7 @@ public final class CausalStage<K, V, KO, VO> {
 
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(CausalStage.class);
 
-    static final String STORE_NAME = "parsley-causal-state";
-    static final String SOURCE_NAME = "parsley-source";
-    static final String PROCESSOR_NAME = "parsley-processor";
-    static final String SINK_PREFIX = "parsley-sink-";
+    static final String DEFAULT_NAME = "stage";
 
     /** Creates the per-task broker-offsets view; production uses an admin client. */
     interface BrokerOffsetsProvider {
@@ -59,6 +56,7 @@ public final class CausalStage<K, V, KO, VO> {
 
     private record SinkDef<KO, VO>(Serde<KO> keySerde, Serde<VO> valueSerde) {}
 
+    private final String name;
     private final Map<String, SourceDef<K, V>> sources;
     private final Map<String, SinkDef<KO, VO>> sinks;
     private final ProcessorSupplier<K, V, KO, VO> userSupplier;
@@ -67,10 +65,31 @@ public final class CausalStage<K, V, KO, VO> {
     private BrokerOffsetsProvider brokerOffsets;
 
     private CausalStage(Builder<K, V, KO, VO> b) {
+        this.name = b.name;
         this.sources = b.sources;
         this.sinks = b.sinks;
         this.userSupplier = b.userSupplier;
         this.truncationInterval = b.truncationInterval;
+    }
+
+    String name() {
+        return name;
+    }
+
+    String storeName() {
+        return "parsley-" + name + "-state";
+    }
+
+    private String sourceNode() {
+        return "parsley-" + name + "-source";
+    }
+
+    private String processorNode() {
+        return "parsley-" + name + "-processor";
+    }
+
+    private String sinkNode(String topic) {
+        return "parsley-" + name + "-sink-" + topic;
     }
 
     public static <K, V, KO, VO> Builder<K, V, KO, VO> builder() {
@@ -80,8 +99,22 @@ public final class CausalStage<K, V, KO, VO> {
     public static final class Builder<K, V, KO, VO> {
         private final Map<String, SourceDef<K, V>> sources = new LinkedHashMap<>();
         private final Map<String, SinkDef<KO, VO>> sinks = new LinkedHashMap<>();
+        private String name = DEFAULT_NAME;
         private ProcessorSupplier<K, V, KO, VO> userSupplier;
         private Duration truncationInterval = Duration.ofMinutes(10);
+
+        /**
+         * Names the stage. Required (and unique) when composing several stages into one
+         * {@link CausalTopology}; the name keys the stage's state store, so it must stay
+         * stable across deployments of the same application.
+         */
+        public Builder<K, V, KO, VO> name(String name) {
+            if (!name.matches("[a-zA-Z0-9-]+")) {
+                throw new IllegalArgumentException("stage name must be [a-zA-Z0-9-]+: " + name);
+            }
+            this.name = name;
+            return this;
+        }
 
         public Builder<K, V, KO, VO> source(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
             sources.put(topic, new SourceDef<>(keySerde, valueSerde));
@@ -132,6 +165,12 @@ public final class CausalStage<K, V, KO, VO> {
      * incarnations to seed against and nothing to truncate.
      */
     public Topology testTopology() {
+        wireForTest();
+        return topology();
+    }
+
+    /** Applies the broker-less wiring ({@link #testTopology()} and multi-stage test paths). */
+    void wireForTest() {
         wire(topic -> new TopicIds.Resolved(testChannel(topic, 0).topicId(), 1),
                 (ids, sinkTopics) -> new BrokerOffsets() {
                     @Override
@@ -144,7 +183,6 @@ public final class CausalStage<K, V, KO, VO> {
                         return new EarliestOffsets(Map.of(), Set.of());
                     }
                 });
-        return topology();
     }
 
     /** The channel {@link #testTopology()} resolves for a topic-partition. */
@@ -152,15 +190,21 @@ public final class CausalStage<K, V, KO, VO> {
         return new Channel(UUID.nameUUIDFromBytes(topic.getBytes()), partition);
     }
 
-    /** Assembles the Streams topology. Wiring must be present ({@code CausalStreams.start}). */
+    /** Assembles the Streams topology (single-stage form). */
     Topology topology() {
+        Topology t = new Topology();
+        addTo(t);
+        return t;
+    }
+
+    /** Adds this stage's nodes to a shared topology. Wiring must be present. */
+    void addTo(Topology t) {
         if (topicIds == null || brokerOffsets == null) {
             throw new IllegalStateException("unwired stage: start it with CausalStreams.start");
         }
-        Topology t = new Topology();
-        t.addSource(SOURCE_NAME, new ByteArrayDeserializer(), new ByteArrayDeserializer(),
+        t.addSource(sourceNode(), new ByteArrayDeserializer(), new ByteArrayDeserializer(),
                 sources.keySet().toArray(String[]::new));
-        t.addProcessor(PROCESSOR_NAME, new AdapterSupplier(), SOURCE_NAME);
+        t.addProcessor(processorNode(), new AdapterSupplier(), sourceNode());
         for (String sink : sinks.keySet()) {
             // The adapter partitions before stamping (sequence claims are per channel), so the
             // sink must land each record on the partition the adapter chose. The partitioner
@@ -169,10 +213,9 @@ public final class CausalStage<K, V, KO, VO> {
             org.apache.kafka.streams.processor.StreamPartitioner<byte[], byte[]> partitioner =
                     (topic, key, value, numPartitions) ->
                             java.util.Optional.of(Set.of(partitionFor(key, partitions)));
-            t.addSink(SINK_PREFIX + sink, sink, new ByteArraySerializer(), new ByteArraySerializer(),
-                    partitioner, PROCESSOR_NAME);
+            t.addSink(sinkNode(sink), sink, new ByteArraySerializer(), new ByteArraySerializer(),
+                    partitioner, processorNode());
         }
-        return t;
     }
 
     /**
@@ -194,7 +237,7 @@ public final class CausalStage<K, V, KO, VO> {
         public Set<StoreBuilder<?>> stores() {
             Set<StoreBuilder<?>> all = new HashSet<>();
             all.add(Stores.keyValueStoreBuilder(
-                            Stores.persistentKeyValueStore(STORE_NAME), Serdes.Bytes(), Serdes.ByteArray())
+                            Stores.persistentKeyValueStore(storeName()), Serdes.Bytes(), Serdes.ByteArray())
                     .withCachingDisabled());
             Set<StoreBuilder<?>> user = userSupplier.stores();
             if (user != null) all.addAll(user);
@@ -234,14 +277,17 @@ public final class CausalStage<K, V, KO, VO> {
                 sinkIds.add(topicIds.resolve(topic).id());
             }
 
-            KeyValueStore<Bytes, byte[]> kv = context.getStateStore(STORE_NAME);
+            KeyValueStore<Bytes, byte[]> kv = context.getStateStore(storeName());
             BrokerOffsets offsets = brokerOffsets.create(topicIds, sinks.keySet());
             // The sender identity must be stable across restarts and rebalances: derive it
             // from the application and task ids, which name this partition group durably.
+            // Sender identity must survive topology evolution: task ids embed the sub-topology
+            // index, which renumbers when stages are added, so derive from the user-stable
+            // stage name and the partition instead.
             UUID senderId = UUID.nameUUIDFromBytes(
-                    (context.applicationId() + "/" + context.taskId()).getBytes());
+                    (context.applicationId() + "/" + name + "/" + taskPartition).getBytes());
             node = new CausalNode(
-                    new NodeConfig("task-" + context.taskId(), senderId, consumed, sinkIds,
+                    new NodeConfig(name + "-task-" + context.taskId(), senderId, consumed, sinkIds,
                             taskPartition),
                     new KafkaStateStore(kv), offsets);
 
@@ -343,7 +389,7 @@ public final class CausalStage<K, V, KO, VO> {
                 Channel dest = new Channel(resolved.id(), partitionFor(key, resolved.partitions()));
                 var headers = new RecordHeaders(record.headers());
                 CausalHeaders.write(headers, node.prepareSend(dest));
-                inner.forward(new Record<>(key, value, record.timestamp(), headers), SINK_PREFIX + sink);
+                inner.forward(new Record<>(key, value, record.timestamp(), headers), sinkNode(sink));
             }
 
             // ---- pure delegation below ----

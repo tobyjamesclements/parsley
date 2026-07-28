@@ -34,7 +34,12 @@ public final class CausalStreams implements AutoCloseable {
         this.admin = admin;
     }
 
+    /** Starts a single-stage application; see {@link #start(CausalTopology, Properties)}. */
     public static CausalStreams start(CausalStage<?, ?, ?, ?> stage, Properties props) {
+        return start(CausalTopology.of(stage), props);
+    }
+
+    public static CausalStreams start(CausalTopology causalTopology, Properties props) {
         Properties p = new Properties();
         p.putAll(props);
         Object guarantee = p.get(StreamsConfig.PROCESSING_GUARANTEE_CONFIG);
@@ -51,11 +56,13 @@ public final class CausalStreams implements AutoCloseable {
         Admin admin = Admin.create(Map.of("bootstrap.servers",
                 adminConfig.get(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG)));
 
-        stage.wire(
-                TopicIds.fromAdmin(admin),
-                (ids, sinkTopics) -> new AdminBrokerOffsets(ids, admin, sinkTopics));
+        TopicIds topicIds = TopicIds.fromAdmin(admin);
+        for (CausalStage<?, ?, ?, ?> stage : causalTopology.stages()) {
+            stage.wire(topicIds,
+                    (ids, sinkTopics) -> new AdminBrokerOffsets(ids, admin, sinkTopics));
+        }
 
-        KafkaStreams ks = new KafkaStreams(stage.topology(), p, Positions.capturingClientSupplier());
+        KafkaStreams ks = new KafkaStreams(causalTopology.topology(), p, Positions.capturingClientSupplier());
         ks.start();
         return new CausalStreams(ks, admin);
     }

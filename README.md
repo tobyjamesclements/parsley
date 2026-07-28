@@ -72,6 +72,13 @@ try (CausalStreams app = CausalStreams.start(stage, props)) {
 }
 ```
 
+Stages compose into pipelines within one application — name each stage and connect them
+through ordinary topics, which become causal channels like any other:
+
+```java
+CausalStreams.start(CausalTopology.of(enrichment, settlement), props);
+```
+
 Plain producers stamp with a `CausalClock` — `observe` consumed records, `recordProduced` your
 acknowledgements, `stamp` outbound headers. Adoption is incremental: a producer that stamps
 nothing claims nothing, so you stamp the producers whose ordering matters, one at a time,
@@ -99,7 +106,6 @@ The verification obligations the test suite enforces are catalogued in
 
 ## Current limitations
 
-- One causal stage per Streams topology; the protocol core itself has no such limit.
 - Non-Parsley headers on held records are not carried through delivery.
 - Sequence claims carry a late-joiner caveat: consumers joining at the log end should
   baseline at the last stable offset (see the liveness page).

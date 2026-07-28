@@ -132,7 +132,18 @@ thread is the only sound source; see
 and broker offset facts through an admin client. `TopologyTestDriver` runs without a broker
 through `testTopology()`, which wires the internal seams itself.
 
-Current adapter limits: one causal stage per topology (the core has no such limit),
-non-Parsley headers on held records are not carried through delivery, and the adapter runs
-without an acknowledgement feed (own outputs stay in sequence space — see the stamp section —
-because Streams attributes producer acknowledgements per thread, not per task).
+Stages compose: `CausalTopology.of(stageA, stageB, ...)` assembles several named stages into
+one Streams topology, connected through ordinary topics — one stage's sink is another's
+source, and the connecting topic is a causal channel like any other, stamped on write and
+gated on read. Hops add no acknowledgement waits (stamping is synchronous under sequence
+claims), custody carries transitively across them, and each stage keeps its own state store
+keyed by its name. Stage-connecting topics are explicit and must pre-exist — there are no
+automatic repartition topics, which keeps the co-partitioning precondition visible at each
+hop. Sender identity derives from the application id, the stage name, and the partition, so
+it survives topology evolution (task ids embed the sub-topology index, which renumbers when
+stages are added).
+
+Current adapter limits: non-Parsley headers on held records are not carried through delivery,
+and the adapter runs without an acknowledgement feed (own outputs stay in sequence space — see
+the stamp section — because Streams attributes producer acknowledgements per thread, not per
+task).
