@@ -526,7 +526,7 @@
   <span class="md-ellipsis">
     
   
-    Liveness without gossip
+    Liveness
   
 
     
@@ -1026,10 +1026,9 @@ and downstream ordering through them is not constrained. That is the safe defaul
 outside the causal path, and the reason incremental adoption needs no flag day — stamp the
 producers whose ordering matters, one at a time.</p>
 <h2 id="consuming">Consuming</h2>
-<p>Plain consumers need no Parsley awareness. Business topics carry no protocol records — the
-only trace of Parsley on the wire is a few headers (<code>CausalHeaders.CLOCK</code> and the sender tag,
-readable via <code>CausalHeaders.readSender</code> / <code>readSeq</code> for observability), which a consumer may
-ignore entirely.</p>
+<p>Plain consumers need no Parsley awareness. The only trace of Parsley on the wire is a few
+headers (<code>CausalHeaders.CLOCK</code> and the sender tag, readable via <code>CausalHeaders.readSender</code> /
+<code>readSeq</code> for observability), which a consumer may ignore entirely.</p>
 <p>A plain consumer that wants causal <em>observation</em> — so that records it later produces claim
 what it read — uses <code>observe</code> as above. A plain consumer that wants causal <em>delivery order</em>
 is, by definition, a causal stage: run it as one.</p>

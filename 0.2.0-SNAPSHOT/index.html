@@ -604,7 +604,7 @@
   <span class="md-ellipsis">
     
   
-    Liveness without gossip
+    Liveness
   
 
     
@@ -1026,10 +1026,10 @@ evaluated against the contiguous delivered frontier, and a delivery cascades rel
 fixpoint. Outbound records carry a single header — a vector clock over channels — computed at
 one stamping site. All causal state persists under per-channel keys in the same transaction as
 the delivery that mutated it.</p>
-<p>There are <strong>no protocol records on any topic</strong>. The liveness role that in-band protocol
-traffic plays in other designs is covered by the consumer's own position advance past
-transaction markers — see <a href="foundations/liveness/">liveness</a>, which develops why this
-suffices.</p>
+<p>Parsley's entire on-wire footprint is record headers on business topics. Liveness rides the
+consumer's own position advance past transaction markers — see
+<a href="foundations/liveness/">liveness</a>, which develops why every held record is eventually
+released.</p>
 <p>The adapter (<a href="guide/getting-started/">getting started</a>) hosts the protocol and runs user
 logic as pure functions — a <code>Message</code> in, <code>Emission</code> values out — with one serialization
 point on each side, and enforces <code>exactly_once_v2</code>. Plain producers and consumers use the same stamps through the
@@ -1047,8 +1047,8 @@ enforced, including the self-test that proves the oracle catches a broken protoc
    model.</li>
 <li><a href="foundations/delivery-gate/">The delivery gate</a> — the predicate, its normalisation, and
    why ignoring unconsumed coordinates is sound.</li>
-<li><a href="foundations/liveness/">Liveness without gossip</a> — why nothing wedges and nothing
-   deadlocks, with no protocol traffic.</li>
+<li><a href="foundations/liveness/">Liveness</a> — why every held record is released and nothing
+   deadlocks.</li>
 <li><a href="design/architecture/">Architecture</a> and <a href="design/state/">state</a> — the classes, the
    store layout, crash recovery, scope changes, truncation.</li>
 <li><a href="design/verification/">Verification</a> — the simulator, the oracle, and the obligations.</li>

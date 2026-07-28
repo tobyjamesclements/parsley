@@ -633,7 +633,7 @@
   <span class="md-ellipsis">
     
   
-    Liveness without gossip
+    Liveness
   
 
     
@@ -1042,8 +1042,8 @@ consumer need not subscribe to every intermediate step to be bound by the orderi
 through them.</p>
 <p>In the consistency hierarchy this sits above eventual consistency, which constrains no order,
 and below linearisability, which forces a single global timeline. Causal consistency is the
-strongest model maintainable without coordination, which is what lets Parsley deliver it with
-no membership, no admission barrier, and no configuration handshake.</p>
+strongest model maintainable without coordination, which is what lets a new application join
+by simply starting to consume.</p>
 <h2 id="channels-coordinates-clocks">Channels, coordinates, clocks</h2>
 <p>Kafka's unit of total order is the partition, not the process, so Parsley's clocks are indexed
 by channel:</p>

@@ -526,7 +526,7 @@
   <span class="md-ellipsis">
     
   
-    Liveness without gossip
+    Liveness
   
 
     
@@ -1156,7 +1156,7 @@ escape the claim:</p>
 </tbody>
 </table>
 <p>The broker performs the sender's clock increment (offset assignment), which the sender never
-observes — there is no acknowledgement feed, and the stamping path never waits. Clocks carry a
+observes — the stamping path never waits on it. Clocks carry a
 second claim kind, <strong>sequence claims</strong>: <code>(channel, sender, seq)</code> claims every record the
 sender sent to that channel up to its per-channel send sequence, assigned synchronously at
 <code>prepareSend</code>. Every outbound record carries its sender tag, and a receiver resolves a
@@ -1226,7 +1226,7 @@ broker-less topology per call.</p>
 <p>Stages compose: <code>Parsley.of(stageA, stageB, ...)</code> assembles several named stages into
 one Streams topology, connected through ordinary topics — one stage's sink is another's
 source, and the connecting topic is a causal channel like any other, stamped on write and
-gated on read. Hops add no acknowledgement waits (stamping is synchronous under sequence
+gated on read. Hops cost only the broker round trip (stamping is synchronous under sequence
 claims), custody carries transitively across them, and each stage keeps its own state store
 keyed by its name. Stage-connecting topics are explicit and must pre-exist — there are no
 automatic repartition topics, which keeps the co-partitioning precondition visible at each
@@ -1234,9 +1234,9 @@ hop. Sender identity derives from the application id, the stage name, and the pa
 it survives topology evolution (task ids embed the sub-topology index, which renumbers when
 stages are added).</p>
 <p>Current adapter limits: non-Parsley headers on held records are not carried through delivery,
-and the adapter runs without an acknowledgement feed (own outputs stay in sequence space — see
-the stamp section — because Streams attributes producer acknowledgements per thread, not per
-task).</p>
+and own outputs are claimed in sequence space rather than folded from producer
+acknowledgements (Streams attributes acknowledgements per thread, not per task — see the
+stamp section).</p>
 
 
 
@@ -1272,7 +1272,7 @@ task).</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../../foundations/liveness/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Liveness without gossip">
+          <a href="../../foundations/liveness/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Liveness">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1282,7 +1282,7 @@ task).</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Liveness without gossip
+                Liveness
               </div>
             </div>
           </a>

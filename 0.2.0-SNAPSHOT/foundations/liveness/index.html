@@ -25,7 +25,7 @@
     
     
       
-        <title>Liveness without gossip - Parsley</title>
+        <title>Liveness - Parsley</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#liveness-without-gossip" class="md-skip">
+        <a href="#liveness" class="md-skip">
           Skip to content
         </a>
       
@@ -110,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Liveness without gossip
+              Liveness
             
           </span>
         </div>
@@ -540,7 +540,7 @@
   <span class="md-ellipsis">
     
   
-    Liveness without gossip
+    Liveness
   
 
     
@@ -558,7 +558,7 @@
   <span class="md-ellipsis">
     
   
-    Liveness without gossip
+    Liveness
   
 
     
@@ -1031,10 +1031,10 @@
   
 
 
-<h1 id="liveness-without-gossip">Liveness without gossip</h1>
-<p>Parsley appends no protocol records to any topic. This page develops why that is possible: why
-every held record is eventually released, why nothing deadlocks, and what closed the one
-genuine gap that in-band protocol traffic covers in other designs.</p>
+<h1 id="liveness">Liveness</h1>
+<p>This page develops why every held record is eventually released and nothing deadlocks: what a
+gate waits on, how the consumer's position reveals offsets that never arrive as records, and
+why the wait graph cannot cycle.</p>
 <h2 id="what-a-gate-can-wait-on">What a gate can wait on</h2>
 <p>The delivery gate waits on exactly one thing: the local frontier of channels the node itself
 consumes. It never consults another node's advertised knowledge — a peer's claim that a record
@@ -1050,10 +1050,10 @@ business record arrives and is delivered in queue order. A transaction marker or
 record is consumer-skipped, and the skip is observable: the next fetched record's offset jumps
 (bridged at receive), or — when nothing follows — the consumer's position advances past it
 anyway.</p>
-<p><strong>Custody needs no side channel.</strong> Knowledge dissemination beyond business paths would matter
-only if some gate waited on it, and no gate does. Stamps stay sound along exactly the paths
-causality travels (the induction in
-<a href="../delivery-gate/#why-the-ignore-branch-is-sound">the delivery gate</a>).</p>
+<p><strong>Gates are locally satisfiable.</strong> Stamps stay sound along exactly the paths causality
+travels (the induction in
+<a href="../delivery-gate/#why-the-ignore-branch-is-sound">the delivery gate</a>), so a gate never needs
+knowledge that arrives by any route other than its own consumed channels.</p>
 <h2 id="position-advance-bridging">Position-advance bridging</h2>
 <p>The one genuine wedge in the receive-side story is the trailing skip. Every EOS commit writes
 a marker; an end-offset seed can mint a claim naming a marker's offset; and if the producer
@@ -1064,12 +1064,8 @@ consumer's <strong>position</strong> advances past trailing markers and aborted 
 returns no records. A position of <code>p</code> is proof that everything below <code>p</code> was fetched or
 consumer-skipped. The host reports it through one method — <code>positionAdvance(channel, p)</code> —
 and when the channel's hold queue is empty the frontier rises to <code>p − 1</code> and the cascade runs.</p>
-<p>That method is the entire liveness mechanism. What it replaces in a gossip-based design: null
-messages occupying sink offsets, an emission rule for quiet deliveries, a relay rule and its
-cycle-quiescence argument, protocol-record filtering at every plain consumer, trigger
-timestamps to protect downstream stream time, and retention sizing coupled to protocol
-traffic. None of that has a remaining consumer once gates wait only on local frontiers and
-skips are observable from position.</p>
+<p>That method is the entire liveness mechanism: gates wait only on local frontiers, and skips
+are observable from position.</p>
 <h2 id="why-over-claims-cannot-deadlock">Why over-claims cannot deadlock</h2>
 <p>Claims can exceed real causality: the init-time end-offset seed claims every offset appended
 to a sink before the node started, including sibling producers' records, and folded clocks
