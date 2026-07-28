@@ -50,6 +50,9 @@ nav:
     - Verification: design/verification.md
   - Using Parsley:
     - Getting started: guide/getting-started.md
+    - Topology shapes: guide/topologies.md
+    - Codecs and Avro: guide/codecs.md
+    - The contract: guide/expectations.md
     - Plain clients: guide/clients.md
   - Reference:
     - Wire format: reference/wire-format.md

@@ -36,7 +36,10 @@ released.
 The adapter ([getting started](guide/getting-started.md)) hosts the protocol and runs user
 logic as pure functions — a `Message` in, `Emission` values out — with one serialization
 point on each side, and enforces `exactly_once_v2`. Plain producers and consumers use the same stamps through the
-[plain-client ops](guide/clients.md).
+[plain-client ops](guide/clients.md). The guide continues with the common
+[topology shapes](guide/topologies.md), [codecs and Avro](guide/codecs.md), and
+[the contract](guide/expectations.md) — everything Parsley expects of you and everything it
+promises back.
 
 ## How it is verified
 

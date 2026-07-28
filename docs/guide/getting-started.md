@@ -22,7 +22,8 @@ Topics are typed values declared once — codecs live with the declaration, and 
 is the same `Topic` appearing as one stage's sink and another's source, which makes codec
 agreement across the hop hold by construction. A `Codec` is two pure functions between a
 value and its bytes; Kafka serdes (Avro, JSON Schema, and friends) bridge in with
-`Codec.fromSerde(serde, topicName)`.
+`Codec.fromSerde(serde, topicName)`. The codec contract, hand-rolled codecs, and the
+schema-registry formats are covered in [codecs and Avro](codecs.md).
 
 ```java
 Topic<String, Order>   orders      = Topic.of("orders", Codec.utf8(), orderCodec);
@@ -113,22 +114,13 @@ lag — with no accessor to the underlying instance; members that could violate 
 (pausing an instance freezes the release of held records fleet-wide, handing out the
 protocol stores) are absent by design.
 
-## Operational notes
+## Where next
 
-- **Hold queues are unbounded and disk-backed.** Held records live in the RocksDB state
-  store (and its changelog), not on the heap, so a lagging cause channel grows state rather
-  than exhausting memory. Watch hold depth as the operational signal of a lagging cause;
-  retention economics are the real bound.
-- **A blocked head blocks its channel** (head-of-line blocking, by design). If a producer
-  stamps claims that are far ahead of what its consumers can fetch, convoying on that channel
-  is the expected symptom.
-- **Co-partition your input topics by key.** A task consumes partition *p* of every source
-  topic, so causal order across topics holds within a partition slice — related keys must
-  route to the same slice, exactly as Kafka Streams itself requires for multi-topic
-  processing ([the causal model](../foundations/causal-model.md#preconditions)).
-- **Keep logic pure.** A handler's effects must flow through its return value; reads of
-  shared mutable state or external calls are outside the causal guarantee (the
-  closed-effects precondition). Purity is also what makes fold state deterministic under
-  EOS replay.
-- **Fail closed**: a corrupt clock header or an unresolvable sink fails the task; a failed
-  send aborts with its transaction, taking every claim on it along. The retry refetches.
+- [Topology shapes](topologies.md) — the common wiring shapes (linear, fan-out, fan-in,
+  diamond, request and reply, event flows, cycles) and exactly what ordering each one gets.
+- [Codecs and Avro](codecs.md) — the codec contract, writing your own, bridging serdes, and
+  schema-registry formats.
+- [The contract](expectations.md) — everything Parsley expects of you and everything it
+  promises back, including the operational notes.
+- [Plain clients](clients.md) — stamping from plain producers, observing from plain
+  consumers.
