@@ -37,6 +37,11 @@ final class Positions {
         DefaultKafkaClientSupplier delegate = new DefaultKafkaClientSupplier();
         return new KafkaClientSupplier() {
             @Override
+            public org.apache.kafka.clients.admin.Admin getAdmin(Map<String, Object> config) {
+                return delegate.getAdmin(config);
+            }
+
+            @Override
             public org.apache.kafka.clients.producer.Producer<byte[], byte[]> getProducer(Map<String, Object> config) {
                 return delegate.getProducer(config);
             }
@@ -59,7 +64,7 @@ final class Positions {
     }
 
     @SuppressWarnings("unchecked")
-    private static Consumer<byte[], byte[]> capturing(Consumer<byte[], byte[]> inner) {
+    static Consumer<byte[], byte[]> capturing(Consumer<byte[], byte[]> inner) {
         InvocationHandler handler = (Object proxy, Method method, Object[] args) -> {
             Object result;
             try {

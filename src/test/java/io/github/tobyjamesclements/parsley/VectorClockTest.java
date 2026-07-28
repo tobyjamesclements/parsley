@@ -85,6 +85,61 @@ class VectorClockTest {
         assertEquals(42, k.get(C2), "normalisation upgrades the claim to offset space");
     }
 
+    /** A clock with no offset entries but live sequence claims is a valid wire form. */
+    @Test
+    void seqOnlyClockRoundTrips() {
+        UUID sender = UUID.nameUUIDFromBytes("s1".getBytes());
+        VectorClock k = new VectorClock();
+        k.advanceSeq(C1, sender, 3);
+        VectorClock back = VectorClock.deserialize(k.serialize());
+        assertEquals(k, back, "zero offset entries must deserialize, not read as malformed");
+        assertEquals(3, back.getSeq(new VectorClock.SeqKey(C1, sender)));
+    }
+
+    /** Clocks differing in either claim kind are unequal; equal clocks share a hash. */
+    @Test
+    void equalityDistinguishesClaims() {
+        UUID sender = UUID.nameUUIDFromBytes("s1".getBytes());
+        VectorClock offsets = VectorClock.of(C1, 10);
+        VectorClock higher = VectorClock.of(C1, 11);
+        VectorClock withSeq = VectorClock.of(C1, 10);
+        withSeq.advanceSeq(C2, sender, 4);
+
+        assertEquals(VectorClock.of(C1, 10), offsets, "same claims must be equal");
+        assertEquals(VectorClock.of(C1, 10).hashCode(), offsets.hashCode(),
+                "equal clocks must share a hash");
+        assertFalse(offsets.equals(higher), "a different watermark must break equality");
+        assertFalse(offsets.equals(withSeq), "an extra sequence claim must break equality");
+        assertFalse(offsets.equals("not a clock"), "a non-clock must never be equal");
+    }
+
+    /** The hash combines both claim maps; recomputed here from their public map forms. */
+    @Test
+    void hashCombinesBothClaimMaps() {
+        UUID sender = UUID.nameUUIDFromBytes("s1".getBytes());
+        VectorClock k = new VectorClock();
+        k.advanceTo(C1, 42);
+        k.advanceTo(C2, 7);
+        k.advanceSeq(C2, sender, 4);
+        int expected = java.util.Map.of(C1, 42L, C2, 7L).hashCode() * 31
+                + java.util.Map.of(new VectorClock.SeqKey(C2, sender), 4L).hashCode();
+        assertEquals(expected, k.hashCode(),
+                "hash must be the offset map's hash scaled, plus the sequence map's hash");
+    }
+
+    /** The text form always shows offset entries and shows sequence claims only when live. */
+    @Test
+    void textFormMarksSequenceClaimsOnlyWhenPresent() {
+        VectorClock offsets = VectorClock.of(C1, 10);
+        assertFalse(offsets.toString().isEmpty(), "the text form must show the entries");
+        assertFalse(offsets.toString().contains("seq"),
+                "no sequence section without sequence claims");
+
+        offsets.advanceSeq(C2, UUID.nameUUIDFromBytes("s1".getBytes()), 4);
+        assertTrue(offsets.toString().contains("seq"),
+                "live sequence claims must be visible in the text form");
+    }
+
     /** A present but undecodable clock throws — it must never read as empty. */
     @Test
     void corruptBytesFailClosed() {

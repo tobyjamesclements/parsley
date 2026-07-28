@@ -119,8 +119,8 @@
                     <threads>${pitest.threads}</threads>
                     <!-- Both floors guard against regression; the scores stand a few points
                          above them so honest refactoring noise does not flake the build. -->
-                    <mutationThreshold>60</mutationThreshold>
-                    <coverageThreshold>70</coverageThreshold>
+                    <mutationThreshold>75</mutationThreshold>
+                    <coverageThreshold>80</coverageThreshold>
                     <outputFormats>
                         <param>HTML</param>
                         <param>XML</param>

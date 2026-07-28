@@ -82,8 +82,8 @@ a restart, and the wide soak combining most of the above.
 
 ## Mutation testing
 
-PIT runs over the whole package inside `mvn verify`, at four threads with a 60% mutation
-floor and a 70% line-coverage floor, both a few points below the standing scores so
+PIT runs over the whole package inside `mvn verify`, at four threads with a 75% mutation
+floor and an 80% line-coverage floor, both a few points below the standing scores so
 refactoring noise does not flake the build. Four
 threads is measured verdict-identical to a serial run on this suite; the hazard being checked
 is that a timeout under CPU contention counts as a kill, so the comparison is repeated
@@ -94,7 +94,10 @@ persistence (killed instead by the directed `CausalNodePersistenceTest`), redund
 paths (removing acknowledgement folding survives because sequence claims soundly cover it),
 and operational transitions like rescope, which dedicated scenarios now drive. One survivor
 class is accepted by design: mutants whose only effect is degrading an optimisation the
-protocol does not rely on for safety.
+protocol does not rely on for safety. The remaining uncovered mutants sit in the
+Admin-backed seam (`AdminBrokerOffsets`, the admin resolver in `TopicIds`), which runs only
+against a real cluster; the seam stays thin and the logic behind it is driven through
+`BrokerOffsets` by the simulator.
 
 ## What the simulator does not cover
 
