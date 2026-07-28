@@ -2,10 +2,12 @@
 
 Parsley is one package, `io.github.tobyjamesclements.parsley`, with two visibility tiers.
 
-The **public tier** is the entire supported surface: the Streams runtime (`CausalStage`,
-`CausalStreams`), the plain-client `CausalClock` (constructed from an `Admin`; observe, record own
-sends, stamp — fully opaque), `CausalHeaders`' names and sender/seq readers for
-observability, and `CausalStage.testTopology()` for broker-less `TopologyTestDriver` tests.
+The **public tier** is the entire supported surface: the Streams runtime (`CausalTopic`,
+`CausalStage` with per-source `SourceHandler`s and the narrow `StageContext`,
+`CausalTopology`, `CausalStreams`), the plain-client `CausalClock` (constructed from an
+`Admin`; observe, record own sends, stamp — fully opaque), `CausalHeaders`' names and
+sender/seq readers for observability, and `testTopology()` for broker-less
+`TopologyTestDriver` tests.
 No protocol vocabulary escapes: the vector clock and channel types are internal. The
 **package-private tier** is the protocol core, the adapter's plumbing, and every seam — the
 offset queries carry soundness obligations (strict end-offset resolution, definitive absence)
@@ -116,13 +118,14 @@ retention actually keeps.
 
 ## The Kafka Streams adapter
 
-`CausalStage` assembles a topology: sources fetched as raw bytes, one adapter processor, sinks
-written as raw bytes. Serialization happens exactly once on each side, inside the adapter —
-inbound bytes are held verbatim while gated and deserialized at delivery; user forwards are
-serialized at forward time so the stamp travels with the exact bytes it claims. The user
-supplies an ordinary `Processor<K, V, KO, VO>`; its context's `forward` goes through the
-stamping site, with an unnamed forward fanning out to every sink and a named forward keyed by
-sink topic name.
+`CausalStage` assembles its sub-topology: sources fetched as raw bytes, one adapter
+processor, sinks written as raw bytes. Topics are typed values (`CausalTopic`), each source
+paired with its own independently-typed `SourceHandler`, and handlers act through the narrow
+`StageContext`: `emit` to a declared sink (serialized with the topic's serdes, partitioned
+deterministically, stamped at the single stamping site — an emit to an undeclared sink fails
+loudly), `store` for stage-declared state stores, `schedule` for punctuators. There is no raw
+forward and no processor context in user hands; serialization happens exactly once on each
+side, inside the stage, so the stamp travels with the exact bytes it claims.
 
 `CausalStreams.start` supplies the production wiring: it enforces `exactly_once_v2` and
 `read_committed`, installs a client supplier whose main consumers record their post-poll

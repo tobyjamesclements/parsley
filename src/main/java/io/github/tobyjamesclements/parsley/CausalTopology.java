@@ -22,17 +22,17 @@ import java.util.Set;
  */
 public final class CausalTopology {
 
-    private final Map<String, CausalStage<?, ?, ?, ?>> stages;
+    private final Map<String, CausalStage> stages;
 
-    private CausalTopology(Map<String, CausalStage<?, ?, ?, ?>> stages) {
+    private CausalTopology(Map<String, CausalStage> stages) {
         this.stages = stages;
     }
 
-    public static CausalTopology of(CausalStage<?, ?, ?, ?>... stages) {
+    public static CausalTopology of(CausalStage... stages) {
         if (stages.length == 0) throw new IllegalArgumentException("no stages");
-        Map<String, CausalStage<?, ?, ?, ?>> byName = new LinkedHashMap<>();
+        Map<String, CausalStage> byName = new LinkedHashMap<>();
         Set<String> sourceTopics = new HashSet<>();
-        for (CausalStage<?, ?, ?, ?> stage : stages) {
+        for (CausalStage stage : stages) {
             if (byName.put(stage.name(), stage) != null) {
                 throw new IllegalArgumentException("duplicate stage name: " + stage.name()
                         + " (name each stage with Builder.name)");
@@ -50,21 +50,21 @@ public final class CausalTopology {
     /** A broker-less topology for {@code TopologyTestDriver}; see {@link CausalStage#testTopology}. */
     public Topology testTopology() {
         Topology t = new Topology();
-        for (CausalStage<?, ?, ?, ?> stage : stages.values()) {
+        for (CausalStage stage : stages.values()) {
             stage.wireForTest();
             stage.addTo(t);
         }
         return t;
     }
 
-    List<CausalStage<?, ?, ?, ?>> stages() {
+    List<CausalStage> stages() {
         return List.copyOf(stages.values());
     }
 
     /** Assembles the shared Streams topology. Every stage must be wired. */
     Topology topology() {
         Topology t = new Topology();
-        for (CausalStage<?, ?, ?, ?> stage : stages.values()) {
+        for (CausalStage stage : stages.values()) {
             stage.addTo(t);
         }
         return t;

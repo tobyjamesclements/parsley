@@ -7,9 +7,6 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.TopologyTestDriver;
-import org.apache.kafka.streams.processor.api.Processor;
-import org.apache.kafka.streams.processor.api.ProcessorContext;
-import org.apache.kafka.streams.processor.api.Record;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -24,47 +21,33 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Multi-stage composition under TopologyTestDriver: two stages in one topology connected by
- * an ordinary topic, records flowing end to end with custody carried transitively — the
- * final output's stamp must still claim the original input's coordinate, two hops upstream.
+ * a shared {@link CausalTopic}, records flowing end to end with custody carried transitively —
+ * the final output's stamp must still claim the original input's coordinate, two hops
+ * upstream.
  */
 class CausalTopologyTest {
+
+    private static final CausalTopic<String, String> T1 =
+            CausalTopic.of("t1", Serdes.String(), Serdes.String());
+    private static final CausalTopic<String, String> MID =
+            CausalTopic.of("mid", Serdes.String(), Serdes.String());
+    private static final CausalTopic<String, String> T3 =
+            CausalTopic.of("t3", Serdes.String(), Serdes.String());
 
     @TempDir
     Path stateDir;
 
-    private static Processor<String, String, String, String> appending(String tag, String sink) {
-        return new Processor<>() {
-            private ProcessorContext<String, String> context;
-
-            @Override
-            public void init(ProcessorContext<String, String> context) {
-                this.context = context;
-            }
-
-            @Override
-            public void process(Record<String, String> r) {
-                context.forward(r.withValue(r.value() + ":" + tag), sink);
-            }
-        };
-    }
-
     /** Records traverse both stages; the final stamp claims the original t1 coordinate. */
     @Test
     void pipelineCarriesCustodyAcrossStages() {
-        CausalStage<String, String, String, String> first =
-                CausalStage.<String, String, String, String>builder()
-                        .name("first")
-                        .source("t1", Serdes.String(), Serdes.String())
-                        .processor(() -> appending("a", "mid"))
-                        .sink("mid", Serdes.String(), Serdes.String())
-                        .build();
-        CausalStage<String, String, String, String> second =
-                CausalStage.<String, String, String, String>builder()
-                        .name("second")
-                        .source("mid", Serdes.String(), Serdes.String())
-                        .processor(() -> appending("b", "t3"))
-                        .sink("t3", Serdes.String(), Serdes.String())
-                        .build();
+        CausalStage first = CausalStage.builder("first")
+                .source(T1, (r, ctx) -> ctx.emit(MID, r.key(), r.value() + ":a"))
+                .sink(MID)
+                .build();
+        CausalStage second = CausalStage.builder("second")
+                .source(MID, (r, ctx) -> ctx.emit(T3, r.key(), r.value() + ":b"))
+                .sink(T3)
+                .build();
 
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "parsley-multi-ttd");
@@ -100,36 +83,42 @@ class CausalTopologyTest {
     /** Composition validation: duplicate names and shared source topics fail loudly. */
     @Test
     void compositionValidatesNamesAndSources() {
-        CausalStage<String, String, String, String> a =
-                CausalStage.<String, String, String, String>builder()
-                        .source("t1", Serdes.String(), Serdes.String())
-                        .processor(() -> appending("a", "t2"))
-                        .sink("t2", Serdes.String(), Serdes.String())
-                        .build();
-        CausalStage<String, String, String, String> b =
-                CausalStage.<String, String, String, String>builder()
-                        .source("t2", Serdes.String(), Serdes.String())
-                        .processor(() -> appending("b", "t3"))
-                        .sink("t3", Serdes.String(), Serdes.String())
-                        .build();
-        assertThrows(IllegalArgumentException.class, () -> CausalTopology.of(a, b),
-                "unnamed stages share the default name and must be rejected");
+        SourceHandler<String, String> drop = (r, ctx) -> {};
 
-        CausalStage<String, String, String, String> c =
-                CausalStage.<String, String, String, String>builder()
-                        .name("c")
-                        .source("t1", Serdes.String(), Serdes.String())
-                        .processor(() -> appending("c", "t4"))
-                        .sink("t4", Serdes.String(), Serdes.String())
-                        .build();
-        CausalStage<String, String, String, String> d =
-                CausalStage.<String, String, String, String>builder()
-                        .name("d")
-                        .source("t1", Serdes.String(), Serdes.String())
-                        .processor(() -> appending("d", "t5"))
-                        .sink("t5", Serdes.String(), Serdes.String())
-                        .build();
+        CausalStage a = CausalStage.builder("same").source(T1, drop).build();
+        CausalStage b = CausalStage.builder("same").source(MID, drop).build();
+        assertThrows(IllegalArgumentException.class, () -> CausalTopology.of(a, b),
+                "stages sharing a name must be rejected");
+
+        CausalStage c = CausalStage.builder("c").source(T1, drop).build();
+        CausalStage d = CausalStage.builder("d").source(T1, drop).build();
         assertThrows(IllegalArgumentException.class, () -> CausalTopology.of(c, d),
                 "two stages sourcing one topic must be rejected (one source node per topic)");
+    }
+
+    /** An emit to an undeclared sink fails loudly at the stamping site. */
+    @Test
+    void emitToUndeclaredSinkFailsClosed() {
+        CausalStage stage = CausalStage.builder("stage")
+                .source(T1, (r, ctx) -> ctx.emit(T3, r.key(), r.value()))
+                .sink(MID) // T3 deliberately not declared
+                .build();
+
+        Properties props = new Properties();
+        props.put(StreamsConfig.APPLICATION_ID_CONFIG, "parsley-undeclared-ttd");
+        props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "unused:9092");
+        props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toString());
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(stage.testTopology(), props)) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            boolean threw = false;
+            try {
+                t1.pipeInput("k", "v", 1000L);
+            } catch (RuntimeException expected) {
+                threw = true;
+            }
+            assertTrue(threw, "emitting to an undeclared sink must fail the task");
+        }
     }
 }

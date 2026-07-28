@@ -8,9 +8,6 @@ import org.apache.kafka.streams.StreamsConfig;
 import org.apache.kafka.streams.TestInputTopic;
 import org.apache.kafka.streams.TestOutputTopic;
 import org.apache.kafka.streams.TopologyTestDriver;
-import org.apache.kafka.streams.processor.api.Processor;
-import org.apache.kafka.streams.processor.api.ProcessorContext;
-import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.test.TestRecord;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -19,22 +16,26 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
-import java.util.Set;
-import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Adapter smoke tests under TopologyTestDriver, driven the way a user would: the broker-less
- * {@code testTopology()} wiring and {@code testChannel} identities, with no seam injection.
- * Protocol correctness under concurrency, crashes, and EOS lives in the simulator suite — TTD
- * is single-threaded and transactionless, so these tests only assert the adapter's plumbing.
+ * Adapter smoke tests under TopologyTestDriver, driven the way a user would: typed topics,
+ * per-source handlers, the broker-less {@code testTopology()} wiring. Protocol correctness
+ * under concurrency, crashes, and EOS lives in the simulator suite — TTD is single-threaded
+ * and transactionless, so these tests only assert the adapter's plumbing.
  */
 class CausalStageTest {
+
+    private static final CausalTopic<String, String> T1 =
+            CausalTopic.of("t1", Serdes.String(), Serdes.String());
+    private static final CausalTopic<String, String> T2 =
+            CausalTopic.of("t2", Serdes.String(), Serdes.String());
+    private static final CausalTopic<String, String> T3 =
+            CausalTopic.of("t3", Serdes.String(), Serdes.String());
 
     @TempDir
     Path stateDir;
@@ -46,23 +47,12 @@ class CausalStageTest {
 
     @BeforeEach
     void setUp() {
-        CausalStage<String, String, String, String> stage = CausalStage.<String, String, String, String>builder()
-                .source("t1", Serdes.String(), Serdes.String())
-                .source("t2", Serdes.String(), Serdes.String())
-                .processor(() -> new Processor<String, String, String, String>() {
-                    private ProcessorContext<String, String> context;
-
-                    @Override
-                    public void init(ProcessorContext<String, String> context) {
-                        this.context = context;
-                    }
-
-                    @Override
-                    public void process(Record<String, String> r) {
-                        context.forward(r.withValue("out:" + r.value()), "t3");
-                    }
-                })
-                .sink("t3", Serdes.String(), Serdes.String())
+        SourceHandler<String, String> forward = (r, ctx) ->
+                ctx.emit(T3, r.key(), "out:" + r.value());
+        CausalStage stage = CausalStage.builder("stage")
+                .source(T1, forward)
+                .source(T2, forward)
+                .sink(T3)
                 .build();
 
         Properties props = new Properties();
@@ -85,12 +75,13 @@ class CausalStageTest {
     void deliversAndStampsOutputs() {
         t1.pipeInput("k", "a", 1000L);
         var out = t3.readRecordsToList();
-        assertEquals(1, out.size(), "one delivery, one forward");
+        assertEquals(1, out.size(), "one delivery, one emit");
         assertEquals("out:a", out.get(0).value());
 
         VectorClock stamp = CausalHeaders.read(out.get(0).headers());
         assertNotNull(stamp, "output must carry a dependency clock");
-        assertEquals(0L, stamp.get(CausalStage.testChannel("t1", 0)), "stamp must claim the delivered input");
+        assertEquals(0L, stamp.get(CausalStage.testChannel("t1", 0)),
+                "stamp must claim the delivered input");
     }
 
     /** A record whose dependency has not been delivered is held, then released in order. */

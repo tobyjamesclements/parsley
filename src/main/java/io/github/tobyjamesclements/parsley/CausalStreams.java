@@ -35,7 +35,7 @@ public final class CausalStreams implements AutoCloseable {
     }
 
     /** Starts a single-stage application; see {@link #start(CausalTopology, Properties)}. */
-    public static CausalStreams start(CausalStage<?, ?, ?, ?> stage, Properties props) {
+    public static CausalStreams start(CausalStage stage, Properties props) {
         return start(CausalTopology.of(stage), props);
     }
 
@@ -57,7 +57,7 @@ public final class CausalStreams implements AutoCloseable {
                 adminConfig.get(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG)));
 
         TopicIds topicIds = TopicIds.fromAdmin(admin);
-        for (CausalStage<?, ?, ?, ?> stage : causalTopology.stages()) {
+        for (CausalStage stage : causalTopology.stages()) {
             stage.wire(topicIds,
                     (ids, sinkTopics) -> new AdminBrokerOffsets(ids, admin, sinkTopics));
         }

@@ -2,8 +2,12 @@
  * Causal delivery order for Kafka stream processing.
  *
  * <p>One package, two tiers. The public types are the entire supported surface:
+ * {@link io.github.tobyjamesclements.parsley.CausalTopic} /
  * {@link io.github.tobyjamesclements.parsley.CausalStage} /
- * {@link io.github.tobyjamesclements.parsley.CausalStreams} (the Kafka Streams runtime),
+ * {@link io.github.tobyjamesclements.parsley.CausalTopology} /
+ * {@link io.github.tobyjamesclements.parsley.CausalStreams} (the Kafka Streams runtime, with
+ * {@link io.github.tobyjamesclements.parsley.SourceHandler} and
+ * {@link io.github.tobyjamesclements.parsley.StageContext} as the user-logic surface),
  * {@link io.github.tobyjamesclements.parsley.CausalClock} (plain-client stamping),
  * {@link io.github.tobyjamesclements.parsley.CausalHeaders} (header names and observability
  * readers), and {@link io.github.tobyjamesclements.parsley.CausalStage#testTopology()} for

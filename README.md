@@ -55,25 +55,28 @@ mvn verify
 
 ## Using it
 
-A stage declares sources, an ordinary Streams `Processor`, and sinks; the runtime enforces
-`exactly_once_v2` and wires position capture and topic identity:
+Topics are typed values declared once; a stage pairs each source topic with a handler and
+emits to declared sinks — the runtime enforces `exactly_once_v2` and wires position capture
+and topic identity:
 
 ```java
-CausalStage<String, String, String, String> stage =
-        CausalStage.<String, String, String, String>builder()
-                .source("orders", Serdes.String(), Serdes.String())
-                .source("payments", Serdes.String(), Serdes.String())
-                .processor(SettlementProcessor::new)
-                .sink("settlements", Serdes.String(), Serdes.String())
-                .build();
+CausalTopic<String, Order>   orders      = CausalTopic.of("orders", Serdes.String(), orderSerde);
+CausalTopic<String, Payment> payments    = CausalTopic.of("payments", Serdes.String(), paymentSerde);
+CausalTopic<String, Settled> settlements = CausalTopic.of("settlements", Serdes.String(), settledSerde);
 
-try (CausalStreams app = CausalStreams.start(stage, props)) {
-    // records reach SettlementProcessor in causal order; forwards are stamped automatically
+CausalStage settlement = CausalStage.builder("settlement")
+        .source(orders,   (rec, ctx) -> ctx.emit(settlements, rec.key(), settle(rec.value())))
+        .source(payments, (rec, ctx) -> apply(rec.value()))
+        .sink(settlements)
+        .build();
+
+try (CausalStreams app = CausalStreams.start(settlement, props)) {
+    // records reach each handler in causal order; emits are stamped automatically
 }
 ```
 
-Stages compose into pipelines within one application — name each stage and connect them
-through ordinary topics, which become causal channels like any other:
+Stages compose into pipelines within one application — a hop is the same `CausalTopic`
+appearing as one stage's sink and another's source, an ordinary causal channel:
 
 ```java
 CausalStreams.start(CausalTopology.of(enrichment, settlement), props);

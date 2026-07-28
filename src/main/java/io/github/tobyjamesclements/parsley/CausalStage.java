@@ -4,10 +4,12 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
-import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
+import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.Topology;
+import org.apache.kafka.streams.processor.Cancellable;
 import org.apache.kafka.streams.processor.PunctuationType;
+import org.apache.kafka.streams.processor.Punctuator;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
 import org.apache.kafka.streams.processor.api.ProcessorSupplier;
@@ -15,9 +17,9 @@ import org.apache.kafka.streams.processor.api.Record;
 import org.apache.kafka.streams.state.KeyValueStore;
 import org.apache.kafka.streams.state.StoreBuilder;
 import org.apache.kafka.streams.state.Stores;
-import org.apache.kafka.common.utils.Bytes;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -27,49 +29,102 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * One causal processing stage as a Kafka Streams {@link Topology}: source topics fetched as
- * raw bytes, the protocol core gating and ordering deliveries, the user's processor running on
- * typed records, and sinks written as raw bytes with the dependency-clock header stamped at
- * the single stamping site.
+ * One causal processing stage: typed source topics each with their own {@link SourceHandler},
+ * typed sink topics, and the causal boundary in between — the protocol core gating and
+ * ordering deliveries on the source side, the single stamping site on the sink side.
  *
- * <p>Serialization happens exactly once on each side, inside the adapter: inbound bytes are
- * held verbatim while gated and deserialized at delivery; outbound records are serialized at
- * forward time so the stamp travels with the exact bytes it claims. Note that non-Parsley
- * headers of a held record are not yet carried through delivery.
+ * <p>Serialization happens exactly once on each side, inside the stage: inbound bytes are held
+ * verbatim while gated and deserialized at delivery with the source topic's serdes; emits are
+ * serialized with the sink topic's serdes at the stamping site, so the clock travels with the
+ * exact bytes it claims. Note that non-Parsley headers of a held record are not carried
+ * through delivery.
  *
- * <p>Production wiring ({@link CausalStreams#start}) supplies admin-backed {@link TopicIds}
- * and {@link BrokerOffsets}; tests inject fixed ids and a stub offsets view and drive the
- * topology with {@code TopologyTestDriver}.
+ * <p>Stages compose into a {@link CausalTopology}; a stage corresponds to one Kafka Streams
+ * sub-topology, and its name keys its state store, so the name must stay stable across
+ * deployments of the same application.
  */
-public final class CausalStage<K, V, KO, VO> {
+public final class CausalStage {
 
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(CausalStage.class);
 
-    static final String DEFAULT_NAME = "stage";
+    private record SourceDef<K, V>(CausalTopic<K, V> topic, SourceHandler<K, V> handler) {
+
+        void dispatch(Record<byte[], byte[]> raw, StageContext ctx) {
+            K key = topic.keySerde().deserializer().deserialize(topic.name(), raw.key());
+            V value = topic.valueSerde().deserializer().deserialize(topic.name(), raw.value());
+            handler.handle(new Record<>(key, value, raw.timestamp(), raw.headers()), ctx);
+        }
+    }
+
+    private final String name;
+    private final Map<String, SourceDef<?, ?>> sources;
+    private final Map<String, CausalTopic<?, ?>> sinks;
+    private final List<StoreBuilder<?>> userStores;
+    private final Duration truncationInterval;
+    private TopicIds topicIds;
+    private BrokerOffsetsProvider brokerOffsets;
 
     /** Creates the per-task broker-offsets view; production uses an admin client. */
     interface BrokerOffsetsProvider {
         BrokerOffsets create(TopicIds topicIds, Set<String> sinkTopics);
     }
 
-    private record SourceDef<K, V>(Serde<K> keySerde, Serde<V> valueSerde) {}
-
-    private record SinkDef<KO, VO>(Serde<KO> keySerde, Serde<VO> valueSerde) {}
-
-    private final String name;
-    private final Map<String, SourceDef<K, V>> sources;
-    private final Map<String, SinkDef<KO, VO>> sinks;
-    private final ProcessorSupplier<K, V, KO, VO> userSupplier;
-    private final Duration truncationInterval;
-    private TopicIds topicIds;
-    private BrokerOffsetsProvider brokerOffsets;
-
-    private CausalStage(Builder<K, V, KO, VO> b) {
+    private CausalStage(Builder b) {
         this.name = b.name;
         this.sources = b.sources;
         this.sinks = b.sinks;
-        this.userSupplier = b.userSupplier;
+        this.userStores = b.userStores;
         this.truncationInterval = b.truncationInterval;
+    }
+
+    public static Builder builder(String name) {
+        return new Builder(name);
+    }
+
+    public static final class Builder {
+        private final String name;
+        private final Map<String, SourceDef<?, ?>> sources = new LinkedHashMap<>();
+        private final Map<String, CausalTopic<?, ?>> sinks = new LinkedHashMap<>();
+        private final List<StoreBuilder<?>> userStores = new ArrayList<>();
+        private Duration truncationInterval = Duration.ofMinutes(10);
+
+        private Builder(String name) {
+            if (!name.matches("[a-zA-Z0-9-]+")) {
+                throw new IllegalArgumentException("stage name must be [a-zA-Z0-9-]+: " + name);
+            }
+            this.name = name;
+        }
+
+        /** Declares a source topic and the handler its causally delivered records run. */
+        public <K, V> Builder source(CausalTopic<K, V> topic, SourceHandler<K, V> handler) {
+            if (sources.put(topic.name(), new SourceDef<>(topic, handler)) != null) {
+                throw new IllegalArgumentException("duplicate source topic: " + topic.name());
+            }
+            return this;
+        }
+
+        /** Declares a sink topic; handlers emit to it via {@link StageContext#emit}. */
+        public Builder sink(CausalTopic<?, ?> topic) {
+            sinks.put(topic.name(), topic);
+            return this;
+        }
+
+        /** Declares state stores the stage's handlers use via {@link StageContext#store}. */
+        public Builder stores(StoreBuilder<?>... builders) {
+            userStores.addAll(List.of(builders));
+            return this;
+        }
+
+        /** How often the log-start truncation sweep runs. Default ten minutes. */
+        public Builder truncationInterval(Duration interval) {
+            this.truncationInterval = interval;
+            return this;
+        }
+
+        public CausalStage build() {
+            if (sources.isEmpty()) throw new IllegalStateException("no sources declared");
+            return new CausalStage(this);
+        }
     }
 
     String name() {
@@ -92,58 +147,6 @@ public final class CausalStage<K, V, KO, VO> {
         return "parsley-" + name + "-sink-" + topic;
     }
 
-    public static <K, V, KO, VO> Builder<K, V, KO, VO> builder() {
-        return new Builder<>();
-    }
-
-    public static final class Builder<K, V, KO, VO> {
-        private final Map<String, SourceDef<K, V>> sources = new LinkedHashMap<>();
-        private final Map<String, SinkDef<KO, VO>> sinks = new LinkedHashMap<>();
-        private String name = DEFAULT_NAME;
-        private ProcessorSupplier<K, V, KO, VO> userSupplier;
-        private Duration truncationInterval = Duration.ofMinutes(10);
-
-        /**
-         * Names the stage. Required (and unique) when composing several stages into one
-         * {@link CausalTopology}; the name keys the stage's state store, so it must stay
-         * stable across deployments of the same application.
-         */
-        public Builder<K, V, KO, VO> name(String name) {
-            if (!name.matches("[a-zA-Z0-9-]+")) {
-                throw new IllegalArgumentException("stage name must be [a-zA-Z0-9-]+: " + name);
-            }
-            this.name = name;
-            return this;
-        }
-
-        public Builder<K, V, KO, VO> source(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
-            sources.put(topic, new SourceDef<>(keySerde, valueSerde));
-            return this;
-        }
-
-        public Builder<K, V, KO, VO> processor(ProcessorSupplier<K, V, KO, VO> supplier) {
-            this.userSupplier = supplier;
-            return this;
-        }
-
-        public Builder<K, V, KO, VO> sink(String topic, Serde<KO> keySerde, Serde<VO> valueSerde) {
-            sinks.put(topic, new SinkDef<>(keySerde, valueSerde));
-            return this;
-        }
-
-        /** How often the log-start truncation sweep runs. Default ten minutes. */
-        public Builder<K, V, KO, VO> truncationInterval(Duration interval) {
-            this.truncationInterval = interval;
-            return this;
-        }
-
-        public CausalStage<K, V, KO, VO> build() {
-            if (sources.isEmpty()) throw new IllegalStateException("no sources declared");
-            if (userSupplier == null) throw new IllegalStateException("no processor declared");
-            return new CausalStage<>(this);
-        }
-    }
-
     Set<String> sourceTopics() {
         return sources.keySet();
     }
@@ -159,10 +162,9 @@ public final class CausalStage<K, V, KO, VO> {
 
     /**
      * A broker-less topology for {@code TopologyTestDriver}: topic identity is synthesized
-     * deterministically ({@link #testChannel} gives a test the same channels for crafting or
-     * asserting on clock headers), every topic has one partition (the driver's reality), and
-     * the offset queries answer empty — safe precisely because no broker means no prior
-     * incarnations to seed against and nothing to truncate.
+     * deterministically, every topic has one partition (the driver's reality), and the offset
+     * queries answer empty — safe precisely because no broker means no prior incarnations to
+     * seed against and nothing to truncate.
      */
     public Topology testTopology() {
         wireForTest();
@@ -235,12 +237,10 @@ public final class CausalStage<K, V, KO, VO> {
 
         @Override
         public Set<StoreBuilder<?>> stores() {
-            Set<StoreBuilder<?>> all = new HashSet<>();
+            Set<StoreBuilder<?>> all = new HashSet<>(userStores);
             all.add(Stores.keyValueStoreBuilder(
                             Stores.persistentKeyValueStore(storeName()), Serdes.Bytes(), Serdes.ByteArray())
                     .withCachingDisabled());
-            Set<StoreBuilder<?>> user = userSupplier.stores();
-            if (user != null) all.addAll(user);
             return all;
         }
 
@@ -253,14 +253,13 @@ public final class CausalStage<K, V, KO, VO> {
     private final class Adapter implements Processor<byte[], byte[], byte[], byte[]> {
 
         private ProcessorContext<byte[], byte[]> context;
-        private Processor<K, V, KO, VO> userProcessor;
         private CausalNode node;
+        private StageContextImpl stageContext;
         private final Map<String, Channel> channelByTopic = new HashMap<>();
         private final Map<Channel, String> topicByChannel = new HashMap<>();
         private int taskPartition;
 
         @Override
-        @SuppressWarnings("unchecked")
         public void init(ProcessorContext<byte[], byte[]> context) {
             this.context = context;
             this.taskPartition = context.taskId().partition();
@@ -279,8 +278,6 @@ public final class CausalStage<K, V, KO, VO> {
 
             KeyValueStore<Bytes, byte[]> kv = context.getStateStore(storeName());
             BrokerOffsets offsets = brokerOffsets.create(topicIds, sinks.keySet());
-            // The sender identity must be stable across restarts and rebalances: derive it
-            // from the application and task ids, which name this partition group durably.
             // Sender identity must survive topology evolution: task ids embed the sub-topology
             // index, which renumbers when stages are added, so derive from the user-stable
             // stage name and the partition instead.
@@ -290,9 +287,7 @@ public final class CausalStage<K, V, KO, VO> {
                     new NodeConfig(name + "-task-" + context.taskId(), senderId, consumed, sinkIds,
                             taskPartition),
                     new KafkaStateStore(kv), offsets);
-
-            userProcessor = userSupplier.get();
-            userProcessor.init(new StampingContext(context));
+            stageContext = new StageContextImpl();
 
             context.schedule(Duration.ofMillis(500), PunctuationType.WALL_CLOCK_TIME,
                     ts -> sweepPositions());
@@ -340,137 +335,55 @@ public final class CausalStage<K, V, KO, VO> {
         private void deliverAll(List<Delivery> deliveries) {
             for (Delivery d : deliveries) {
                 String topic = topicByChannel.get(d.channel());
-                SourceDef<K, V> def = sources.get(topic);
-                K key = def.keySerde().deserializer().deserialize(topic, d.key());
-                V value = def.valueSerde().deserializer().deserialize(topic, d.value());
-                userProcessor.process(new Record<>(key, value, d.timestamp(), new RecordHeaders()));
+                SourceDef<?, ?> def = sources.get(topic);
+                stageContext.inFlightTimestamp = d.timestamp();
+                try {
+                    def.dispatch(new Record<>(d.key(), d.value(), d.timestamp(), new RecordHeaders()),
+                            stageContext);
+                } finally {
+                    stageContext.inFlightTimestamp = null;
+                }
             }
         }
 
-        @Override
-        public void close() {
-            if (userProcessor != null) userProcessor.close();
-        }
+        /** The narrow surface handed to handlers: emit, stores, punctuators — nothing else. */
+        private final class StageContextImpl implements StageContext {
 
-        /**
-         * The context handed to the user processor: forwards are serialized with the sink's
-         * serdes, stamped, and routed to the sink node. An unnamed forward goes to every sink,
-         * matching Streams' fan-out semantics.
-         */
-        private final class StampingContext implements ProcessorContext<KO, VO> {
+            private Long inFlightTimestamp;
 
-            private final ProcessorContext<byte[], byte[]> inner;
-
-            StampingContext(ProcessorContext<byte[], byte[]> inner) {
-                this.inner = inner;
+            @Override
+            public <K, V> void emit(CausalTopic<K, V> topic, K key, V value) {
+                if (inFlightTimestamp == null) {
+                    throw new IllegalStateException("no record in flight (punctuator?): use the"
+                            + " timestamped emit overload");
+                }
+                emit(topic, key, value, inFlightTimestamp);
             }
 
             @Override
-            public <K1 extends KO, V1 extends VO> void forward(Record<K1, V1> record) {
-                for (String sink : sinks.keySet()) {
-                    forwardTo(sink, record);
+            public <K, V> void emit(CausalTopic<K, V> topic, K key, V value, long timestamp) {
+                if (!sinks.containsKey(topic.name())) {
+                    throw new IllegalStateException("emit to undeclared sink topic " + topic.name()
+                            + " (declare it with Builder.sink)");
                 }
-            }
-
-            @Override
-            public <K1 extends KO, V1 extends VO> void forward(Record<K1, V1> record, String childName) {
-                if (!sinks.containsKey(childName)) {
-                    throw new IllegalArgumentException("unknown sink topic: " + childName
-                            + " (forward by sink topic name)");
-                }
-                forwardTo(childName, record);
-            }
-
-            private void forwardTo(String sink, Record<? extends KO, ? extends VO> record) {
-                SinkDef<KO, VO> def = sinks.get(sink);
-                byte[] key = def.keySerde().serializer().serialize(sink, record.key());
-                byte[] value = def.valueSerde().serializer().serialize(sink, record.value());
-                var resolved = topicIds.resolve(sink);
-                Channel dest = new Channel(resolved.id(), partitionFor(key, resolved.partitions()));
-                var headers = new RecordHeaders(record.headers());
+                byte[] keyBytes = topic.keySerde().serializer().serialize(topic.name(), key);
+                byte[] valueBytes = topic.valueSerde().serializer().serialize(topic.name(), value);
+                var resolved = topicIds.resolve(topic.name());
+                Channel dest = new Channel(resolved.id(), partitionFor(keyBytes, resolved.partitions()));
+                var headers = new RecordHeaders();
                 CausalHeaders.write(headers, node.prepareSend(dest));
-                inner.forward(new Record<>(key, value, record.timestamp(), headers), sinkNode(sink));
-            }
-
-            // ---- pure delegation below ----
-
-            @Override
-            public String applicationId() {
-                return inner.applicationId();
+                context.forward(new Record<>(keyBytes, valueBytes, timestamp, headers),
+                        sinkNode(topic.name()));
             }
 
             @Override
-            public org.apache.kafka.streams.processor.TaskId taskId() {
-                return inner.taskId();
+            public <S extends org.apache.kafka.streams.processor.StateStore> S store(String storeName) {
+                return context.getStateStore(storeName);
             }
 
             @Override
-            public java.util.Optional<org.apache.kafka.streams.processor.api.RecordMetadata> recordMetadata() {
-                return inner.recordMetadata();
-            }
-
-            @Override
-            public Serde<?> keySerde() {
-                return inner.keySerde();
-            }
-
-            @Override
-            public Serde<?> valueSerde() {
-                return inner.valueSerde();
-            }
-
-            @Override
-            public java.io.File stateDir() {
-                return inner.stateDir();
-            }
-
-            @Override
-            public org.apache.kafka.streams.StreamsMetrics metrics() {
-                return inner.metrics();
-            }
-
-            @Override
-            public <S extends org.apache.kafka.streams.processor.StateStore> S getStateStore(String name) {
-                return inner.getStateStore(name);
-            }
-
-            @Override
-            public org.apache.kafka.streams.processor.Cancellable schedule(
-                    Duration interval, PunctuationType type,
-                    org.apache.kafka.streams.processor.Punctuator callback) {
-                return inner.schedule(interval, type, callback);
-            }
-
-            @Override
-            public org.apache.kafka.streams.processor.Cancellable schedule(
-                    java.time.Instant startTime, Duration interval, PunctuationType type,
-                    org.apache.kafka.streams.processor.Punctuator callback) {
-                return inner.schedule(startTime, interval, type, callback);
-            }
-
-            @Override
-            public void commit() {
-                inner.commit();
-            }
-
-            @Override
-            public Map<String, Object> appConfigs() {
-                return inner.appConfigs();
-            }
-
-            @Override
-            public Map<String, Object> appConfigsWithPrefix(String prefix) {
-                return inner.appConfigsWithPrefix(prefix);
-            }
-
-            @Override
-            public long currentSystemTimeMs() {
-                return inner.currentSystemTimeMs();
-            }
-
-            @Override
-            public long currentStreamTimeMs() {
-                return inner.currentStreamTimeMs();
+            public Cancellable schedule(Duration interval, PunctuationType type, Punctuator callback) {
+                return context.schedule(interval, type, callback);
             }
         }
     }
