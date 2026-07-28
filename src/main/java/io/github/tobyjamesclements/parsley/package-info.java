@@ -4,7 +4,7 @@
  * <p>One package, two tiers. The public types are the entire supported surface:
  * {@link io.github.tobyjamesclements.parsley.CausalStage} /
  * {@link io.github.tobyjamesclements.parsley.CausalStreams} (the Kafka Streams runtime),
- * {@link io.github.tobyjamesclements.parsley.Clock} (plain-client stamping),
+ * {@link io.github.tobyjamesclements.parsley.CausalClock} (plain-client stamping),
  * {@link io.github.tobyjamesclements.parsley.CausalHeaders} (header names and observability
  * readers), and {@link io.github.tobyjamesclements.parsley.CausalStage#testTopology()} for
  * broker-less {@code TopologyTestDriver} tests — no seam is injectable from outside, and no

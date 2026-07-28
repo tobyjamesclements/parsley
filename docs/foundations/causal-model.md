@@ -78,7 +78,7 @@ The guarantee holds under these environmental conditions:
   pure restore.
 - **Truthful stamps between causally related topics**: every processor on a causal path
   stamps its outputs (Parsley stages do this automatically; plain producers use a
-  [`Clock`](../guide/clients.md)). An absent stamp claims nothing — safe for the record
+  [`CausalClock`](../guide/clients.md)). An absent stamp claims nothing — safe for the record
   itself, invisible to downstream ordering.
 - **Co-partitioning by key across a stage's input topics.** A task consumes partition *p* of
   every source topic, and the guarantee is per task: every cause *this task* consumes is

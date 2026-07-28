@@ -72,7 +72,7 @@ try (CausalStreams app = CausalStreams.start(stage, props)) {
 }
 ```
 
-Plain producers stamp with a `Clock` — `observe` consumed records, `recordProduced` your
+Plain producers stamp with a `CausalClock` — `observe` consumed records, `recordProduced` your
 acknowledgements, `stamp` outbound headers. Adoption is incremental: a producer that stamps
 nothing claims nothing, so you stamp the producers whose ordering matters, one at a time,
 with no flag day.
@@ -103,7 +103,7 @@ The verification obligations the test suite enforces are catalogued in
 - Non-Parsley headers on held records are not carried through delivery.
 - Sequence claims carry a late-joiner caveat: consumers joining at the log end should
   baseline at the last stable offset (see the liveness page).
-- Clock truncation is driven by log-start stability: retention-deleted records sit below
+- CausalClock truncation is driven by log-start stability: retention-deleted records sit below
   every reachable baseline, so stamp width is garbage-collected as fast as retention
   advances, with zero coordination. Faster-than-retention truncation would need a membership
   protocol, which is deliberately not included.

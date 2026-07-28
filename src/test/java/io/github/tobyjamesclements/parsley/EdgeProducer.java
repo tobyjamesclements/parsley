@@ -8,7 +8,7 @@ import java.util.Map;
 
 /**
  * A scripted plain Kafka producer/consumer at the topology's edge. It stamps outbound records
- * the way the public {@link Clock} does: a running clock built from observed records plus
+ * the way the public {@link CausalClock} does: a running clock built from observed records plus
  * its own acknowledged sends, resolved before each send (a sequential producer waits for its
  * previous acknowledgement, so its own claims are always current).
  */

@@ -3,7 +3,7 @@
 Parsley is one package, `io.github.tobyjamesclements.parsley`, with two visibility tiers.
 
 The **public tier** is the entire supported surface: the Streams runtime (`CausalStage`,
-`CausalStreams`), the plain-client `Clock` (constructed from an `Admin`; observe, record own
+`CausalStreams`), the plain-client `CausalClock` (constructed from an `Admin`; observe, record own
 sends, stamp — fully opaque), `CausalHeaders`' names and sender/seq readers for
 observability, and `CausalStage.testTopology()` for broker-less `TopologyTestDriver` tests.
 No protocol vocabulary escapes: the vector clock and channel types are internal. The
@@ -26,7 +26,7 @@ abstraction** — the deterministic simulator, the protocol's primary verifier
 
 | Type | Role |
 |---|---|
-| `Channel`, `Clock` | `(topicId, partition)` identity; vector clocks with max-merge, dominance, restriction, truncation, and a sorted, versioned wire form |
+| `Channel`, `CausalClock` | `(topicId, partition)` identity; vector clocks with max-merge, dominance, restriction, truncation, and a sorted, versioned wire form |
 | `DeliveryProtocol` | The host-facing surface: `onRecord`, `positionAdvance`, `prepareSend`, `resumePositions`, `truncate` |
 | `CausalNode` | The implementation: gate, hold queues, density adaptation, stamp, rescope, restore |
 | `StateStore` (SPI) | Keyed bytes, transactional with delivery — the host commits it atomically with consumed offsets and sends |

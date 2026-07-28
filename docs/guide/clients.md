@@ -1,15 +1,15 @@
 # Plain Kafka clients
 
-Topologies rarely begin and end at Streams applications. `Clock` gives plain Kafka producers
+Topologies rarely begin and end at Streams applications. `CausalClock` gives plain Kafka producers
 the same stamps a causal stage produces, and plain consumers need nothing at all.
 
 ## Producing with causal claims
 
-A `Clock` is a running view of one producing thread's causal past. Fold what you observed,
+A `CausalClock` is a running view of one producing thread's causal past. Fold what you observed,
 fold your own acknowledgements, and stamp:
 
 ```java
-Clock clock = new Clock(admin);   // an org.apache.kafka.clients.admin.Admin the caller owns
+CausalClock clock = new CausalClock(admin);   // an org.apache.kafka.clients.admin.Admin the caller owns
 
 // Anything this producer's next records causally depend on:
 for (ConsumerRecord<String, String> rec : consumer.poll(timeout)) {

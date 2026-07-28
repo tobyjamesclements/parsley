@@ -19,7 +19,7 @@ import org.apache.kafka.common.header.Headers;
  * <p>A producer that stamps nothing claims nothing — safe, and the reason adoption needs no
  * flag day. Not thread-safe; one instance per producing thread.
  */
-public final class Clock {
+public final class CausalClock {
 
     private final TopicIds topicIds;
     private final VectorClock clock = new VectorClock();
@@ -28,11 +28,11 @@ public final class Clock {
      * @param admin resolves topic identity (names to stable UUIDs); owned and closed by the
      *     caller, consulted lazily and cached per name
      */
-    public Clock(Admin admin) {
+    public CausalClock(Admin admin) {
         this.topicIds = TopicIds.fromAdmin(admin);
     }
 
-    Clock(TopicIds topicIds) {
+    CausalClock(TopicIds topicIds) {
         this.topicIds = topicIds;
     }
 
