@@ -34,7 +34,7 @@ class CausalNodeSimTest {
     }
 
     private static BiFunction<NodeConfig, SimNode, DeliveryProtocol> real() {
-        return (config, host) -> new CausalNode(config, host.store, host.sends);
+        return (config, host) -> new CausalNode(config, host.store, host.offsets);
     }
 
     /** V1: the core race — a stage's output must never overtake its input at a shared consumer. */
@@ -251,29 +251,6 @@ class CausalNodeSimTest {
     }
 
     /**
-     * The decisive sender-sequence test: acknowledgements are never delivered, so the node's
-     * own-output claims can never be upgraded to offset space — cross-partition ordering of
-     * its outputs must ride sequence claims alone. The stamping path never blocks (there is
-     * no crossing wait to resolve the acks), and the oracle still holds.
-     */
-    @Test
-    void droppedAcksOrderingRidesSequenceClaims() {
-        Stats stats = new Stats();
-        for (long seed = 0; seed < SEEDS; seed++) {
-            SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 2).dropAcks();
-            w.node("A", 0, List.of("t1:0"), List.of("t2"), SimBehavior.forwardTo("t2"), real());
-            w.node("C", 0, List.of("t2:0", "t2:1"), List.of(), SimBehavior.consumeOnly(), real());
-            EdgeProducer p = w.producer("edge");
-            for (int i = 0; i < 10; i++) p.produce("t1", 0, "k" + i, "v" + i, 1000 + i);
-            w.run(BUDGET);
-            stats.add(w);
-        }
-        assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.holds > 0,
-                "the gate never held a record: sequence claims never actually gated anything");
-    }
-
-    /**
      * The documented caveat of sequence claims, demonstrated both ways: a sequence-form claim
      * frozen in a non-consumer's custody clock wedges a late joiner whose baseline sits above
      * the claimed record (the sender never acknowledged, so the claim never normalised, and
@@ -290,16 +267,16 @@ class CausalNodeSimTest {
 
     /** @return true when the world failed to satisfy completeness or drain (the wedge). */
     private boolean runStaleClaimTopology(long seed, boolean joinAtLatest) {
-        SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 2).topic("t3", 1).dropAcks();
+        SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 2).topic("t3", 1);
         w.node("A", 0, List.of("t1:0"), List.of("t2"), SimBehavior.forwardTo("t2"), real());
         w.node("B", 0, List.of("t2:0"), List.of("t3"), SimBehavior.forwardTo("t3"), real());
         if (!joinAtLatest) {
             w.node("L", 0, List.of("t3:0", "t2:1"), List.of(), SimBehavior.consumeOnly(), real());
         }
 
-        // Phase 1: first a record A forwards to t2:1 — minting a sequence claim that, under
-        // dropped acks, never normalises — then t2:0 traffic whose stamps carry that claim
-        // into B's custody.
+        // Phase 1: first a record A forwards to t2:1 — minting a sequence claim that never
+        // normalises sender-side (there is no acknowledgement feed) — then t2:0 traffic whose
+        // stamps carry that claim into B's custody.
         EdgeProducer p = w.producer("edge");
         p.produce("t1", 0, keyForPartition(w, 1, "a"), "v0", 1000);
         for (int i = 0, sent = 1; sent < 6; i++) {
@@ -413,7 +390,7 @@ class CausalNodeSimTest {
     /** Runs the coordination-free truncation driver: log starts in, truncation out. */
     private static void truncateFromLogStarts(SimNode n) {
         var node = (CausalNode) n.protocol;
-        var earliest = n.sends.earliestOffsets(node.stampChannels());
+        var earliest = n.offsets.earliestOffsets(node.stampChannels());
         node.truncateToLogStarts(earliest.logStarts(), earliest.confirmedAbsent());
         n.store.commit();
     }

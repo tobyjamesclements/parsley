@@ -26,7 +26,7 @@ final class SimNode {
     NodeConfig config;
     DeliveryProtocol protocol;
     final SimStateStore store = new SimStateStore();
-    final SimSendTracker sends;
+    final SimBrokerOffsets offsets;
     boolean up;
 
     /** Committed consumer positions (next offset to fetch). */
@@ -41,7 +41,7 @@ final class SimNode {
         this.config = config;
         this.behavior = behavior;
         this.protocolFactory = protocolFactory;
-        this.sends = new SimSendTracker(world.broker, world.dropAcks);
+        this.offsets = new SimBrokerOffsets(world.broker);
     }
 
     /** Joins at the current log end on every consumed channel (a `latest` consumer). */
@@ -76,7 +76,6 @@ final class SimNode {
 
     void crashIdle() {
         up = false;
-        sends.reset();
         store.discard();
     }
 
@@ -150,7 +149,6 @@ final class SimNode {
             world.broker.appendMarkers(touchedThisStep);
             store.discard();
             world.oracle.abort(name);
-            sends.reset();
             up = false;
         } else {
             world.broker.appendMarkers(touchedThisStep);
@@ -178,7 +176,6 @@ final class SimNode {
                 SimBroker.Kind.BUSINESS, id, stamp.clock(), stamp.senderId(), stamp.senderSeq(),
                 key, value, timestamp));
         if (assigned != offset) throw new IllegalStateException("offset race in single-threaded sim");
-        sends.sent(dest, offset);
         touchedThisStep.add(dest);
         appendedCoords.add(new Object[] {dest, offset});
     }

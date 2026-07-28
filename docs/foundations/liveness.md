@@ -14,7 +14,7 @@ to: does every frontier eventually cover every offset a claim can name?
 Three facts answer it:
 
 **Claims name really-appended offsets.** Every source of a claim — the frontier (delivered
-records), acknowledgement folds (own appended sends), end-offset seeds (append-time
+records), end-offset seeds (append-time
 snapshots), and clocks folded from received records (inductively the same) — is an
 append-time fact. There is no such thing as a claim on an offset that does not exist.
 
@@ -83,7 +83,7 @@ from-the-start or committed-position consumer this cannot happen — the claimed
 always at or above its position. The exposed case is a **late joiner** baselining at the log
 end while a sequence-form claim still circulates in some custody clock and the claiming
 sender never writes that partition again. The verification suite demonstrates the wedge
-directly (an at-latest joiner against a never-normalised claim) and its absence for a
+directly (an at-latest joiner against a claim no consuming hop rewrote) and its absence for a
 from-the-start joiner.
 
 Operationally: baseline late joiners at the last stable offset (which
@@ -91,12 +91,13 @@ Operationally: baseline late joiners at the last stable offset (which
 open transaction sits above the LSO, so it resolves — and treat a held record whose sequence
 claim names a sender with no post-baseline presence as the detectable signature of the
 remaining window (a retired sender's claim frozen in custody). Offset claims have no such
-window, which is why acknowledged sends upgrade to them.
+window, which is why consuming hops normalise sequence claims to offsets as they resolve
+them, and why a restart's end-offset seed retires the previous incarnation's claims.
 
 ## What enforces this empirically
 
 The argument above is prose; the simulator makes it load-bearing. Every simulated world must
-**drain** — reach a state with no fetchable record unfetched, no acknowledgement undelivered,
+**drain** — reach a state with no fetchable record unfetched,
 no node down — within its step budget, and at drain the oracle checks **completeness**: every
 business record above a node's baseline on a consumed channel was delivered there. A wedged
 frontier, a missed bridge, or a livelock fails one of the two on some seed. The suite asserts

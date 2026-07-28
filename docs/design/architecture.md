@@ -5,7 +5,7 @@ Parsley is one package, `io.github.tobyjamesclements.parsley`, with two visibili
 The **public tier** is the entire supported surface: the Streams runtime (`CausalStage`,
 `CausalStreams`), the plain-client ops (`EdgeClock`, the read side of `CausalHeaders`, with
 `Clock` and `Channel` as their vocabulary), and the seams a `TopologyTestDriver` test injects
-(`TopicIds`, `SendTracker`). The **package-private tier** is the protocol core and the
+(`TopicIds`, `BrokerOffsets`). The **package-private tier** is the protocol core and the
 adapter's plumbing. The core is hidden deliberately: it is only sound under a host contract
 no API can enforce — per-channel offset order in, atomic commit of store, offsets, and sends,
 position advances from the real consumer, partitioning before stamping — and the one host
@@ -26,7 +26,7 @@ abstraction** — the deterministic simulator, the protocol's primary verifier
 | `DeliveryProtocol` | The host-facing surface: `onRecord`, `positionAdvance`, `prepareSend`, `resumePositions`, `truncate` |
 | `CausalNode` | The implementation: gate, hold queues, density adaptation, stamp, rescope, restore |
 | `StateStore` (SPI) | Keyed bytes, transactional with delivery — the host commits it atomically with consumed offsets and sends |
-| `SendTracker` (SPI) | Acknowledgements of own sends (offset upgrades) and sink end offsets |
+| `BrokerOffsets` (SPI) | Broker offset facts: sink end offsets (init seed) and log starts (truncation stability) |
 | `InboundRecord`, `Delivery` | The envelope in (bytes, coordinate, clock), the release out (in causal order) |
 
 The host contract, in one paragraph: feed records per channel in offset order through
@@ -56,26 +56,27 @@ escape the claim:
 | frontier | Everything delivered here, contiguously | Direct causes escape |
 | channelClocks | Per consumed channel, the folded clocks of received records: ancestry that arrived through channels this node does not consume | The gate's ignore branch becomes a hole |
 | carriedAncestry | Delivered past on channels no longer consumed ([scope changes](state.md#scope-changes)) | A redeploy silently un-claims history |
-| ownOutputs | The node's own acknowledged sends | Own outputs carry no order across partitions and sink topics |
+| ownOutputs | The node's committed prior-incarnation sends (the init end-offset seed) | Own outputs carry no order across partitions and sink topics |
 
-The broker performs the sender's clock increment (offset assignment), learned asynchronously
-from acknowledgements — but the stamping path never waits for it. Clocks carry a second claim
-kind, **sequence claims**: `(channel, sender, seq)` claims every record the sender sent to
-that channel up to its per-channel send sequence, assigned synchronously at
+The broker performs the sender's clock increment (offset assignment), which the sender never
+observes — there is no acknowledgement feed, and the stamping path never waits. Clocks carry a
+second claim kind, **sequence claims**: `(channel, sender, seq)` claims every record the
+sender sent to that channel up to its per-channel send sequence, assigned synchronously at
 `prepareSend`. Every outbound record carries its sender tag, and a receiver resolves a
 sequence claim the moment it has delivered that sender's record at or past the claimed
 sequence (per-partition send order equals offset order under EOS, so FIFO delivery decides it
-with one delivered-sequence mark per channel and sender). Acknowledged sends upgrade to offset
-claims; resolvable sequence claims in folded custody normalise to offset claims at the
-stamping site. A failed send cannot orphan a claim: the claiming record and the claimed send
-share a transaction, so they abort together. Same-channel sends need no claim at all —
-per-channel FIFO delivers them in order everywhere.
+with one delivered-sequence mark per channel and sender). A stamp carries at most one
+self-claim per sink channel — this incarnation's send counter — so the sequence surface is
+bounded by the sink set; resolvable sequence claims in folded custody normalise to offset
+claims at the stamping site. A failed send cannot orphan a claim: the claiming record and the
+claimed send share a transaction, so they abort together. Same-channel sends need no claim at
+all — per-channel FIFO delivers them in order everywhere.
 
-`ownOutputs` lives in memory only. At init it is seeded from every declared sink's end offset
-— an over-claim on real appended offsets, delay-only and therefore sound — which dominates
-anything a persisted copy could have held, so persisting it would be redundant. The same seed
-heals every restart-shaped gap: acknowledgements lost with a crash, and former sinks
-([scope changes](state.md#scope-changes)).
+`ownOutputs` lives in memory only and is constant after init: every declared sink's end
+offset, an over-claim on real appended offsets (delay-only, therefore sound) that covers every
+prior incarnation's committed sends. The same seed heals every restart-shaped gap, including
+former sinks ([scope changes](state.md#scope-changes)); prior-incarnation sequence claims
+echoed back through custody upgrade to this offset space at the stamping site.
 
 ## Hold queues are unbounded, and disk-backed
 

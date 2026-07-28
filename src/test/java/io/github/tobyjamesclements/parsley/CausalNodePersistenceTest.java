@@ -56,12 +56,7 @@ class CausalNodePersistenceTest {
         }
     }
 
-    private static final SendTracker NO_ACKS = new SendTracker() {
-        @Override
-        public List<Ack> drainAcks() {
-            return List.of();
-        }
-
+    private static final BrokerOffsets NO_OFFSETS = new BrokerOffsets() {
         @Override
         public Map<Channel, Long> endOffsets(Set<UUID> sinkTopics) {
             return Map.of();
@@ -87,11 +82,11 @@ class CausalNodePersistenceTest {
     @Test
     void sendSequencesSurviveRestart() {
         MapStore store = new MapStore();
-        CausalNode first = new CausalNode(config(), store, NO_ACKS);
+        CausalNode first = new CausalNode(config(), store, NO_OFFSETS);
         assertEquals(0, first.prepareSend(SINK_0).senderSeq());
         assertEquals(1, first.prepareSend(SINK_0).senderSeq());
 
-        CausalNode restarted = new CausalNode(config(), store, NO_ACKS);
+        CausalNode restarted = new CausalNode(config(), store, NO_OFFSETS);
         assertEquals(2, restarted.prepareSend(SINK_0).senderSeq(),
                 "a restart must continue the send sequence, never reuse one");
     }
@@ -100,11 +95,11 @@ class CausalNodePersistenceTest {
     @Test
     void deliveredSequencesSurviveRestart() {
         MapStore store = new MapStore();
-        CausalNode first = new CausalNode(config(), store, NO_ACKS);
+        CausalNode first = new CausalNode(config(), store, NO_OFFSETS);
         List<Delivery> delivered = first.onRecord(record(C1, 0, null, UPSTREAM, 5, null, null));
         assertEquals(1, delivered.size(), "an unstamped record delivers immediately");
 
-        CausalNode restarted = new CausalNode(config(), store, NO_ACKS);
+        CausalNode restarted = new CausalNode(config(), store, NO_OFFSETS);
         Clock resolved = new Clock();
         resolved.advanceSeq(C1, UPSTREAM, 5);
         assertEquals(1, restarted.onRecord(record(C2, 0, resolved, null, -1, null, null)).size(),
@@ -120,10 +115,10 @@ class CausalNodePersistenceTest {
     @Test
     void frontierSurvivesRestartAndDropsReplays() {
         MapStore store = new MapStore();
-        CausalNode first = new CausalNode(config(), store, NO_ACKS);
+        CausalNode first = new CausalNode(config(), store, NO_OFFSETS);
         assertEquals(1, first.onRecord(record(C1, 0, null, null, -1, null, null)).size());
 
-        CausalNode restarted = new CausalNode(config(), store, NO_ACKS);
+        CausalNode restarted = new CausalNode(config(), store, NO_OFFSETS);
         assertTrue(restarted.onRecord(record(C1, 0, null, null, -1, null, null)).isEmpty(),
                 "a replayed offset at or below the restored frontier must be dropped");
     }
@@ -135,12 +130,12 @@ class CausalNodePersistenceTest {
     @Test
     void heldRecordsSurviveRestartVerbatim() {
         MapStore store = new MapStore();
-        CausalNode first = new CausalNode(config(), store, NO_ACKS);
+        CausalNode first = new CausalNode(config(), store, NO_OFFSETS);
         Clock deps = Clock.of(C1, 0);
         assertTrue(first.onRecord(record(C2, 0, deps, UPSTREAM, 7, null, new byte[0])).isEmpty(),
                 "the record must hold until its C1 cause is delivered");
 
-        CausalNode restarted = new CausalNode(config(), store, NO_ACKS);
+        CausalNode restarted = new CausalNode(config(), store, NO_OFFSETS);
         List<Delivery> released = restarted.onRecord(record(C1, 0, null, null, -1, "k".getBytes(), "v".getBytes()));
         assertEquals(2, released.size(), "delivering the cause must cascade the restored held record");
         Delivery held = released.get(1);
@@ -157,12 +152,12 @@ class CausalNodePersistenceTest {
     @Test
     void channelClocksSurviveRestart() {
         MapStore store = new MapStore();
-        CausalNode first = new CausalNode(config(), store, NO_ACKS);
+        CausalNode first = new CausalNode(config(), store, NO_OFFSETS);
         Channel foreign = new Channel(UUID.nameUUIDFromBytes("foreign".getBytes()), 0);
         Clock custody = Clock.of(foreign, 41);
         first.onRecord(record(C1, 0, custody, null, -1, null, null));
 
-        CausalNode restarted = new CausalNode(config(), store, NO_ACKS);
+        CausalNode restarted = new CausalNode(config(), store, NO_OFFSETS);
         assertEquals(41, restarted.prepareSend(SINK_0).clock().get(foreign),
                 "custody folded before the restart must still be claimed after it");
     }

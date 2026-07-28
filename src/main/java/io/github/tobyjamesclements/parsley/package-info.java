@@ -9,7 +9,7 @@
  * inspection, with {@link io.github.tobyjamesclements.parsley.Clock} and
  * {@link io.github.tobyjamesclements.parsley.Channel} as their vocabulary), and
  * {@link io.github.tobyjamesclements.parsley.TopicIds} with
- * {@link io.github.tobyjamesclements.parsley.SendTracker} as the seams a
+ * {@link io.github.tobyjamesclements.parsley.BrokerOffsets} as the seams a
  * {@code TopologyTestDriver} test injects.
  *
  * <p>Everything else is package-private on purpose. The protocol core is only sound under a

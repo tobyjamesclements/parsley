@@ -14,11 +14,11 @@ import java.util.function.BiFunction;
 
 /**
  * One simulated world: a broker, a set of causal nodes, scripted edge producers, an oracle, and
- * a seeded scheduler that interleaves fetches, acknowledgement deliveries, producer ops,
- * crashes, and restarts until the world drains or the step budget runs out.
+ * a seeded scheduler that interleaves fetches, position advances, producer ops, crashes, and
+ * restarts until the world drains or the step budget runs out.
  *
  * <p>Draining means no action is enabled anywhere: every fetchable record fetched, every
- * acknowledgement delivered, every scripted op done, every node up. A world that cannot drain
+ * scripted op done, every node up. A world that cannot drain
  * inside the budget fails (this is what catches null-message storms and wedged frontiers), and
  * a drained world must pass the oracle's completeness check (every business record above a
  * node's baseline on a consumed channel was delivered there).
@@ -34,7 +34,6 @@ final class SimWorld {
     private final Map<UUID, String> topicNames = new HashMap<>();
 
     private int crashBudget;
-    boolean dropAcks;
     private boolean allowTaskFailures;
     private final List<String> taskFailures = new ArrayList<>();
     private long stepsTaken;
@@ -56,12 +55,6 @@ final class SimWorld {
 
     SimWorld crashBudget(int crashes) {
         this.crashBudget = crashes;
-        return this;
-    }
-
-    /** Never deliver producer acknowledgements: own-output ordering must ride sequence claims. */
-    SimWorld dropAcks() {
-        this.dropAcks = true;
         return this;
     }
 
@@ -151,7 +144,6 @@ final class SimWorld {
     private sealed interface Action {
         record Process(SimNode node, Channel channel, boolean crash) implements Action {}
         record PositionAdvance(SimNode node, Channel channel, boolean crash) implements Action {}
-        record DeliverAck(SimNode node) implements Action {}
         record Restart(SimNode node) implements Action {}
         record CrashIdle(SimNode node) implements Action {}
         record ProducerStep(EdgeProducer producer) implements Action {}
@@ -173,7 +165,6 @@ final class SimWorld {
                             if (crashBudget > 0) enabled.add(new Action.PositionAdvance(n, c, true));
                         }
                     }
-                    if (n.sends.hasInFlight()) enabled.add(new Action.DeliverAck(n));
                     if (crashBudget > 0) enabled.add(new Action.CrashIdle(n));
                 } else {
                     enabled.add(new Action.Restart(n));
@@ -202,7 +193,6 @@ final class SimWorld {
                     totalPositionAdvances++;
                     n.stepPositionAdvance(c, crash);
                 }
-                case Action.DeliverAck(SimNode n) -> n.sends.deliverOneAck();
                 case Action.Restart(SimNode n) -> n.start();
                 case Action.CrashIdle(SimNode n) -> {
                     crashBudget--;

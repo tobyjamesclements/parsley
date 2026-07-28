@@ -24,8 +24,8 @@ Outbound records carry a single header, `parsley-clock` — a vector clock folde
 frontier, the per-channel advertised clocks, ancestry carried across scope changes, and the
 node's own sends. Stamping happens at one site and never blocks: a node claims its own
 in-flight sends in its own send-sequence space (assigned synchronously), and receivers resolve
-those claims from the sender tag each record carries — acknowledged sends upgrade to offset
-claims.
+those claims from the sender tag each record carries. There is no acknowledgement feed
+anywhere in the node: broker offset facts (end offsets, log starts) are all it ever asks for.
 
 Kafka's non-density under exactly-once — transaction markers and aborted records occupy
 offsets a `read_committed` consumer never returns — is repaired at receive time by seeding and
@@ -42,7 +42,7 @@ retention economics that bound the causal history itself.
 
 Parsley's primary correctness gate is a deterministic simulator with a ground-truth causal
 oracle. The simulator models partitions with real marker and aborted offsets, step-atomic EOS
-transactions, `read_committed` fetch, asynchronous acknowledgements, node crashes with
+transactions, `read_committed` fetch, node crashes with
 transactional rollback, and seeded random interleavings. The oracle tracks real
 happened-before ancestry entirely outside the protocol and checks every delivery for causal
 order, per-channel FIFO, and duplicates, plus completeness and drain at the end of every run.
@@ -101,9 +101,6 @@ The verification obligations the test suite enforces are catalogued in
 
 - One causal stage per Streams topology; the protocol core itself has no such limit.
 - Non-Parsley headers on held records are not carried through delivery.
-- The Streams adapter runs without an acknowledgement feed (own-output claims stay in
-  sequence space), because Streams attributes producer acknowledgements per thread rather
-  than per task.
 - Sequence claims carry a late-joiner caveat: consumers joining at the log end should
   baseline at the last stable offset (see the liveness page).
 - Clock truncation is driven by log-start stability: retention-deleted records sit below

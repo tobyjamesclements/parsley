@@ -45,22 +45,17 @@ class CausalStageTest {
             "t2", new TopicIds.Resolved(T2, 1),
             "t3", new TopicIds.Resolved(T3, 1)));
 
-    /** No producer exists under TTD; acknowledgements never arrive and nothing needs them. */
-    private static final CausalStage.SendTrackers NO_TRACKING = (clientId, ids, sinks) ->
-            new SendTracker() {
-                @Override
-                public List<Ack> drainAcks() {
-                    return List.of();
-                }
-
+    /** No broker exists under TTD; both offset views are empty. */
+    private static final CausalStage.BrokerOffsetsProvider NO_OFFSETS = (ids, sinks) ->
+            new BrokerOffsets() {
                 @Override
                 public Map<Channel, Long> endOffsets(Set<UUID> sinkTopics) {
                     return Map.of();
                 }
 
                 @Override
-                public EarliestOffsets earliestOffsets(Set<Channel> channels) {
-                    return new EarliestOffsets(Map.of(), Set.of());
+                public BrokerOffsets.EarliestOffsets earliestOffsets(Set<Channel> channels) {
+                    return new BrokerOffsets.EarliestOffsets(Map.of(), Set.of());
                 }
             };
 
@@ -92,7 +87,7 @@ class CausalStageTest {
                 })
                 .sink("t3", Serdes.String(), Serdes.String())
                 .topicIds(IDS)
-                .sendTrackers(NO_TRACKING)
+                .brokerOffsets(NO_OFFSETS)
                 .build();
 
         Properties props = new Properties();

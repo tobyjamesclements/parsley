@@ -1,26 +1,19 @@
 package io.github.tobyjamesclements.parsley;
 
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 /**
- * The core's window onto the node's own produced records. The broker performs the sender's
- * clock increment (offset assignment), learned asynchronously from acknowledgements; the core
- * claims unacknowledged sends in sequence space, so nothing here ever blocks. Acknowledgements
- * only upgrade sequence claims to offset claims.
+ * The core's window onto broker offset facts — the two append-time queries the protocol
+ * needs. Both are about ranges, not records: what the broker has assigned (end offsets, for
+ * the init-time own-outputs seed) and what retention has deleted (log starts, the
+ * coordination-free stability bound for truncation).
  *
- * <p>Per-channel acknowledgement order must match send order (Kafka's per-partition
- * guarantee), because the core aligns acknowledgements with its per-channel send counters to
- * normalise its own claims.
+ * <p>Nothing here observes individual sends. The node's own in-flight outputs are claimed in
+ * sequence space, assigned synchronously at the stamping site, and resolved by receivers from
+ * the sender tag each record carries — no acknowledgement feed exists.
  */
-public interface SendTracker {
-
-    /** One acknowledged own send. */
-    record Ack(Channel channel, long offset) {}
-
-    /** Returns and clears every acknowledgement received since the last drain. */
-    List<Ack> drainAcks();
+public interface BrokerOffsets {
 
     /**
      * Current end offsets (next offset to be assigned) for every partition of the given sink

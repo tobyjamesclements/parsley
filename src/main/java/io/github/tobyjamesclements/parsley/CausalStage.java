@@ -38,8 +38,8 @@ import java.util.UUID;
  * headers of a held record are not yet carried through delivery.
  *
  * <p>Production wiring ({@link CausalStreams#start}) supplies admin-backed {@link TopicIds}
- * and interceptor-backed send tracking; tests inject fixed ids and a fake tracker and drive
- * the topology with {@code TopologyTestDriver}.
+ * and {@link BrokerOffsets}; tests inject fixed ids and a stub offsets view and drive the
+ * topology with {@code TopologyTestDriver}.
  */
 public final class CausalStage<K, V, KO, VO> {
 
@@ -50,9 +50,9 @@ public final class CausalStage<K, V, KO, VO> {
     static final String PROCESSOR_NAME = "parsley-processor";
     static final String SINK_PREFIX = "parsley-sink-";
 
-    /** Creates the per-task {@link SendTracker}; the production factory is interceptor-based. */
-    public interface SendTrackers {
-        SendTracker create(String producerClientId, TopicIds topicIds, Set<String> sinkTopics);
+    /** Creates the per-task {@link BrokerOffsets}; production uses an admin client. */
+    public interface BrokerOffsetsProvider {
+        BrokerOffsets create(TopicIds topicIds, Set<String> sinkTopics);
     }
 
     private record SourceDef<K, V>(Serde<K> keySerde, Serde<V> valueSerde) {}
@@ -64,7 +64,7 @@ public final class CausalStage<K, V, KO, VO> {
     private final ProcessorSupplier<K, V, KO, VO> userSupplier;
     private final Duration truncationInterval;
     private TopicIds topicIds;
-    private SendTrackers sendTrackers;
+    private BrokerOffsetsProvider brokerOffsets;
 
     private CausalStage(Builder<K, V, KO, VO> b) {
         this.sources = b.sources;
@@ -72,7 +72,7 @@ public final class CausalStage<K, V, KO, VO> {
         this.userSupplier = b.userSupplier;
         this.truncationInterval = b.truncationInterval;
         this.topicIds = b.topicIds;
-        this.sendTrackers = b.sendTrackers;
+        this.brokerOffsets = b.brokerOffsets;
     }
 
     public static <K, V, KO, VO> Builder<K, V, KO, VO> builder() {
@@ -85,7 +85,7 @@ public final class CausalStage<K, V, KO, VO> {
         private ProcessorSupplier<K, V, KO, VO> userSupplier;
         private Duration truncationInterval = Duration.ofMinutes(10);
         private TopicIds topicIds;
-        private SendTrackers sendTrackers;
+        private BrokerOffsetsProvider brokerOffsets;
 
         public Builder<K, V, KO, VO> source(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
             sources.put(topic, new SourceDef<>(keySerde, valueSerde));
@@ -115,8 +115,8 @@ public final class CausalStage<K, V, KO, VO> {
         }
 
         /** Test seam; production wiring is filled in by {@link CausalStreams#start}. */
-        public Builder<K, V, KO, VO> sendTrackers(SendTrackers trackers) {
-            this.sendTrackers = trackers;
+        public Builder<K, V, KO, VO> brokerOffsets(BrokerOffsetsProvider provider) {
+            this.brokerOffsets = provider;
             return this;
         }
 
@@ -135,16 +135,16 @@ public final class CausalStage<K, V, KO, VO> {
         return sinks.keySet();
     }
 
-    void wire(TopicIds ids, SendTrackers trackers) {
+    void wire(TopicIds ids, BrokerOffsetsProvider provider) {
         this.topicIds = ids;
-        this.sendTrackers = trackers;
+        this.brokerOffsets = provider;
     }
 
     /** Assembles the Streams topology. Wiring (topic ids, send trackers) must be present. */
     public Topology topology() {
-        if (topicIds == null || sendTrackers == null) {
+        if (topicIds == null || brokerOffsets == null) {
             throw new IllegalStateException(
-                    "unwired stage: start it with CausalStreams.start, or inject topicIds and sendTrackers");
+                    "unwired stage: start it with CausalStreams.start, or inject topicIds and brokerOffsets");
         }
         Topology t = new Topology();
         t.addSource(SOURCE_NAME, new ByteArrayDeserializer(), new ByteArrayDeserializer(),
@@ -224,8 +224,7 @@ public final class CausalStage<K, V, KO, VO> {
             }
 
             KeyValueStore<Bytes, byte[]> kv = context.getStateStore(STORE_NAME);
-            SendTracker tracker = sendTrackers.create(
-                    Thread.currentThread().getName() + "-producer", topicIds, sinks.keySet());
+            BrokerOffsets offsets = brokerOffsets.create(topicIds, sinks.keySet());
             // The sender identity must be stable across restarts and rebalances: derive it
             // from the application and task ids, which name this partition group durably.
             UUID senderId = UUID.nameUUIDFromBytes(
@@ -233,7 +232,7 @@ public final class CausalStage<K, V, KO, VO> {
             node = new CausalNode(
                     new NodeConfig("task-" + context.taskId(), senderId, consumed, sinkIds,
                             taskPartition),
-                    new KafkaStateStore(kv), tracker);
+                    new KafkaStateStore(kv), offsets);
 
             userProcessor = userSupplier.get();
             userProcessor.init(new StampingContext(context));
@@ -243,10 +242,9 @@ public final class CausalStage<K, V, KO, VO> {
             // The coordination-free truncation driver: log starts are a true global stability
             // bound (retention-deleted records sit below every reachable baseline). A failed
             // sweep skips a cycle; it must never fail the task for garbage collection.
-            SendTracker truncationTracker = tracker;
             context.schedule(truncationInterval, PunctuationType.WALL_CLOCK_TIME, ts -> {
                 try {
-                    var earliest = truncationTracker.earliestOffsets(node.stampChannels());
+                    var earliest = offsets.earliestOffsets(node.stampChannels());
                     node.truncateToLogStarts(earliest.logStarts(), earliest.confirmedAbsent());
                 } catch (RuntimeException e) {
                     LOG.warn("truncation sweep skipped: {}", e.toString());

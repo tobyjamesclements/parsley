@@ -60,7 +60,7 @@ final class CausalNode implements DeliveryProtocol {
 
     private final NodeConfig config;
     private final StateStore store;
-    private final SendTracker sends;
+    private final BrokerOffsets broker;
 
     private final Map<Channel, Long> frontier = new HashMap<>();
     private final Map<Channel, Clock> channelClocks = new HashMap<>();
@@ -74,18 +74,18 @@ final class CausalNode implements DeliveryProtocol {
     /** Last issued send sequence per sink channel (persisted; -1 = none). */
     private final Map<Channel, Long> sendSeq = new HashMap<>();
     /**
-     * Last acknowledged send sequence per sink channel. Memory-only: per-channel ack order
-     * matches send order, and after a restart every committed send is appended (EOS commit
-     * awaits acknowledgements), so init sets it to the restored send counter.
+     * The send counter as restored at init, per sink channel. Every send at or below it is
+     * committed and therefore covered by the init end-offset seed in offset space; sends above
+     * it (this incarnation's) are claimed in sequence space.
      */
-    private final Map<Channel, Long> ackedSeq = new HashMap<>();
+    private final Map<Channel, Long> baselineSeq = new HashMap<>();
     /** Highest delivered sequence and its offset, per consumed channel and sender (persisted). */
     private final Map<Channel, Map<UUID, SeqMark>> deliveredSeq = new HashMap<>();
 
-    public CausalNode(NodeConfig config, StateStore store, SendTracker sends) {
+    CausalNode(NodeConfig config, StateStore store, BrokerOffsets broker) {
         this.config = config;
         this.store = store;
-        this.sends = sends;
+        this.broker = broker;
 
         Scope recorded = readScope();
         restoreState(recorded);
@@ -94,7 +94,7 @@ final class CausalNode implements DeliveryProtocol {
         // Own-outputs seed: each declared sink's end offset, an over-claim on real appended
         // offsets (delay-only, therefore sound). Strict resolution: a missing entry here means
         // the topic genuinely does not exist.
-        Map<Channel, Long> ends = sends.endOffsets(config.sinkTopics());
+        Map<Channel, Long> ends = broker.endOffsets(config.sinkTopics());
         ends.forEach((c, end) -> {
             if (end > 0) ownOutputs.advanceTo(c, end - 1);
         });
@@ -223,7 +223,6 @@ final class CausalNode implements DeliveryProtocol {
             throw new IllegalStateException(config.nodeId() + ": send to undeclared sink topic "
                     + destination.topicId());
         }
-        foldAcks();
 
         Clock stamp = new Clock();
         frontier.forEach(stamp::advanceTo);
@@ -232,13 +231,13 @@ final class CausalNode implements DeliveryProtocol {
         stamp.mergeMax(ownOutputs);
         normalize(stamp);
 
-        // Claim own unacknowledged sends in sequence space — no waiting. Acknowledged sends
-        // are already covered by ownOutputs in offset space (per-channel ack order matches
-        // send order, so the acked prefix's last offset dominates every acked send).
+        // Claim this incarnation's own sends in sequence space — nothing waits, and there is
+        // no acknowledgement feed. Prior incarnations' sends are committed and covered by the
+        // init end-offset seed in offset space.
         for (Map.Entry<Channel, Long> e : sendSeq.entrySet()) {
             Channel c = e.getKey();
             long issued = e.getValue();
-            if (issued > ackedSeq.getOrDefault(c, Clock.NOTHING)) {
+            if (issued > baselineSeq.getOrDefault(c, Clock.NOTHING)) {
                 stamp.advanceSeq(c, config.senderId(), issued);
             }
         }
@@ -261,8 +260,10 @@ final class CausalNode implements DeliveryProtocol {
         Map<Clock.SeqKey, Long> upgrades = new HashMap<>();
         stamp.forEachSeq((key, seq) -> {
             if (key.sender().equals(config.senderId())) {
-                long acked = ackedSeq.getOrDefault(key.channel(), Clock.NOTHING);
-                if (seq <= acked) {
+                long baseline = baselineSeq.getOrDefault(key.channel(), Clock.NOTHING);
+                if (seq <= baseline) {
+                    // A prior incarnation's echoed claim: its record is committed and covered
+                    // by the end-offset seed, so it upgrades to offset space.
                     upgrades.put(key, ownOutputs.get(key.channel()));
                 } else {
                     subsumed.add(key); // the fresh self-claim added afterwards dominates it
@@ -276,13 +277,6 @@ final class CausalNode implements DeliveryProtocol {
         });
         upgrades.forEach(stamp::normalizeSeq);
         subsumed.forEach(stamp::removeSeq);
-    }
-
-    private void foldAcks() {
-        for (SendTracker.Ack a : sends.drainAcks()) {
-            ownOutputs.advanceTo(a.channel(), a.offset());
-            ackedSeq.merge(a.channel(), ackedSeq.getOrDefault(a.channel(), Clock.NOTHING) + 1, Math::max);
-        }
     }
 
     private SeqMark seqMark(Channel c, UUID sender) {
@@ -411,9 +405,9 @@ final class CausalNode implements DeliveryProtocol {
                 channelClocks.put(Channel.fromKey(k.substring(PREFIX_CHANNEL_CLOCK.length())), Clock.deserialize(v)));
         store.forEachPrefix(PREFIX_SEND_SEQ, (k, v) ->
                 sendSeq.put(Channel.fromKey(k.substring(PREFIX_SEND_SEQ.length())), bytesLong(v)));
-        // Every committed send is appended and acknowledged (EOS commit awaits sends), so the
-        // restored counters are the acked watermark; end-offset seeding covers their offsets.
-        ackedSeq.putAll(sendSeq);
+        // Every committed send is appended (EOS commit awaits sends), and the end-offset seed
+        // covers those offsets; the restored counters are this incarnation's baseline.
+        baselineSeq.putAll(sendSeq);
         store.forEachPrefix(PREFIX_DELIVERED_SEQ, (k, v) -> {
             String rest = k.substring(PREFIX_DELIVERED_SEQ.length());
             int slash = rest.lastIndexOf('/');
@@ -460,7 +454,7 @@ final class CausalNode implements DeliveryProtocol {
         Set<UUID> formerSinks = new HashSet<>(recorded.sinks());
         formerSinks.removeAll(config.sinkTopics());
         if (!formerSinks.isEmpty()) {
-            sends.endOffsets(formerSinks).forEach((c, end) -> {
+            broker.endOffsets(formerSinks).forEach((c, end) -> {
                 if (end > 0) carriedAncestry.advanceTo(c, end - 1);
             });
             putClock(KEY_CARRIED, carriedAncestry);

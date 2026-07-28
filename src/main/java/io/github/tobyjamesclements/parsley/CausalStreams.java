@@ -19,9 +19,9 @@ import java.util.Properties;
  *       density adaptation are defined against them;</li>
  *   <li>installs the position-capturing client supplier ({@link Positions}) — the consumer's
  *       position advance past transaction markers is the protocol's liveness signal;</li>
- *   <li>resolves topic identity and sink end offsets through an admin client built from the
- *       same properties. Own outputs are claimed in sequence space (see
- *       {@link AdminSendTracker}), so no acknowledgement capture is wired.</li>
+ *   <li>resolves topic identity and broker offset facts through an admin client built from
+ *       the same properties ({@link AdminBrokerOffsets}); own outputs are claimed in
+ *       sequence space.</li>
  * </ul>
  */
 public final class CausalStreams implements AutoCloseable {
@@ -53,7 +53,7 @@ public final class CausalStreams implements AutoCloseable {
 
         stage.wire(
                 TopicIds.fromAdmin(admin),
-                (clientId, ids, sinkTopics) -> new AdminSendTracker(ids, admin, sinkTopics));
+                (ids, sinkTopics) -> new AdminBrokerOffsets(ids, admin, sinkTopics));
 
         KafkaStreams ks = new KafkaStreams(stage.topology(), p, Positions.capturingClientSupplier());
         ks.start();
