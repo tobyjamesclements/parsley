@@ -13,6 +13,33 @@
     <description>Causal delivery order for Kafka stream processing. A functional core —
         pure handlers and folds over typed topics — with imperative edges on Kafka Streams,
         verified by a deterministic simulator with a ground-truth causal oracle.</description>
+    <url>https://github.com/tobyjamesclements/parsley</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://github.com/tobyjamesclements/parsley/blob/main/LICENSE</url>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>tobyjamesclements</id>
+            <name>Toby Clements</name>
+            <url>https://github.com/tobyjamesclements</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/tobyjamesclements/parsley.git</connection>
+        <developerConnection>scm:git:https://github.com/tobyjamesclements/parsley.git</developerConnection>
+        <url>https://github.com/tobyjamesclements/parsley</url>
+    </scm>
+
+    <!-- Snapshots publish to Sonatype Central via a separate deploy invocation rather than this
+         element (CI: .github/workflows/publish.yml). Real releases go through the release
+         profile's central-publishing-maven-plugin, which uploads via Central's bundle API rather
+         than a repository URL. Neither path needs <distributionManagement>, so there is none. -->
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
@@ -96,4 +123,68 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!-- Central-release artifacts and signatures; activated by the release workflow only. -->
+        <profile>
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.8</version>
+                        <configuration>
+                            <passphraseEnvName>MAVEN_GPG_PASSPHRASE</passphraseEnvName>
+                        </configuration>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.4.0</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.11.2</version>
+                        <executions>
+                            <execution>
+                                <id>attach-javadoc</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.sonatype.central</groupId>
+                        <artifactId>central-publishing-maven-plugin</artifactId>
+                        <version>0.11.0</version>
+                        <extensions>true</extensions>
+                        <configuration>
+                            <publishingServerId>central</publishingServerId>
+                            <autoPublish>false</autoPublish>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

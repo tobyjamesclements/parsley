@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  unit-tests:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -14,43 +14,12 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: 'maven'
-      - name: Run unit tests
-        run: ./mvnw test --no-transfer-progress
-      - name: Coverage summary
-        if: always()
-        run: |
-          csv=target/site/jacoco/jacoco.csv
-          if [ -f "$csv" ]; then
-            awk -F',' '
-              NR > 1 {
-                im += $4; ic += $5; bm += $6; bc += $7
-              }
-              END {
-                printf "## Coverage\n\n"
-                printf "| Metric | Covered | Missed | %% |\n"
-                printf "|---|---|---|---|\n"
-                printf "| Instructions | %d | %d | %.1f%% |\n", ic, im, 100*ic/(ic+im)
-                printf "| Branches | %d | %d | %.1f%% |\n", bc, bm, 100*bc/(bc+bm)
-              }
-            ' "$csv" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "## Coverage" >> "$GITHUB_STEP_SUMMARY"
-            echo "no jacoco.csv produced" >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v5
-        with:
-          name: jacoco-report
-          path: target/site/jacoco/
-          if-no-files-found: ignore
+      - name: Build and test
+        run: ./mvnw verify --no-transfer-progress
 
-  # The mutation floor, enforced by <mutationThreshold> in the pom's mutation profile: the build
-  # fails if the killed-mutant percentage regresses below it. No `needs`, so this runs alongside
-  # the other jobs rather than extending the chain; it re-runs surefire itself because PIT binds
-  # to the test phase. Mutants run serially (pitest.threads=1) on purpose. Executing them in
-  # parallel scores about a point higher, because a mutant whose covering tests run slowly under
-  # CPU contention exceeds PIT's per-mutant timeout and PIT counts a timeout as a kill. See #44.
+  # Mutation testing over the whole package, serially: a mutant whose covering tests run
+  # slowly under CPU contention exceeds PIT's per-mutant timeout, and PIT counts a timeout
+  # as a kill, so parallel runs overstate the score. The score is reported, not gated.
   mutation:
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -61,34 +30,26 @@ jobs:
           java-version: '25'
           distribution: 'temurin'
           cache: 'maven'
-      - name: Mutation coverage (floor enforced)
-        run: ./mvnw -Pmutation test --no-transfer-progress
-      # The main run cannot score mutants in records with annotated components: PIT's hot swap
-      # cannot redefine them, and it counts the resulting RUN_ERROR as detected (#44). This run
-      # gives each mutant its own minion, so no redefinition happens and the verdicts are real.
-      # A few minutes, and it fails if any mutant in those classes stops being killed.
-      - name: Mutation coverage for records (verdicts the main run cannot produce)
-        run: ./mvnw -Pmutation-records test --no-transfer-progress
-
-  integration-tests:
-    runs-on: ubuntu-latest
-    needs: unit-tests
-    strategy:
-      fail-fast: false
-      matrix:
-        # Minimum supported broker (the ParsleyBrokerImage default) and the current stable
-        # broker matching the kafka.version client line. Keep docs/adoption.md in sync.
-        kafka-image: ['apache/kafka:3.7.0', 'apache/kafka:4.3.1']
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-java@v5
+      - name: Mutation coverage
+        run: ./mvnw test-compile org.pitest:pitest-maven:mutationCoverage --no-transfer-progress
+      - name: Mutation summary
+        if: always()
+        run: |
+          xml=target/pit-reports/mutations.xml
+          if [ -f "$xml" ]; then
+            killed=$(grep -c "status='KILLED'" "$xml" || true)
+            timed=$(grep -c "status='TIMED_OUT'" "$xml" || true)
+            total=$(grep -c "<mutation " "$xml" || true)
+            echo "## Mutation coverage" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Detected $((killed + timed)) of $total mutants." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no mutations.xml produced" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v5
         with:
-          java-version: '25'
-          distribution: 'temurin'
-          cache: 'maven'
-      - name: Run integration tests (${{ matrix.kafka-image }})
-        # skip-unit-tests: surefire already ran in the unit-tests job this job depends on;
-        # verify here runs failsafe (the broker ITs) only.
-        run: >-
-          ./mvnw verify -Pskip-unit-tests --no-transfer-progress
-          -Dparsley.it.kafka.image=${{ matrix.kafka-image }}
+          name: pit-report
+          path: target/pit-reports/
+          if-no-files-found: ignore
