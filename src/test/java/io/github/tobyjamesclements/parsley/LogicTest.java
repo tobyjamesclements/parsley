@@ -102,6 +102,78 @@ class LogicTest {
                 "a negative timestamp must be rejected at the construction site");
     }
 
+    /** A recovering handler is transparent while the wrapped handler returns. */
+    @Test
+    void recoveringHandlerPassesSuccessThrough() {
+        Handler<String, String> enrich = Handler.recovering(
+                m -> List.of(OUT.send(m.key(), m.value() + "!")),
+                (m, e) -> List.of(OUT.send(m.key(), "error")));
+
+        assertEquals(List.of(OUT.send("k", "v!")),
+                enrich.handle(Message.of("in", "k", "v")),
+                "a returning handler's emissions must pass through the decorator untouched");
+    }
+
+    /** A recovering handler converts a RuntimeException into the recovery emissions. */
+    @Test
+    void recoveringHandlerRoutesFailureToTheRecovery() {
+        Handler<String, String> failing = Handler.recovering(
+                m -> { throw new IllegalArgumentException("unmappable: " + m.key()); },
+                (m, e) -> List.of(OUT.send(m.key(), e.getMessage())));
+
+        assertEquals(List.of(OUT.send("k", "unmappable: k")),
+                failing.handle(Message.of("in", "k", "v")),
+                "a throwing handler must yield the recovery's emissions for the failure");
+    }
+
+    /** A recovering handler lets an Error propagate: only RuntimeException is domain failure. */
+    @Test
+    void recoveringHandlerPropagatesErrors() {
+        Handler<String, String> broken = Handler.recovering(
+                m -> { throw new AssertionError("broken runtime"); },
+                (m, e) -> List.of());
+
+        assertThrows(AssertionError.class,
+                () -> broken.handle(Message.of("in", "k", "v")),
+                "an Error must propagate and fail the task, never route to the error sink");
+    }
+
+    /** A recovering fold is transparent while the wrapped fold returns. */
+    @Test
+    void recoveringFoldPassesSuccessThrough() {
+        Fold<Long, String, String> counter = Fold.recovering(
+                (n, m) -> Step.of(n + 1, OUT.send(m.key(), "n=" + (n + 1))),
+                (m, e) -> List.of(OUT.send(m.key(), "error")));
+
+        assertEquals(Step.of(1L, OUT.send("k", "n=1")),
+                counter.apply(0L, Message.of("in", "k", "v")),
+                "a returning fold's step must pass through the decorator untouched");
+    }
+
+    /** A recovering fold keeps the prior state and yields the recovery emissions on failure. */
+    @Test
+    void recoveringFoldKeepsPriorStateOnFailure() {
+        Fold<Long, String, String> failing = Fold.recovering(
+                (n, m) -> { throw new IllegalStateException("rejected"); },
+                (m, e) -> List.of(OUT.send(m.key(), e.getMessage())));
+
+        assertEquals(Step.of(41L, OUT.send("k", "rejected")),
+                failing.apply(41L, Message.of("in", "k", "v")),
+                "a throwing fold must keep the prior state and emit the recovery's emissions");
+    }
+
+    /** A recovering fold lets an Error propagate: only RuntimeException is domain failure. */
+    @Test
+    void recoveringFoldPropagatesErrors() {
+        Fold<Long, String, String> broken = Fold.recovering(
+                (n, m) -> { throw new AssertionError("broken runtime"); },
+                (m, e) -> List.of());
+
+        assertThrows(AssertionError.class,
+                () -> broken.apply(0L, Message.of("in", "k", "v")),
+                "an Error must propagate and fail the task, never route to the error sink");
+    }
+
     /** A message for a unit test carries a zero coordinate and the given payload. */
     @Test
     void messageFactoryCarriesPayload() {
