@@ -53,6 +53,7 @@ nav:
     - Topology shapes: guide/topologies.md
     - Codecs and Avro: guide/codecs.md
     - Error handling: guide/error-handling.md
+    - Ticks: guide/ticks.md
     - The contract: guide/expectations.md
     - Plain clients: guide/clients.md
   - Reference:

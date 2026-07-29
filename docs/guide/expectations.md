@@ -24,6 +24,10 @@ holds the formal versions; the links under each item lead to the reasoning.
 - Every declared topic exists before the application starts. Sinks are resolved at init and
   a missing one fails loudly; nothing is auto-created, and there are no automatic
   repartition topics.
+- A stage that declares [ticks](ticks.md) owns the topic `parsley-<stage-name>-ticks`, which
+  likewise exists before start, with exactly the partition count of the stage's widest
+  source topic — assembly fails loudly on a mismatch. Short retention suffices; ticks are
+  transient.
 - Topic identity is stable mid-run: a topic deleted and recreated under the same name is a
   different channel, and the old incarnation's history is loss, never reordering.
 - Retention covers consumer lag on causal topics. A consumer must be able to fetch, or

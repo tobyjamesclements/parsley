@@ -139,6 +139,14 @@ the delivered history. Serialization happens exactly once on each side, inside t
 the stamp travels with the exact bytes it claims. Stages are immutable: wiring is captured
 by the topology's node suppliers at assembly, never stored on the stage.
 
+A stage with declared [ticks](../guide/ticks.md) closes a loop through the broker: a
+wall-clock punctuator emits one stamped record per interval to the stage's own tick topic,
+routed back to the emitting task's partition, consumed as one of the stage's sources, and
+gated like any other record — the protocol's own-channel handling makes a self-claim
+structurally satisfied, so the loop cannot deadlock. Time thereby enters user logic only as
+data on a delivered record, and the tick's stamp claims the task's consumed history at
+emission.
+
 `Parsley.streams` supplies the production wiring: it enforces `exactly_once_v2` and
 `read_committed`, installs a client supplier whose main consumers record a post-poll view
 into a thread-local — the consumer position paired with the highest record offset the polls

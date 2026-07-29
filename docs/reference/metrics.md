@@ -26,6 +26,7 @@ These record at the `INFO` metrics recording level, the Kafka default.
 | `records-delivered-total` | total | The total number of records released through the causal gate since the task initialised. |
 | `replays-skipped-total` | total | The total number of records fed at or below the frontier and discarded. Nonzero is expected only while a rescope-growth refetch replays covered offsets. |
 | `truncation-sweeps-skipped-total` | total | The total number of truncation sweeps that failed and skipped their cycle. A climbing value means stamp-side clock entries are not being garbage-collected. |
+| `ticks-emitted-total` | total | The total number of tick records the task has emitted to its tick channel. Absent growth on a ticking stage means the tick punctuator is not firing. |
 | `stamp-offset-entries` | gauge | The number of offset entries in the stamp-side clock. |
 | `stamp-sequence-entries` | gauge | The number of sequence entries in the stamp-side clock, claims not yet resolved to offsets. |
 

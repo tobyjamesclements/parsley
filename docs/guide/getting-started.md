@@ -123,6 +123,8 @@ counters in the `parsley-metrics` group, listed in the
   diamond, request and reply, event flows, cycles) and exactly what ordering each one gets.
 - [Codecs and Avro](codecs.md) — the codec contract, writing your own, bridging serdes, and
   schema-registry formats.
+- [Ticks](ticks.md) — time-driven policy as delivered records: the runtime emits a stamped
+  tick per interval, and pure logic folds over it.
 - [The contract](expectations.md) — everything Parsley expects of you and everything it
   promises back, including the operational notes.
 - [Plain clients](clients.md) — stamping from plain producers, observing from plain
