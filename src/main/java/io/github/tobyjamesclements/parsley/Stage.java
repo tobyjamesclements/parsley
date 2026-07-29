@@ -316,6 +316,7 @@ public final class Stage {
         private final boolean testWired;
         private ProcessorContext<byte[], byte[]> context;
         private CausalNode node;
+        private StageMetrics metrics;
         private KeyValueStore<Bytes, byte[]> foldStore;
         private final Map<String, Channel> channelByTopic = new HashMap<>();
         private final Map<Channel, String> topicByChannel = new HashMap<>();
@@ -377,9 +378,14 @@ public final class Stage {
             // The channel ids in protocol log lines decode through this mapping.
             LOG.info("{}: task {} initialised: sender {}, sources {}, sinks {}",
                     name, context.taskId(), senderId, channelByTopic, sinks.keySet());
+            metrics = new StageMetrics(context.metrics(), name, context.taskId().toString(),
+                    topicByChannel, node);
 
             context.schedule(Duration.ofMillis(500), PunctuationType.WALL_CLOCK_TIME,
-                    ts -> sweepPositions());
+                    ts -> {
+                        sweepPositions();
+                        metrics.sample(ts);
+                    });
             // The coordination-free truncation driver: log starts are a true global stability
             // bound (retention-deleted records sit below every reachable baseline). A failed
             // sweep skips a cycle; it must never fail the task for garbage collection.
@@ -388,6 +394,7 @@ public final class Stage {
                     var earliest = offsets.earliestOffsets(node.stampChannels());
                     node.truncateToLogStarts(earliest.logStarts(), earliest.confirmedAbsent());
                 } catch (RuntimeException e) {
+                    metrics.recordSweepSkipped();
                     LOG.warn("truncation sweep skipped: {}", e.toString());
                 }
             });
@@ -438,6 +445,7 @@ public final class Stage {
         }
 
         private void deliverAll(List<Delivery> deliveries) {
+            if (!deliveries.isEmpty()) metrics.recordDelivered(deliveries.size());
             for (Delivery d : deliveries) {
                 String topic = topicByChannel.get(d.channel());
                 Source source = sources.get(topic);
@@ -502,6 +510,12 @@ public final class Stage {
                     ? deliveredTimestamp
                     : emission.timestamp();
             context.forward(new Record<>(key, value, timestamp, headers), sinkNode(sink));
+        }
+
+        @Override
+        public void close() {
+            // Tasks migrate; sensors left behind would accumulate on the instance's registry.
+            if (metrics != null) metrics.close();
         }
     }
 }

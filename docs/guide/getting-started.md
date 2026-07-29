@@ -112,7 +112,9 @@ rather than run with own-output claims silently off. The returned `CausalStreams
 curated allowlist over the Kafka Streams runtime — lifecycle, state, listeners, metrics,
 lag — with no accessor to the underlying instance; members that could violate causality
 (pausing an instance freezes the release of held records fleet-wide, handing out the
-protocol stores) are absent by design.
+protocol stores) are absent by design. `metrics()` includes the stage's own gauges and
+counters in the `parsley-metrics` group, listed in the
+[metrics reference](../reference/metrics.md).
 
 ## Where next
 

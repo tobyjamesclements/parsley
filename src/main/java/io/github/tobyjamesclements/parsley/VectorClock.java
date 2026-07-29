@@ -57,6 +57,16 @@ final class VectorClock {
         return entries.isEmpty() && seqEntries.isEmpty();
     }
 
+    /** The number of offset entries. */
+    int offsetEntryCount() {
+        return entries.size();
+    }
+
+    /** The number of sequence entries. */
+    int sequenceEntryCount() {
+        return seqEntries.size();
+    }
+
     /** Raises the watermark for {@code c} to at least {@code offset}; never lowers it. */
     void advanceTo(Channel c, long offset) {
         if (offset < 0) throw new IllegalArgumentException("offset " + offset);

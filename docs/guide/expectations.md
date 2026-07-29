@@ -107,17 +107,19 @@ holds the formal versions; the links under each item lead to the reasoning.
 
 ## Operating it
 
-- **Watch hold depth.** A lagging or stalled cause channel shows up as growth of the
-  protocol state store (and its changelog) and as consumer lag on the cause topic. The
-  handle's surface — `metrics()`, `allLocalStorePartitionLags()`,
-  `metadataForLocalThreads()` — plus ordinary lag monitoring covers it; retention economics
-  are the real bound on how long a record can wait.
+- **Watch hold depth.** The `records-held` and `records-held-age-max-ms` gauges are the
+  direct signals ([metrics](../reference/metrics.md)): the stage's committed positions
+  advance past held records, so its own consumer lag does not show holding. A lagging or
+  stalled cause channel also shows up as growth of the protocol state store (and its
+  changelog) and as consumer lag on the cause topic; retention economics are the real bound
+  on how long a record can wait.
 - **A blocked head blocks its channel** (head-of-line blocking, by design). A producer whose
   stamps claim records its consumers cannot yet fetch convoys that channel; the cure is
   fixing the lagging cause, not skipping the head.
 - **Truncation follows retention.** Stamp-side clock width is bounded by the causal history
   retention actually keeps; the sweep runs every `truncationInterval` (default ten minutes),
-  and a failed sweep skips a cycle rather than failing the task
+  and a failed sweep skips a cycle rather than failing the task, counting on
+  `truncation-sweeps-skipped-total`
   ([truncation](../design/architecture.md#truncation-log-start-stability)).
 - **Baseline late joiners at the last stable offset,** not the log end, when seeding a new
   consumer's start position by hand — every claim minted by an open transaction sits above

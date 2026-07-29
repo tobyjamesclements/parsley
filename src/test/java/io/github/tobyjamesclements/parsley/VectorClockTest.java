@@ -27,6 +27,19 @@ class VectorClockTest {
         assertEquals(0, java.util.Arrays.compare(k.serialize(), back.serialize()));
     }
 
+    /** The entry counts track the two claim maps independently. */
+    @Test
+    void entryCountsTrackBothClaimKinds() {
+        VectorClock k = new VectorClock();
+        assertEquals(0, k.offsetEntryCount(), "an empty clock has no offset entries");
+        assertEquals(0, k.sequenceEntryCount(), "an empty clock has no sequence entries");
+        k.advanceTo(C1, 42);
+        k.advanceTo(C2, 7);
+        k.advanceSeq(C1, UUID.nameUUIDFromBytes("p1".getBytes()), 3);
+        assertEquals(2, k.offsetEntryCount(), "each channel's watermark counts once");
+        assertEquals(1, k.sequenceEntryCount(), "each (channel, sender) claim counts once");
+    }
+
     /** Watermarks never regress: advanceTo and mergeMax are max-folds. */
     @Test
     void advanceNeverLowers() {

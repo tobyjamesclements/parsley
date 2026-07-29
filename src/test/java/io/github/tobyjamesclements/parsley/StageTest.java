@@ -391,6 +391,100 @@ class StageTest {
         }
     }
 
+    /** The value of the parsley metric {@code name}; the task-level one when {@code topic} is null. */
+    private static double parsleyMetric(TopologyTestDriver driver, String name, String topic) {
+        List<Double> matches = driver.metrics().entrySet().stream()
+                .filter(e -> e.getKey().group().equals(StageMetrics.GROUP))
+                .filter(e -> e.getKey().name().equals(name))
+                .filter(e -> topic == null ? !e.getKey().tags().containsKey("topic")
+                        : topic.equals(e.getKey().tags().get("topic")))
+                .map(e -> ((Number) e.getValue().metricValue()).doubleValue())
+                .toList();
+        assertEquals(1, matches.size(),
+                "expected exactly one metric named " + name + " for topic " + topic);
+        return matches.get(0);
+    }
+
+    /** The punctuator samples hold depth, and delivered batches accumulate into the total. */
+    @Test
+    void metricsReportHoldDepthAndDeliveries() {
+        try (TopologyTestDriver driver = statelessDriver()) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+
+            var headers = new RecordHeaders();
+            CausalHeaders.write(headers, VectorClock.of(Stage.testChannel("t1", 0), 0));
+            t2.pipeInput(new TestRecord<>("k", "b", headers, 2000L));
+            driver.advanceWallClockTime(Duration.ofMillis(500));
+            assertEquals(1.0, parsleyMetric(driver, "records-held", null),
+                    "the held record must show on the depth gauge");
+            assertEquals(0.0, parsleyMetric(driver, "records-delivered-total", null),
+                    "nothing has passed the gate yet");
+
+            t1.pipeInput("k", "a", 1000L);
+            assertEquals(2.0, parsleyMetric(driver, "records-delivered-total", null),
+                    "the cause and the released record must both count as delivered");
+            driver.advanceWallClockTime(Duration.ofMillis(500));
+            assertEquals(0.0, parsleyMetric(driver, "records-held", null),
+                    "the depth gauge must drop back to zero after release");
+        }
+    }
+
+    /** Per-topic gauges record only at the DEBUG metrics recording level, tagged by topic. */
+    @Test
+    void perTopicGaugesRecordAtDebugLevel() {
+        Stage stage = Stage.named("stage")
+                .on(T1, m -> List.of(T3.send(m.key(), "out:" + m.value())))
+                .on(T2, m -> List.of(T3.send(m.key(), "out:" + m.value())))
+                .into(T3)
+                .build();
+        Properties props = props("parsley-ttd-debug");
+        props.put(StreamsConfig.METRICS_RECORDING_LEVEL_CONFIG, "DEBUG");
+        try (TopologyTestDriver driver =
+                     new TopologyTestDriver(Parsley.of(stage).testTopology(), props)) {
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+
+            var headers = new RecordHeaders();
+            CausalHeaders.write(headers, VectorClock.of(Stage.testChannel("t1", 0), 0));
+            t2.pipeInput(new TestRecord<>("k", "b", headers, 2000L));
+            driver.advanceWallClockTime(Duration.ofMillis(500));
+            assertEquals(1.0, parsleyMetric(driver, "records-held", "t2"),
+                    "the holding channel's per-topic gauge must record");
+            assertEquals(0.0, parsleyMetric(driver, "records-held", "t1"),
+                    "the idle channel's per-topic gauge must read zero");
+        }
+    }
+
+    /** A failing truncation sweep skips its cycle and counts on the skip total. */
+    @Test
+    void truncationSweepFailureCounts() {
+        Stage stage = Stage.named("stage")
+                .on(T1, m -> List.of())
+                .truncationInterval(Duration.ofSeconds(1))
+                .build();
+        BrokerOffsets failing = new BrokerOffsets() {
+            @Override
+            public Map<Channel, Long> endOffsets(Set<UUID> sinkTopics) {
+                return Map.of();
+            }
+
+            @Override
+            public EarliestOffsets earliestOffsets(Set<Channel> channels) {
+                throw new IllegalStateException("log-start resolution failed");
+            }
+        };
+        Topology t = new Topology();
+        stage.addTo(t, TEST_IDS, (ids, sinks) -> failing, true);
+        try (TopologyTestDriver driver = new TopologyTestDriver(t, props("parsley-ttd-sweep"))) {
+            driver.advanceWallClockTime(Duration.ofSeconds(1));
+            assertEquals(1.0, parsleyMetric(driver, "truncation-sweeps-skipped-total", null),
+                    "the failed sweep must count once and must not fail the task");
+        }
+    }
+
     /** The truncation punctuator drops claims retention has made globally stable. */
     @Test
     void truncationSweepDropsStableUpstreamClaims() {

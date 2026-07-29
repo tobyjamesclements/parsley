@@ -83,6 +83,8 @@ final class CausalNode implements DeliveryProtocol {
     private final Map<Channel, Long> baselineSeq = new HashMap<>();
     /** Highest delivered sequence and its offset, per consumed channel and sender (persisted). */
     private final Map<Channel, Map<UUID, SeqMark>> deliveredSeq = new HashMap<>();
+    /** Memory-only: records fed at or below the frontier and discarded, since init. */
+    private long replaysSkipped;
 
     CausalNode(NodeConfig config, StateStore store, BrokerOffsets broker) {
         this.config = config;
@@ -121,6 +123,7 @@ final class CausalNode implements DeliveryProtocol {
         }
         long f = frontierOf(c);
         if (r.offset() <= f) {
+            replaysSkipped++;
             return List.of(); // replay of an already-covered offset (rescope growth refetch)
         }
 
@@ -347,6 +350,45 @@ final class CausalNode implements DeliveryProtocol {
         }
         if (!stability.isEmpty()) truncate(stability);
         LOG.debug("{}: truncation sweep applied stability bound {}", config.nodeId(), stability);
+    }
+
+    // ------------------------------------------------------------------ observation
+
+    /** The two claim-kind widths of the stamp-side clock. */
+    record StampWidth(int offsetEntries, int sequenceEntries) {}
+
+    /** Held records per consumed channel; a channel with an empty hold queue is absent. */
+    Map<Channel, Integer> heldCounts() {
+        Map<Channel, Integer> out = new HashMap<>();
+        queues.forEach((c, q) -> {
+            if (!q.held.isEmpty()) out.put(c, q.held.size());
+        });
+        return out;
+    }
+
+    /** The offset of each non-empty hold queue's head, the record gating its channel. */
+    Map<Channel, Long> headOffsets() {
+        Map<Channel, Long> out = new HashMap<>();
+        queues.forEach((c, q) -> {
+            Held h = q.held.peekFirst();
+            if (h != null) out.put(c, h.offset());
+        });
+        return out;
+    }
+
+    /** Records fed at or below the frontier and discarded, since init (rescope-growth refetch). */
+    long replaysSkipped() {
+        return replaysSkipped;
+    }
+
+    /**
+     * The width of the merged stamp-side clock, the claims {@link #prepareSend} stamps before
+     * normalisation and the fresh self-claims. Growth against a steady workload means
+     * truncation is not keeping up with the clock's footprint.
+     */
+    StampWidth stampWidth() {
+        VectorClock vt = vectorTime();
+        return new StampWidth(vt.offsetEntryCount(), vt.sequenceEntryCount());
     }
 
     // ------------------------------------------------------------------ state plumbing
