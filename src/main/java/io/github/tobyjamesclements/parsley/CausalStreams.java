@@ -18,15 +18,23 @@ import java.util.Set;
  * {@link Parsley#streams} and started here. The surface is an allowlist — each member is
  * present because it is causally inert — and there is no accessor to the underlying
  * {@code KafkaStreams}, ever: any single escape hatch would reintroduce the full inherited
- * surface, parts of which can violate causality (pausing one instance freezes its release
- * punctuator and causally stalls other instances; the protocol stores must not be handed
- * out).
+ * surface. The withheld members are withheld for different reasons, each with its
+ * operational alternative:
  *
- * <p>Absent by design, with the operational alternative: {@code pause()}/{@code resume()}
- * (stop the instance or scale by instances), {@code store()} and interactive queries (the
- * protocol and fold stores are internal; observe through sinks), thread add/remove
- * (replace the instance), {@code cleanUp()} (delete the state directory of a stopped
- * instance).
+ * <ul>
+ * <li>{@code store()} and interactive queries are the causal hazard. The protocol store is
+ * internal, and under exactly-once semantics a local store holds the writes of the open
+ * transaction until commit or abort, so a query can observe fold state that is not a
+ * function of any delivered history. Observe state through sinks.</li>
+ * <li>{@code pause()}/{@code resume()} are a liveness footgun, not a safety hazard. Pausing
+ * one instance freezes its release punctuator, and every instance waiting on its outputs
+ * stalls with it — a fleet-wide stall commanded from one handle. Stop the instance, or
+ * scale by instances.</li>
+ * <li>Thread add/remove and {@code cleanUp()} are causally inert and withheld only to keep
+ * the surface minimal: thread-count changes are scaling, expressed by instances, and
+ * cleanup equals deleting the state directory of a stopped instance. A minimal surface can
+ * grow compatibly; a regretted member cannot be removed compatibly.</li>
+ * </ul>
  */
 public final class CausalStreams implements AutoCloseable {
 

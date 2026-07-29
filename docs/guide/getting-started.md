@@ -110,9 +110,10 @@ and resolves topic identity and sink end offsets through an admin client built f
 properties. A declared sink must exist before the application starts: init fails loudly
 rather than run with own-output claims silently off. The returned `CausalStreams` is a
 curated allowlist over the Kafka Streams runtime — lifecycle, state, listeners, metrics,
-lag — with no accessor to the underlying instance; members that could violate causality
-(pausing an instance freezes the release of held records fleet-wide, handing out the
-protocol stores) are absent by design. `metrics()` includes the stage's own gauges and
+lag — with no accessor to the underlying instance. The withheld members are absent for
+stated reasons, on the class Javadoc member by member: interactive queries can observe
+uncommitted transactional state, pausing an instance freezes the release of held records
+fleet-wide, and the rest duplicates what scaling by instances already expresses. `metrics()` includes the stage's own gauges and
 counters in the `parsley-metrics` group, listed in the
 [metrics reference](../reference/metrics.md).
 

@@ -127,9 +127,11 @@ holds the formal versions; the links under each item lead to the reasoning.
   the LSO, so it resolves
   ([the sequence-claim caveat](../foundations/liveness.md#the-sequence-claim-caveat-late-joiners)).
 - **The runtime handle is an allowlist.** `CausalStreams` exposes lifecycle, listeners,
-  state, metrics, and lag, and withholds members that can violate causality; the withheld
-  members and their operational alternatives are on its Javadoc and in
-  [getting started](getting-started.md#what-the-runtime-wires-for-you).
+  state, metrics, and lag, and withholds the rest: interactive queries because they can
+  observe uncommitted transactional state, pause because it stalls the fleet from one
+  handle, and the members that duplicate scaling by instances because a minimal surface can
+  grow compatibly. The per-member reasons and operational alternatives are on its Javadoc
+  and in [getting started](getting-started.md#what-the-runtime-wires-for-you).
 - **Logging is metadata-only.** Parsley logs through SLF4J and ships no binding; logger
   names are the class names under `io.github.tobyjamesclements.parsley`. INFO covers
   lifecycle: application assembly, task and node initialisation with the source-topic to
