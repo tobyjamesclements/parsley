@@ -80,7 +80,8 @@ holds the formal versions; the links under each item lead to the reasoning.
   early. The fail-closed conditions are loud task failures: an undecodable clock, sender, or
   seq header; an emission to an undeclared sink; a missing sink at init; a topology hosted
   outside `Parsley.streams`. A failed send aborts with its transaction, taking every claim
-  on it along, and the retry refetches.
+  on it along, and the retry refetches. What a failure in your own logic does, and how to
+  model domain failures instead, is [error handling](error-handling.md).
 - **Held records cost disk, not heap.** Hold queues are unbounded and live in the state
   store and its changelog, so a lagging cause channel grows state rather than exhausting
   memory, and a wedge is a loud stall, never a silent loss

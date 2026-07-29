@@ -20,6 +20,8 @@ claims.
 - **Failure is loud.** A codec that cannot decode should throw, not guess: an exception from
   `decode` or `encode` fails the task, the transaction aborts, and the retry refetches. A
   lenient codec that returns a placeholder converts a wiring bug into silent data corruption.
+  For bytes whose malformedness is a domain fact rather than a wiring bug, see
+  [decoding failure you can route](#decoding-failure-you-can-route).
 
 ## Built-in codecs and writing your own
 
@@ -59,6 +61,46 @@ static <T> Codec<T> json(ObjectMapper mapper, Class<T> type) {
             });
 }
 ```
+
+## Decoding failure you can route
+
+The codec contract's loud-failure rule is about wiring bugs: between your own producers and
+consumers, undecodable bytes mean a broken deployment, and failing the task is the correct
+response. A source topic whose producers you do not control is different — there, malformed
+bytes can be a fact of the domain, and they arrive before user logic runs, so no handler
+can catch them. The escape is to make the codec itself total over a sum type that keeps the
+failure explicit:
+
+```java
+sealed interface Decoded<T> {
+    record Ok<T>(T value) implements Decoded<T> {}
+    record Malformed<T>(byte[] raw, String reason) implements Decoded<T> {}
+}
+
+static <T> Codec<Decoded<T>> attempting(Codec<T> codec) {
+    return Codec.of(
+            d -> switch (d) {
+                case Decoded.Ok<T> ok -> codec.encode(ok.value());
+                case Decoded.Malformed<T> m -> m.raw();
+            },
+            b -> {
+                try {
+                    return new Decoded.Ok<>(codec.decode(b));
+                } catch (RuntimeException e) {
+                    return new Decoded.Malformed<>(b, e.toString());
+                }
+            });
+}
+```
+
+The handler then receives `Decoded<T>` and routes the `Malformed` case to a declared error
+sink, in causal order like every other emission — see
+[domain failures are data](error-handling.md#domain-failures-are-data). This is not the
+lenient placeholder the contract forbids: a placeholder pretends decoding succeeded and
+corrupts silently, while the sum type forces every consumer of the value to decide the
+failure case in the type system. Keep total codecs on values from foreign producers only;
+a topic your own stages write should keep the loud contract, because there malformed bytes
+are a bug you want to fail on.
 
 ## Key codecs are identity
 
