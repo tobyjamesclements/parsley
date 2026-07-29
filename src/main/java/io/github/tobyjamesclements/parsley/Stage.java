@@ -60,6 +60,13 @@ public final class Stage {
     /** The per-key state declaration of a stateful stage, erased. */
     private record StateSpec(Codec<Object> codec, Supplier<Object> initial) {}
 
+    /**
+     * The tick declaration: the emission interval and the logic, erased. {@code stateful} is
+     * whether the logic folds over the tick state slot; a {@link TickHandler} on a stateful
+     * stage leaves the slot untouched.
+     */
+    private record TickSpec(Duration interval, TickFold<Object> fold, boolean stateful) {}
+
     /** Creates the per-task broker-offsets view; production uses an admin client. */
     interface BrokerOffsetsProvider {
         BrokerOffsets create(TopicIds topicIds, Set<String> sinkTopics);
@@ -69,14 +76,16 @@ public final class Stage {
     private final Map<String, Source> sources;
     private final Map<String, Topic<?, ?>> sinks;
     private final StateSpec state;
+    private final TickSpec ticks;
     private final Duration truncationInterval;
 
     private Stage(String name, Map<String, Source> sources, Map<String, Topic<?, ?>> sinks,
-                  StateSpec state, Duration truncationInterval) {
+                  StateSpec state, TickSpec ticks, Duration truncationInterval) {
         this.name = name;
         this.sources = Map.copyOf(sources);
         this.sinks = Map.copyOf(sinks);
         this.state = state;
+        this.ticks = ticks;
         this.truncationInterval = truncationInterval;
     }
 
@@ -89,6 +98,7 @@ public final class Stage {
         private final String name;
         private final Map<String, Source> sources = new LinkedHashMap<>();
         private final Map<String, Topic<?, ?>> sinks = new LinkedHashMap<>();
+        private TickSpec ticks;
         private Duration truncationInterval = Duration.ofMinutes(10);
 
         private Builder(String name) {
@@ -127,6 +137,28 @@ public final class Stage {
             return this;
         }
 
+        /**
+         * Declares ticks: the runtime emits one stamped record per interval to the stage's
+         * own tick topic ({@code parsley-<name>-ticks}, which must exist with the same
+         * partition count as the stage's widest source topic), consumes it back through the
+         * gate, and hands it to {@code logic} as a {@link Tick}. Callable once.
+         */
+        public Builder ticks(Duration interval, TickHandler logic) {
+            this.ticks = statelessTickSpec(interval, logic, ticks);
+            return this;
+        }
+
+        private static TickSpec statelessTickSpec(Duration interval, TickHandler logic,
+                                                  TickSpec existing) {
+            if (existing != null) {
+                throw new IllegalStateException("ticks already declared");
+            }
+            if (interval.isZero() || interval.isNegative()) {
+                throw new IllegalArgumentException("tick interval must be positive: " + interval);
+            }
+            return new TickSpec(interval, (s, tick) -> new Step<>(s, logic.onTick(tick)), false);
+        }
+
         /** How often the log-start truncation sweep runs. Default ten minutes. */
         public Builder truncationInterval(Duration interval) {
             this.truncationInterval = interval;
@@ -135,7 +167,7 @@ public final class Stage {
 
         public Stage build() {
             if (sources.isEmpty()) throw new IllegalStateException("no sources declared");
-            return new Stage(name, sources, sinks, null, truncationInterval);
+            return new Stage(name, sources, sinks, null, ticks, truncationInterval);
         }
     }
 
@@ -172,6 +204,32 @@ public final class Stage {
             return this;
         }
 
+        /**
+         * Declares ticks folded over the stage's tick state: one reserved per-partition slot
+         * of the stage's state type, distinct from every per-key slot. The runtime emits one
+         * stamped record per interval to the stage's own tick topic
+         * ({@code parsley-<name>-ticks}, which must exist with the same partition count as
+         * the stage's widest source topic), consumes it back through the gate, and folds it
+         * with {@code logic}. Callable once.
+         */
+        @SuppressWarnings("unchecked")
+        public Stateful<S> ticks(Duration interval, TickFold<S> logic) {
+            if (base.ticks != null) {
+                throw new IllegalStateException("ticks already declared");
+            }
+            if (interval.isZero() || interval.isNegative()) {
+                throw new IllegalArgumentException("tick interval must be positive: " + interval);
+            }
+            base.ticks = new TickSpec(interval, (TickFold<Object>) logic, true);
+            return this;
+        }
+
+        /** Declares ticks handled by stateless logic; the tick state slot is untouched. */
+        public Stateful<S> ticks(Duration interval, TickHandler logic) {
+            base.ticks(interval, logic);
+            return this;
+        }
+
         /** How often the log-start truncation sweep runs. Default ten minutes. */
         public Stateful<S> truncationInterval(Duration interval) {
             base.truncationInterval(interval);
@@ -180,7 +238,8 @@ public final class Stage {
 
         public Stage build() {
             if (base.sources.isEmpty()) throw new IllegalStateException("no sources declared");
-            return new Stage(base.name, base.sources, base.sinks, state, base.truncationInterval);
+            return new Stage(base.name, base.sources, base.sinks, state, base.ticks,
+                    base.truncationInterval);
         }
     }
 
@@ -208,8 +267,16 @@ public final class Stage {
         return "parsley-" + name + "-sink-" + topic;
     }
 
+    String tickTopicName() {
+        return "parsley-" + name + "-ticks";
+    }
+
+    /** All topics the stage's source node consumes, the tick topic included when declared. */
     Set<String> sourceTopics() {
-        return sources.keySet();
+        if (ticks == null) return sources.keySet();
+        Set<String> all = new HashSet<>(sources.keySet());
+        all.add(tickTopicName());
+        return all;
     }
 
     /** The channel the test wiring resolves for a topic-partition. */
@@ -245,9 +312,30 @@ public final class Stage {
      */
     void addTo(Topology t, TopicIds topicIds, BrokerOffsetsProvider brokerOffsets, boolean testWired) {
         t.addSource(sourceNode(), new ByteArrayDeserializer(), new ByteArrayDeserializer(),
-                sources.keySet().toArray(String[]::new));
+                sourceTopics().toArray(String[]::new));
         t.addProcessor(processorNode(), new AdapterSupplier(topicIds, brokerOffsets, testWired),
                 sourceNode());
+        if (ticks != null) {
+            // A task emits ticks to its own partition, so the tick topic must cover every
+            // task: fewer partitions than the widest source and high tasks cannot tick; more
+            // and Streams creates ghost tasks consuming nothing but their tick partition.
+            int tickPartitions = topicIds.resolve(tickTopicName()).partitions();
+            int taskPartitions = sources.keySet().stream()
+                    .mapToInt(topic -> topicIds.resolve(topic).partitions()).max().orElseThrow();
+            if (tickPartitions != taskPartitions) {
+                throw new IllegalStateException("tick topic " + tickTopicName() + " has "
+                        + tickPartitions + " partitions but the stage's widest source has "
+                        + taskPartitions + "; create it with exactly that count");
+            }
+            // The tick's destination is chosen before stamping (the stamp names the
+            // channel), so the record carries it and the sink partitioner reads it back.
+            org.apache.kafka.streams.processor.StreamPartitioner<byte[], byte[]> partitioner =
+                    (topic, key, value, numPartitions) ->
+                            Optional.of(Set.of(tickPartition(key)));
+            t.addSink(sinkNode(tickTopicName()), tickTopicName(),
+                    new ByteArraySerializer(), new ByteArraySerializer(),
+                    partitioner, processorNode());
+        }
         for (String sink : sinks.keySet()) {
             // The adapter partitions before stamping (sequence claims are per channel), so the
             // sink must land each record on the partition the adapter chose. The partitioner
@@ -272,6 +360,18 @@ public final class Stage {
         if (key == null) return 0;
         return org.apache.kafka.common.utils.Utils.toPositive(
                 org.apache.kafka.common.utils.Utils.murmur2(key)) % numPartitions;
+    }
+
+    /**
+     * Decodes a tick record's destination partition from its key: the emitting task's own
+     * partition as a big-endian int, written at the stamping site so the sink partitioner
+     * lands the tick back on the emitting task's channel.
+     */
+    static int tickPartition(byte[] key) {
+        if (key == null || key.length != 4) {
+            throw new IllegalStateException("malformed tick key: expected a 4-byte partition");
+        }
+        return java.nio.ByteBuffer.wrap(key).getInt();
     }
 
     private final class AdapterSupplier implements ProcessorSupplier<byte[], byte[], byte[], byte[]> {
@@ -318,6 +418,7 @@ public final class Stage {
         private CausalNode node;
         private StageMetrics metrics;
         private KeyValueStore<Bytes, byte[]> foldStore;
+        private Channel tickChannel;
         private final Map<String, Channel> channelByTopic = new HashMap<>();
         private final Map<Channel, String> topicByChannel = new HashMap<>();
         /** Highest offset fed through {@code onRecord} per channel, this task incarnation. */
@@ -346,7 +447,7 @@ public final class Stage {
             }
 
             Set<Channel> consumed = new HashSet<>();
-            for (String topic : sources.keySet()) {
+            for (String topic : sourceTopics()) {
                 Channel c = new Channel(topicIds.resolve(topic).id(), taskPartition);
                 consumed.add(c);
                 channelByTopic.put(topic, c);
@@ -356,8 +457,15 @@ public final class Stage {
                 // incarnation's polls capture may feed the sweep.
                 Positions.forCurrentThread().remove(new TopicPartition(topic, taskPartition));
             }
+            Set<String> sinkTopics = new HashSet<>(sinks.keySet());
+            if (ticks != null) {
+                tickChannel = channelByTopic.get(tickTopicName());
+                // The tick channel is both consumed and produced: the end-offset seed must
+                // cover it so a restart's stamps still claim the prior incarnation's ticks.
+                sinkTopics.add(tickTopicName());
+            }
             Set<UUID> sinkIds = new HashSet<>();
-            for (String topic : sinks.keySet()) {
+            for (String topic : sinkTopics) {
                 sinkIds.add(topicIds.resolve(topic).id());
             }
 
@@ -365,7 +473,7 @@ public final class Stage {
             if (state != null) {
                 foldStore = context.getStateStore(foldStoreName());
             }
-            BrokerOffsets offsets = brokerOffsets.create(topicIds, sinks.keySet());
+            BrokerOffsets offsets = brokerOffsets.create(topicIds, sinkTopics);
             // Sender identity must survive topology evolution: task ids embed the sub-topology
             // index, which renumbers when stages are added, so derive from the user-stable
             // stage name and the partition instead.
@@ -386,6 +494,9 @@ public final class Stage {
                         sweepPositions();
                         metrics.sample(ts);
                     });
+            if (ticks != null) {
+                context.schedule(ticks.interval(), PunctuationType.WALL_CLOCK_TIME, this::emitTick);
+            }
             // The coordination-free truncation driver: log starts are a true global stability
             // bound (retention-deleted records sit below every reachable baseline). A failed
             // sweep skips a cycle; it must never fail the task for garbage collection.
@@ -444,9 +555,27 @@ public final class Stage {
             }
         }
 
+        /**
+         * Emits one tick: stamped at the existing door with the task's current clock (a
+         * consistent cut of its consumed history) and forwarded to the tick sink, which
+         * routes it back to this task's own partition via the key. The record commits with
+         * the current transaction and returns through the gate like any other record.
+         */
+        private void emitTick(long ts) {
+            var headers = new RecordHeaders();
+            CausalHeaders.write(headers, node.prepareSend(tickChannel));
+            byte[] key = java.nio.ByteBuffer.allocate(4).putInt(taskPartition).array();
+            context.forward(new Record<>(key, null, ts, headers), sinkNode(tickTopicName()));
+            metrics.recordTickEmitted();
+        }
+
         private void deliverAll(List<Delivery> deliveries) {
             if (!deliveries.isEmpty()) metrics.recordDelivered(deliveries.size());
             for (Delivery d : deliveries) {
+                if (d.channel().equals(tickChannel)) {
+                    deliverTick(d);
+                    continue;
+                }
                 String topic = topicByChannel.get(d.channel());
                 Source source = sources.get(topic);
                 Object key = d.key() == null ? null : source.topic().keyCodec().decode(d.key());
@@ -485,6 +614,33 @@ public final class Stage {
             prefixed[0] = 1;
             System.arraycopy(rawKey, 0, prefixed, 1, rawKey.length);
             return Bytes.wrap(prefixed);
+        }
+
+        /** The reserved tick state slot, in its own namespace beside the key prefixes. */
+        private static final Bytes TICK_STATE_KEY = Bytes.wrap(new byte[] {2});
+
+        /**
+         * Delivers one tick to the stage's tick logic; a stateful tick fold steps the
+         * reserved per-partition slot exactly as a key fold steps its key's state.
+         */
+        private void deliverTick(Delivery d) {
+            Tick tick = new Tick(d.timestamp());
+            Step<Object> step;
+            if (ticks.stateful()) {
+                byte[] prior = foldStore.get(TICK_STATE_KEY);
+                Object before = prior == null ? state.initial().get() : state.codec().decode(prior);
+                step = ticks.fold().apply(before, tick);
+                if (step.state() == null) {
+                    foldStore.delete(TICK_STATE_KEY);
+                } else {
+                    foldStore.put(TICK_STATE_KEY, state.codec().encode(step.state()));
+                }
+            } else {
+                step = ticks.fold().apply(null, tick);
+            }
+            for (Emission emission : step.emissions()) {
+                apply(emission, d.timestamp());
+            }
         }
 
         /**

@@ -15,8 +15,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -483,6 +485,198 @@ class StageTest {
             assertEquals(1.0, parsleyMetric(driver, "truncation-sweeps-skipped-total", null),
                     "the failed sweep must count once and must not fail the task");
         }
+    }
+
+    /**
+     * A tick is emitted at the interval as a stamped record on the stage's own tick topic,
+     * loops back through the gate, and is delivered to the tick logic — whose emissions land
+     * on the declared sink. The tick record's stamp claims the task's delivered history.
+     */
+    @Test
+    void tickEmitsStampedRecordAndDeliversToLogic() {
+        Stage stage = Stage.named("ticker")
+                .on(T1, m -> List.of(T3.send(m.key(), "out:" + m.value())))
+                .ticks(Duration.ofSeconds(1),
+                        tick -> List.of(T3.send("tick", "fired@" + tick.timestamp())))
+                .into(T3)
+                .build();
+        try (TopologyTestDriver driver = new TopologyTestDriver(
+                Parsley.of(stage).testTopology(), props("parsley-tick-ttd"),
+                Instant.ofEpochMilli(0L))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> t3 =
+                    driver.createOutputTopic("t3", new StringDeserializer(), new StringDeserializer());
+            TestOutputTopic<byte[], byte[]> tickTopic = driver.createOutputTopic(
+                    "parsley-ticker-ticks",
+                    new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
+                    new org.apache.kafka.common.serialization.ByteArrayDeserializer());
+
+            t1.pipeInput("k", "a", 1000L);
+            assertEquals(List.of("out:a"),
+                    t3.readRecordsToList().stream().map(TestRecord::value).toList(),
+                    "the data record must deliver before any tick fires");
+
+            driver.advanceWallClockTime(Duration.ofSeconds(1));
+
+            var ticks = tickTopic.readRecordsToList();
+            assertEquals(1, ticks.size(), "one interval, one tick record");
+            assertEquals(0, Stage.tickPartition(ticks.get(0).key()),
+                    "the tick key must carry the emitting task's own partition");
+            VectorClock stamp = CausalHeaders.read(ticks.get(0).headers());
+            assertNotNull(stamp, "the tick must carry a dependency clock");
+            assertEquals(0L, stamp.get(Stage.testChannel("t1", 0)),
+                    "the tick's stamp must claim the task's delivered history");
+            assertNotNull(CausalHeaders.readSender(ticks.get(0).headers()),
+                    "the tick must carry the task's sender tag");
+
+            assertEquals(List.of("fired@1000"),
+                    t3.readRecordsToList().stream().map(TestRecord::value).toList(),
+                    "the looped-back tick must be delivered to the tick logic");
+            assertEquals(1.0, parsleyMetric(driver, "ticks-emitted-total", null),
+                    "the emitted tick must count on the task's tick total");
+        }
+    }
+
+    /**
+     * A stateful tick fold steps the reserved per-partition tick slot: distinct from the
+     * null key's slot, accumulated across ticks, deleted by a null step state, and resolved
+     * to the initial value again afterwards.
+     */
+    @Test
+    void tickFoldStepsTickStateApartFromKeyState() {
+        Stage stage = Stage.named("tickfold")
+                .state(Codec.int64(), () -> 0L)
+                .on(T1, (Long n, Message<String, String> m) ->
+                        Step.of(n + 1, T3.send(m.key(), "n=" + (n + 1))))
+                .ticks(Duration.ofSeconds(1), (Long n, Tick tick) -> (n + 1) == 2
+                        ? Step.of(null, T3.send("tick", "t=2"))
+                        : Step.of(n + 1, T3.send("tick", "t=" + (n + 1))))
+                .into(T3)
+                .build();
+        try (TopologyTestDriver driver = new TopologyTestDriver(
+                Parsley.of(stage).testTopology(), props("parsley-tickfold-ttd"),
+                Instant.ofEpochMilli(0L))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> t3 =
+                    driver.createOutputTopic("t3", new StringDeserializer(), new StringDeserializer());
+
+            // The null-key record folds under the null-key slot; if the tick slot collided
+            // with it, the first tick would see 1 and step straight to the delete branch.
+            t1.pipeInput(null, "x", 1000L);
+            driver.advanceWallClockTime(Duration.ofSeconds(1)); // t=1 (from initial)
+            driver.advanceWallClockTime(Duration.ofSeconds(1)); // t=2, slot deleted
+            driver.advanceWallClockTime(Duration.ofSeconds(1)); // t=1 (initial again)
+            t1.pipeInput(null, "y", 1001L);
+
+            assertEquals(List.of("n=1", "t=1", "t=2", "t=1", "n=2"),
+                    t3.readRecordsToList().stream().map(TestRecord::value).toList(),
+                    "the tick slot must accumulate, delete, and reset apart from the null key's slot");
+        }
+    }
+
+    /**
+     * A tick's stamp merges claims advertised by held records, so a tick emitted while a
+     * record is held on an unresolved dependency is itself gated — delay-only — and released
+     * in causal order once the dependency arrives.
+     */
+    @Test
+    void tickHeldBehindAdvertisedClaimReleasesInOrder() {
+        Stage stage = Stage.named("gated")
+                .on(T1, m -> List.of(T3.send(m.key(), "out:" + m.value())))
+                .on(T2, m -> List.of(T3.send(m.key(), "out:" + m.value())))
+                .ticks(Duration.ofSeconds(1),
+                        tick -> List.of(T3.send("tick", "tick@" + tick.timestamp())))
+                .into(T3)
+                .build();
+        try (TopologyTestDriver driver = new TopologyTestDriver(
+                Parsley.of(stage).testTopology(), props("parsley-tickgate-ttd"),
+                Instant.ofEpochMilli(0L))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestInputTopic<String, String> t2 =
+                    driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> t3 =
+                    driver.createOutputTopic("t3", new StringDeserializer(), new StringDeserializer());
+            TestOutputTopic<byte[], byte[]> tickTopic = driver.createOutputTopic(
+                    "parsley-gated-ticks",
+                    new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
+                    new org.apache.kafka.common.serialization.ByteArrayDeserializer());
+
+            t1.pipeInput("k", "a", 1000L);
+            assertEquals(1, t3.readRecordsToList().size(), "the plain record delivers");
+
+            // Held on t2: claims t1@1, which has not arrived.
+            var headers = new RecordHeaders();
+            CausalHeaders.write(headers, VectorClock.of(Stage.testChannel("t1", 0), 1));
+            t2.pipeInput(new TestRecord<>("k", "b", headers, 2000L));
+
+            driver.advanceWallClockTime(Duration.ofSeconds(1));
+            assertEquals(1, tickTopic.readRecordsToList().size(),
+                    "the tick is emitted regardless of the held record");
+            assertTrue(t3.readRecordsToList().isEmpty(),
+                    "the tick inherits the advertised t1@1 claim and must itself be gated");
+
+            // The dependency arrives: the cause, the held record, and the tick all release.
+            t1.pipeInput("k", "c", 1001L);
+            var out = t3.readRecordsToList().stream().map(TestRecord::value).toList();
+            assertEquals(3, out.size(), "the cause, the held record, and the tick must all deliver");
+            assertEquals("out:c", out.get(0), "the cause must deliver first");
+            assertEquals(Set.of("out:b", "tick@1000"), Set.copyOf(out.subList(1, 3)),
+                    "the held record and the gated tick must both release after their cause");
+        }
+    }
+
+    /** Ticks are declared once, with a positive interval, in either builder phase. */
+    @Test
+    void ticksDeclaredOnceWithPositiveInterval() {
+        TickHandler none = tick -> List.of();
+        assertThrows(IllegalStateException.class,
+                () -> Stage.named("s").on(T1, m -> List.of())
+                        .ticks(Duration.ofSeconds(1), none).ticks(Duration.ofSeconds(1), none),
+                "a second stateless tick declaration must be rejected");
+        assertThrows(IllegalStateException.class,
+                () -> Stage.named("s").state(Codec.int64(), () -> 0L)
+                        .on(T1, (Long n, Message<String, String> m) -> Step.of(n))
+                        .ticks(Duration.ofSeconds(1), (Long n, Tick t) -> Step.of(n))
+                        .ticks(Duration.ofSeconds(1), (Long n, Tick t) -> Step.of(n)),
+                "a second stateful tick declaration must be rejected");
+        assertThrows(IllegalArgumentException.class,
+                () -> Stage.named("s").on(T1, m -> List.of()).ticks(Duration.ZERO, none),
+                "a zero interval must be rejected");
+        assertThrows(IllegalArgumentException.class,
+                () -> Stage.named("s").on(T1, m -> List.of()).ticks(Duration.ofSeconds(-1), none),
+                "a negative interval must be rejected");
+    }
+
+    /** Assembly rejects a tick topic whose partition count differs from the widest source. */
+    @Test
+    void tickTopicPartitionsMustMatchWidestSource() {
+        Stage stage = Stage.named("mismatch")
+                .on(T1, m -> List.of())
+                .ticks(Duration.ofSeconds(1), tick -> List.of())
+                .build();
+        TopicIds ids = topic -> new TopicIds.Resolved(
+                Stage.testChannel(topic, 0).topicId(), topic.startsWith("parsley-") ? 1 : 2);
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> stage.addTo(new Topology(), ids, (i, s) -> NO_OFFSETS, true),
+                "a tick topic narrower than the widest source must fail assembly");
+        assertTrue(e.getMessage().contains("partitions"),
+                "the failure must name the partition mismatch, got: " + e.getMessage());
+    }
+
+    /** The tick sink partitioner reads the emitting task's partition back from the key. */
+    @Test
+    void tickPartitionDecodesTheEmittingTask() {
+        assertEquals(3, Stage.tickPartition(ByteBuffer.allocate(4).putInt(3).array()),
+                "the four-byte big-endian key must decode to the emitting partition");
+        assertEquals(0, Stage.tickPartition(ByteBuffer.allocate(4).putInt(0).array()),
+                "partition zero must round-trip");
+        assertThrows(IllegalStateException.class, () -> Stage.tickPartition(null),
+                "a missing tick key must fail closed");
+        assertThrows(IllegalStateException.class, () -> Stage.tickPartition(new byte[] {1, 2}),
+                "a malformed tick key must fail closed");
     }
 
     /** The truncation punctuator drops claims retention has made globally stable. */

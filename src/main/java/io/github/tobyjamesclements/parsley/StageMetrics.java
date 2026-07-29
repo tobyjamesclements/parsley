@@ -41,6 +41,7 @@ final class StageMetrics {
     private final Sensor recordsDelivered;
     private final Sensor replaysSkipped;
     private final Sensor sweepsSkipped;
+    private final Sensor ticksEmitted;
     private final Sensor stampOffsetEntries;
     private final Sensor stampSequenceEntries;
     private final Map<Channel, Sensor> heldByChannel = new HashMap<>();
@@ -88,6 +89,8 @@ final class StageMetrics {
                         + " covered offsets.", tags);
         sweepsSkipped = total(prefix, "truncation-sweeps-skipped-total",
                 "The total number of truncation sweeps that failed and skipped their cycle.", tags);
+        ticksEmitted = total(prefix, "ticks-emitted-total",
+                "The total number of tick records this task has emitted to its tick channel.", tags);
 
         topicByChannel.forEach((c, topic) -> {
             Map<String, String> topicTags = new LinkedHashMap<>(tags);
@@ -126,6 +129,11 @@ final class StageMetrics {
     /** Records one failed truncation sweep. */
     void recordSweepSkipped() {
         sweepsSkipped.record(1);
+    }
+
+    /** Records one emitted tick. */
+    void recordTickEmitted() {
+        ticksEmitted.record(1);
     }
 
     /**

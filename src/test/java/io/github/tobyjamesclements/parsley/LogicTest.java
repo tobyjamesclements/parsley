@@ -174,6 +174,18 @@ class LogicTest {
                 "an Error must propagate and fail the task, never route to the error sink");
     }
 
+    /** Tick logic is pure: handlers and folds over ticks compare by value, no runtime. */
+    @Test
+    void tickLogicIsTestableByEquality() {
+        TickHandler heartbeat = tick -> List.of(OUT.send("hb", "t=" + tick.timestamp()));
+        assertEquals(List.of(OUT.send("hb", "t=7")), heartbeat.onTick(new Tick(7L)),
+                "a tick handler's emissions must equal the expected emission values");
+
+        TickFold<Long> policy = (n, tick) -> Step.of(n + 1, OUT.send("cut", "at=" + tick.timestamp()));
+        assertEquals(Step.of(1L, OUT.send("cut", "at=5")), policy.apply(0L, new Tick(5L)),
+                "a tick fold must step the tick state and emissions as plain values");
+    }
+
     /** A message for a unit test carries a zero coordinate and the given payload. */
     @Test
     void messageFactoryCarriesPayload() {

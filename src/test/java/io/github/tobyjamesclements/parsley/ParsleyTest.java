@@ -95,6 +95,24 @@ class ParsleyTest {
                 "two stages sourcing one topic must be rejected (one source node per topic)");
     }
 
+    /** A stage's tick topic is one of its sources, so composition guards it like any other. */
+    @Test
+    void tickTopicParticipatesInSourceDisjointness() {
+        Handler<String, String> drop = m -> List.of();
+        java.time.Duration second = java.time.Duration.ofSeconds(1);
+
+        Stage ticking = Stage.named("a").on(T1, drop).ticks(second, tick -> List.of()).build();
+        Stage poacher = Stage.named("b")
+                .on(Topic.of("parsley-a-ticks", Codec.utf8(), Codec.utf8()), drop)
+                .build();
+        assertThrows(IllegalArgumentException.class, () -> Parsley.of(ticking, poacher),
+                "a stage sourcing another stage's tick topic must be rejected");
+
+        Stage other = Stage.named("z").on(MID, drop).ticks(second, tick -> List.of()).build();
+        assertNotNull(Parsley.of(ticking, other),
+                "two ticking stages have distinct tick topics and must compose");
+    }
+
     /** An emission to an undeclared sink fails loudly at the stamping site. */
     @Test
     void emissionToUndeclaredSinkFailsClosed() {
