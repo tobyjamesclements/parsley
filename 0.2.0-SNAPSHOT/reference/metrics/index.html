@@ -11,26 +11,28 @@
       
       
       
+        <link rel="prev" href="../wire-format/">
       
-        <link rel="next" href="foundations/causal-model/">
+      
+        <link rel="next" href="../api/">
       
       
         
       
       
-      <link rel="icon" href="assets/images/favicon.png">
+      <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
     
     
       
-        <title>Parsley</title>
+        <title>Metrics - Parsley</title>
       
     
     
-      <link rel="stylesheet" href="assets/stylesheets/main.ec1eaa64.min.css">
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
       
         
-        <link rel="stylesheet" href="assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -49,7 +51,7 @@
       
     
     
-    <script>__md_scope=new URL(".",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -74,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#parsley" class="md-skip">
+        <a href="#metrics" class="md-skip">
           Skip to content
         </a>
       
@@ -88,7 +90,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="." title="Parsley" class="md-header__button md-logo" aria-label="Parsley" data-md-component="logo">
+    <a href="../.." title="Parsley" class="md-header__button md-logo" aria-label="Parsley" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -108,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Home
+              Metrics
             
           </span>
         </div>
@@ -217,11 +219,9 @@
   
   
   
-    
   
-  
-    <li class="md-tabs__item md-tabs__item--active">
-      <a href="." class="md-tabs__link">
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
         
   
   
@@ -242,7 +242,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="foundations/causal-model/" class="md-tabs__link">
+        <a href="../../foundations/causal-model/" class="md-tabs__link">
           
   
   
@@ -264,7 +264,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="design/architecture/" class="md-tabs__link">
+        <a href="../../design/architecture/" class="md-tabs__link">
           
   
   
@@ -286,7 +286,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="guide/getting-started/" class="md-tabs__link">
+        <a href="../../guide/getting-started/" class="md-tabs__link">
           
   
   
@@ -304,11 +304,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="reference/wire-format/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../wire-format/" class="md-tabs__link">
           
   
   
@@ -346,7 +348,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="." title="Parsley" class="md-nav__button md-logo" aria-label="Parsley" data-md-component="logo">
+    <a href="../.." title="Parsley" class="md-nav__button md-logo" aria-label="Parsley" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -373,37 +375,10 @@
       
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Home
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="." class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
         
   
   
@@ -419,59 +394,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#shape-of-the-system" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Shape of the system
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#how-it-is-verified" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        How it is verified
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#reading-order" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Reading order
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -541,7 +463,7 @@
   
   
     <li class="md-nav__item">
-      <a href="foundations/causal-model/" class="md-nav__link">
+      <a href="../../foundations/causal-model/" class="md-nav__link">
         
   
   
@@ -569,7 +491,7 @@
   
   
     <li class="md-nav__item">
-      <a href="foundations/delivery-gate/" class="md-nav__link">
+      <a href="../../foundations/delivery-gate/" class="md-nav__link">
         
   
   
@@ -597,7 +519,7 @@
   
   
     <li class="md-nav__item">
-      <a href="foundations/liveness/" class="md-nav__link">
+      <a href="../../foundations/liveness/" class="md-nav__link">
         
   
   
@@ -690,7 +612,7 @@
   
   
     <li class="md-nav__item">
-      <a href="design/architecture/" class="md-nav__link">
+      <a href="../../design/architecture/" class="md-nav__link">
         
   
   
@@ -718,7 +640,7 @@
   
   
     <li class="md-nav__item">
-      <a href="design/state/" class="md-nav__link">
+      <a href="../../design/state/" class="md-nav__link">
         
   
   
@@ -746,7 +668,7 @@
   
   
     <li class="md-nav__item">
-      <a href="design/verification/" class="md-nav__link">
+      <a href="../../design/verification/" class="md-nav__link">
         
   
   
@@ -843,7 +765,7 @@
   
   
     <li class="md-nav__item">
-      <a href="guide/getting-started/" class="md-nav__link">
+      <a href="../../guide/getting-started/" class="md-nav__link">
         
   
   
@@ -871,7 +793,7 @@
   
   
     <li class="md-nav__item">
-      <a href="guide/topologies/" class="md-nav__link">
+      <a href="../../guide/topologies/" class="md-nav__link">
         
   
   
@@ -899,7 +821,7 @@
   
   
     <li class="md-nav__item">
-      <a href="guide/codecs/" class="md-nav__link">
+      <a href="../../guide/codecs/" class="md-nav__link">
         
   
   
@@ -927,7 +849,7 @@
   
   
     <li class="md-nav__item">
-      <a href="guide/expectations/" class="md-nav__link">
+      <a href="../../guide/expectations/" class="md-nav__link">
         
   
   
@@ -955,7 +877,7 @@
   
   
     <li class="md-nav__item">
-      <a href="guide/clients/" class="md-nav__link">
+      <a href="../../guide/clients/" class="md-nav__link">
         
   
   
@@ -987,8 +909,10 @@
       
   
   
+    
   
   
+  
     
     
       
@@ -1002,17 +926,20 @@
     
     
       
+        
+        
+      
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
         
           
-          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
             
   
   
@@ -1030,7 +957,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_5">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1048,7 +975,7 @@
   
   
     <li class="md-nav__item">
-      <a href="reference/wire-format/" class="md-nav__link">
+      <a href="../wire-format/" class="md-nav__link">
         
   
   
@@ -1073,10 +1000,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="reference/metrics/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1092,6 +1046,59 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#task-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Task metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#per-topic-metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Per-topic metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reading-the-stall-pair" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reading the stall pair
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1104,7 +1111,7 @@
   
   
     <li class="md-nav__item">
-      <a href="reference/api/" class="md-nav__link">
+      <a href="../api/" class="md-nav__link">
         
   
   
@@ -1152,61 +1159,108 @@
   
 
 
-<h1 id="parsley">Parsley</h1>
-<p>Parsley provides causal delivery order for Kafka stream processing: a record reaches your
-processor only after every cause your processor consumes has been delivered locally. The
-guarantee is the causal-consistency model of the distributed-systems literature — Lamport's
-happened-before relation, realised with vector clocks — instantiated on Kafka coordinates.
-When A causally precedes B, every processor that subscribes to both of their topics processes
-A before B.</p>
-<p>Causal safety is inviolable: Parsley blocks or fails, and never reorders, drops, or guesses on
-a timeout. Joining a running topology needs no coordination — a new application starts
-consuming, self-gates into causal order during replay, and its stamps make its outputs
-correctly gated everywhere from its first emission.</p>
-<h2 id="shape-of-the-system">Shape of the system</h2>
-<p>Parsley is a small public API — pure user logic over typed topics, run by a Kafka Streams
-adapter — around a package-private causal delivery protocol. The protocol implementation
-carries no compile-time Kafka dependency, but it is not transport-agnostic — Kafka's
-semantics (broker-assigned offsets, transactional visibility, consumer positions) are
-load-bearing throughout. That freedom exists so the deterministic simulator can host the
-protocol, not so other transports can.</p>
-<p>The protocol (<a href="design/architecture/">architecture</a>) gates delivery with head-of-line blocking
-per channel: each <code>(topicId, partition)</code> channel has a FIFO hold queue, only queue heads are
-evaluated against the contiguous delivered frontier, and a delivery cascades releases to
-fixpoint. Outbound records carry a single header — a vector clock over channels — computed at
-one stamping site. All causal state persists under per-channel keys in the same transaction as
-the delivery that mutated it.</p>
-<p>Parsley's entire on-wire footprint is record headers on business topics. Liveness rides the
-consumer's own position advance past transaction markers — see
-<a href="foundations/liveness/">liveness</a>, which develops why every held record is eventually
-released.</p>
-<p>The adapter (<a href="guide/getting-started/">getting started</a>) hosts the protocol and runs user
-logic as pure functions — a <code>Message</code> in, <code>Emission</code> values out — with one serialization
-point on each side, and enforces <code>exactly_once_v2</code>. Plain producers and consumers use the same stamps through the
-<a href="guide/clients/">plain-client ops</a>. The guide continues with the common
-<a href="guide/topologies/">topology shapes</a>, <a href="guide/codecs/">codecs and Avro</a>, and
-<a href="guide/expectations/">the contract</a> — everything Parsley expects of you and everything it
-promises back. The <a href="reference/api/">API reference</a> carries the Javadoc built from this
-version's sources.</p>
-<h2 id="how-it-is-verified">How it is verified</h2>
-<p>The primary correctness gate is a deterministic simulator with a ground-truth causal oracle —
-not broker integration tests. The simulator models EOS transactions, marker and aborted
-offsets, asynchronous acknowledgements, crashes with transactional rollback, and seeded random
-interleavings; the oracle tracks real happened-before ancestry outside the protocol and checks
-every delivery. <a href="design/verification/">Verification</a> states the obligations and how each is
-enforced, including the self-test that proves the oracle catches a broken protocol.</p>
-<h2 id="reading-order">Reading order</h2>
-<ol>
-<li><a href="foundations/causal-model/">The causal model</a> — what is promised, and against what fault
-   model.</li>
-<li><a href="foundations/delivery-gate/">The delivery gate</a> — the predicate, its normalisation, and
-   why ignoring unconsumed coordinates is sound.</li>
-<li><a href="foundations/liveness/">Liveness</a> — why every held record is released and nothing
-   deadlocks.</li>
-<li><a href="design/architecture/">Architecture</a> and <a href="design/state/">state</a> — the classes, the
-   store layout, crash recovery, scope changes, truncation.</li>
-<li><a href="design/verification/">Verification</a> — the simulator, the oracle, and the obligations.</li>
-</ol>
+<h1 id="metrics">Metrics</h1>
+<p>Every stage task registers its metrics in the group <code>parsley-metrics</code> on the Kafka Streams
+metrics registry, next to the Streams built-ins. They reach JMX under the <code>kafka.streams</code>
+domain, every configured metrics reporter, and <a href="../api/"><code>CausalStreams.metrics()</code></a>. All of
+them carry the tags <code>thread-id</code>, <code>task-id</code>, and <code>stage</code>; the per-topic breakdowns add
+<code>topic</code>. Sensors are removed when the task closes, so metrics follow task migration.</p>
+<p>These metrics exist because holding is invisible to ordinary lag monitoring. The adapter
+accepts a record before the gate decides on it, so the stage's committed consumer position
+advances past records that are still held. A stalled task can therefore report zero
+consumer lag on its own group. Hold depth and hold age are observable only here.</p>
+<p>Gauges are sampled by the task's wall-clock punctuator every 500 ms, so a gauge can trail
+the event it reflects by up to half a second. Counters are recorded at their event sites.</p>
+<h2 id="task-metrics">Task metrics</h2>
+<p>These record at the <code>INFO</code> metrics recording level, the Kafka default.</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>records-held</code></td>
+<td>gauge</td>
+<td>The number of records currently held across the task's hold queues.</td>
+</tr>
+<tr>
+<td><code>records-held-age-max-ms</code></td>
+<td>gauge</td>
+<td>The wall-clock milliseconds the longest-gating head record has been held, measured from when it became its queue's head. A hold restored at restart ages from the first sample after init.</td>
+</tr>
+<tr>
+<td><code>records-delivered-rate</code></td>
+<td>rate</td>
+<td>The per-second rate of records released through the causal gate.</td>
+</tr>
+<tr>
+<td><code>records-delivered-total</code></td>
+<td>total</td>
+<td>The total number of records released through the causal gate since the task initialised.</td>
+</tr>
+<tr>
+<td><code>replays-skipped-total</code></td>
+<td>total</td>
+<td>The total number of records fed at or below the frontier and discarded. Nonzero is expected only while a rescope-growth refetch replays covered offsets.</td>
+</tr>
+<tr>
+<td><code>truncation-sweeps-skipped-total</code></td>
+<td>total</td>
+<td>The total number of truncation sweeps that failed and skipped their cycle. A climbing value means stamp-side clock entries are not being garbage-collected.</td>
+</tr>
+<tr>
+<td><code>stamp-offset-entries</code></td>
+<td>gauge</td>
+<td>The number of offset entries in the stamp-side clock.</td>
+</tr>
+<tr>
+<td><code>stamp-sequence-entries</code></td>
+<td>gauge</td>
+<td>The number of sequence entries in the stamp-side clock, claims not yet resolved to offsets.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="per-topic-metrics">Per-topic metrics</h2>
+<p>These record at the <code>DEBUG</code> metrics recording level. Enable them with
+<code>metrics.recording.level=DEBUG</code> in the application properties; at the default level the
+sensors exist but do not record.</p>
+<table>
+<thead>
+<tr>
+<th>Name</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>records-held</code></td>
+<td>gauge</td>
+<td>The number of records currently held on this source topic's channel.</td>
+</tr>
+<tr>
+<td><code>records-held-age-max-ms</code></td>
+<td>gauge</td>
+<td>The wall-clock milliseconds this channel's head record has been held.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="reading-the-stall-pair">Reading the stall pair</h2>
+<p><code>records-held</code> alone distinguishes nothing: any skew between cause and effect topics holds
+records transiently, and the gauge returns to zero as causes arrive. The stall signal is
+<code>records-held-age-max-ms</code> growing without bound, which means a head record is waiting on a
+cause that is not arriving. The per-topic breakdown names the convoyed channel, and the
+head's dependency clock is in the <code>DEBUG</code> protocol log. The cure is fixing the lagging
+cause, never skipping the head (<a href="../../guide/expectations/#operating-it">the contract</a>);
+retention on the cause topic bounds how long the wait can succeed.</p>
+<p>The width gauges guard the other slow failure. Stamp-side clock entries are freed by the
+log-start truncation sweep (<a href="../../design/architecture/#truncation-log-start-stability">truncation</a>),
+so <code>stamp-offset-entries</code> growing against a steady workload, or
+<code>truncation-sweeps-skipped-total</code> climbing, means clock and header overhead is accumulating.</p>
 
 
 
@@ -1241,15 +1295,31 @@ enforced, including the self-test that proves the oracle catches a broken protoc
       
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
+          
+          <a href="../wire-format/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Wire format">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Wire format
+              </div>
+            </div>
+          </a>
+        
         
           
-          <a href="foundations/causal-model/" class="md-footer__link md-footer__link--next" aria-label="Next: The causal model">
+          <a href="../api/" class="md-footer__link md-footer__link--next" aria-label="Next: API reference">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                The causal model
+                API reference
               </div>
             </div>
             <div class="md-footer__button md-icon">
@@ -1286,10 +1356,10 @@ enforced, including the self-test that proves the oracle catches a broken protoc
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": ".", "features": ["navigation.tabs", "navigation.indexes", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "content.code.copy"], "search": "assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.indexes", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="assets/javascripts/bundle.d7400e89.min.js"></script>
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
       
     
   </body>

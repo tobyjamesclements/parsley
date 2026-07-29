@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="../../design/verification/">
+        <link rel="prev" href="../getting-started/">
       
       
-        <link rel="next" href="../topologies/">
+        <link rel="next" href="../codecs/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Getting started - Parsley</title>
+        <title>Topology shapes - Parsley</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#getting-started" class="md-skip">
+        <a href="#topology-shapes" class="md-skip">
           Skip to content
         </a>
       
@@ -110,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Getting started
+              Topology shapes
             
           </span>
         </div>
@@ -288,7 +288,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+        <a href="../getting-started/" class="md-tabs__link">
           
   
   
@@ -767,6 +767,34 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting started
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -786,7 +814,7 @@
   <span class="md-ellipsis">
     
   
-    Getting started
+    Topology shapes
   
 
     
@@ -804,7 +832,7 @@
   <span class="md-ellipsis">
     
   
-    Getting started
+    Topology shapes
   
 
     
@@ -830,10 +858,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
+  <a href="#one-application-or-several" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Requirements
+        One application or several
       
     </span>
   </a>
@@ -841,10 +869,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#the-shape-functional-core-imperative-edges" class="md-nav__link">
+  <a href="#linear" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The shape: functional core, imperative edges
+        Linear
       
     </span>
   </a>
@@ -852,10 +880,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#topics-and-codecs" class="md-nav__link">
+  <a href="#fan-out" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Topics and codecs
+        Fan-out
       
     </span>
   </a>
@@ -863,10 +891,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#a-stateless-stage" class="md-nav__link">
+  <a href="#fan-in" class="md-nav__link">
     <span class="md-ellipsis">
       
-        A stateless stage
+        Fan-in
       
     </span>
   </a>
@@ -874,10 +902,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#a-stateful-stage" class="md-nav__link">
+  <a href="#diamond" class="md-nav__link">
     <span class="md-ellipsis">
       
-        A stateful stage
+        Diamond
       
     </span>
   </a>
@@ -885,10 +913,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#testing-your-logic" class="md-nav__link">
+  <a href="#request-and-reply" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Testing your logic
+        Request and reply
       
     </span>
   </a>
@@ -896,10 +924,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#what-the-runtime-wires-for-you" class="md-nav__link">
+  <a href="#event-flows" class="md-nav__link">
     <span class="md-ellipsis">
       
-        What the runtime wires for you
+        Event flows
       
     </span>
   </a>
@@ -907,10 +935,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#where-next" class="md-nav__link">
+  <a href="#cycles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Where next
+        Cycles
       
     </span>
   </a>
@@ -921,34 +949,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../topologies/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Topology shapes
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -1214,111 +1214,163 @@
   
 
 
-<h1 id="getting-started">Getting started</h1>
-<h2 id="requirements">Requirements</h2>
-<ul>
-<li>Java 21 or later.</li>
-<li>Kafka brokers new enough to serve topic IDs (3.7+).</li>
-<li><code>processing.guarantee=exactly_once_v2</code> — enforced by <code>Parsley.streams</code>, which also pins
-  the consumer to <code>read_committed</code>. Parsley's state is defined against EOS; there is no
-  at-least-once mode.</li>
-</ul>
-<h2 id="the-shape-functional-core-imperative-edges">The shape: functional core, imperative edges</h2>
-<p>Your logic is a pure function. It receives a causally delivered <code>Message</code> and returns
-<code>Emission</code> values; with per-key state, it is a fold that also returns the next state. It
-holds no reference to any runtime, imports nothing from Kafka, and is unit-testable with
-plain equality. Everything imperative — gating, decoding, state persistence, stamping,
-partitioning, the transaction — lives in the stage runtime that hosts it.</p>
-<h2 id="topics-and-codecs">Topics and codecs</h2>
-<p>Topics are typed values declared once — codecs live with the declaration, and a pipeline hop
-is the same <code>Topic</code> appearing as one stage's sink and another's source, which makes codec
-agreement across the hop hold by construction. A <code>Codec</code> is two pure functions between a
-value and its bytes; Kafka serdes (Avro, JSON Schema, and friends) bridge in with
-<code>Codec.fromSerde(serde, topicName)</code>. The codec contract, hand-rolled codecs, and the
-schema-registry formats are covered in <a href="../codecs/">codecs and Avro</a>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="o">&gt;</span><span class="w">   </span><span class="n">orders</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">orderCodec</span><span class="p">);</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Payment</span><span class="o">&gt;</span><span class="w"> </span><span class="n">payments</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;payments&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">paymentCodec</span><span class="p">);</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Settled</span><span class="o">&gt;</span><span class="w"> </span><span class="n">settlements</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;settlements&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">settledCodec</span><span class="p">);</span>
+<h1 id="topology-shapes">Topology shapes</h1>
+<p>A Parsley topology is stages wired through topics, and the wiring rules are few. A topic may
+be the sink of any number of stages but the source of at most one stage per application
+(Kafka Streams allows one source node per topic). Every topic must exist before the
+application starts, and there are no automatic repartition topics, so the co-partitioning
+precondition stays visible at each hop. Beyond that, shapes compose freely, because every hop
+is the same thing: a causal channel, stamped on write and gated on read.</p>
+<p>This page catalogues the common shapes and states exactly what ordering each one gets.
+Topics are named <code>c1..cN</code>, stages <code>p1..pN</code>, and messages <code>m1..mN</code>, with a message's number
+giving its send order where that matters. The recurring theme: causal delivery orders a
+record after its causes, and only after its causes. Where a shape needs an order between
+records that are not causally related, the fix is always to make the relation causal — send
+them from one stamping site, or consume the record you need to come first.</p>
+<h2 id="one-application-or-several">One application or several</h2>
+<p>Stages compose into one application, or run as separate applications, and the guarantee does
+not change: ordering is carried by the stamps on the wire, not by co-deployment.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="n">CausalStreams</span><span class="w"> </span><span class="n">app</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Parsley</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">p1</span><span class="p">,</span><span class="w"> </span><span class="n">p2</span><span class="p">).</span><span class="na">streams</span><span class="p">(</span><span class="n">props</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="n">app</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">}</span>
 </code></pre></div>
-<h2 id="a-stateless-stage">A stateless stage</h2>
-<p>A <code>Handler</code> maps one delivered message to its emissions. Emissions are created by the sink
-topic itself — <code>topic.send(key, value)</code> — so the payload type-checks at the construction
-site, and an emission to an undeclared sink fails loudly at the stamping site.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">Stage</span><span class="w"> </span><span class="n">settlement</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;settlement&quot;</span><span class="p">)</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">orders</span><span class="p">,</span><span class="w">   </span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">settlements</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">settle</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">()))))</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">payments</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">settlements</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">apply</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">()))))</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(</span><span class="n">settlements</span><span class="p">)</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">Properties</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Properties</span><span class="p">();</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">props</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">StreamsConfig</span><span class="p">.</span><span class="na">APPLICATION_ID_CONFIG</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;settlements-app&quot;</span><span class="p">);</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">props</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">StreamsConfig</span><span class="p">.</span><span class="na">BOOTSTRAP_SERVERS_CONFIG</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;broker:9092&quot;</span><span class="p">);</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="n">CausalStreams</span><span class="w"> </span><span class="n">app</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Parsley</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">settlement</span><span class="p">).</span><span class="na">streams</span><span class="p">(</span><span class="n">props</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="n">app</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="c1">// run until shutdown</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="p">}</span>
+<p><code>Parsley.of(p1, p2)</code> assembles both stages into one Streams topology; each keeps its own
+state stores, keyed by its stage name. Splitting the same stages across two applications
+changes deployment granularity and nothing else. A new application joins a running topology
+by simply starting to consume: it self-gates into causal order during replay, and its
+outputs are correctly gated everywhere from its first emission.</p>
+<h2 id="linear">Linear</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>c1 --&gt; p1 --&gt; c2 --&gt; p2 --&gt; c3
 </code></pre></div>
-<p>Every cause the stage consumes has already been delivered when a handler runs; that is the
-guarantee. A message carries its own coordinate — source topic, partition, offset,
-timestamp — and for a message released from the hold queue, the coordinate is its own, not
-the release trigger's. By default an emission inherits the handled message's timestamp;
-<code>send(key, value, timestamp)</code> overrides it.</p>
-<h2 id="a-stateful-stage">A stateful stage</h2>
-<p>Declaring <code>state</code> gives the stage per-key state, and sources fold over it: the runtime
-resolves the state for the message's key (the declared initial value for an unseen key),
-applies the pure <code>Fold</code>, persists the returned state, and applies the returned emissions —
-all in the same transaction as the delivery. Causal order plus a pure fold makes the state a
-deterministic function of the delivered history.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">Stage</span><span class="w"> </span><span class="n">balances</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;balances&quot;</span><span class="p">)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">        </span><span class="p">.</span><span class="na">state</span><span class="p">(</span><span class="n">balanceCodec</span><span class="p">,</span><span class="w"> </span><span class="n">Balance</span><span class="p">::</span><span class="n">zero</span><span class="p">)</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">orders</span><span class="p">,</span><span class="w">   </span><span class="p">(</span><span class="n">bal</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">bal</span><span class="p">.</span><span class="na">minus</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">().</span><span class="na">total</span><span class="p">()),</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">                                          </span><span class="n">settlements</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">settled</span><span class="p">(</span><span class="n">bal</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="p">))))</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">payments</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">bal</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">bal</span><span class="p">.</span><span class="na">plus</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">().</span><span class="na">amount</span><span class="p">())))</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(</span><span class="n">settlements</span><span class="p">)</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<p>The pipeline. Within one channel, per-partition FIFO already orders everything; what the
+stamps add is ordering <em>across</em> the pipeline's topics. Every record p1 emits claims the
+input that caused it, and claims carry transitively through p2, so any stage that consumes
+several of the pipeline's topics — c1 and c3, say, for reconciliation — delivers effects
+after their causes, however far apart the hops run.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">Stage</span><span class="w"> </span><span class="n">p1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;p1&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">c1</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">c2</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">transform</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">()))))</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(</span><span class="n">c2</span><span class="p">)</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="n">Stage</span><span class="w"> </span><span class="n">p2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;p2&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">c2</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">c3</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">summarise</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">()))))</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(</span><span class="n">c3</span><span class="p">)</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 </code></pre></div>
-<p>State is keyed by the message key's encoded bytes — the same agreement co-partitioning
-already requires — and scoped to the stage. Returning <code>Step.of(null, ...)</code> deletes the key's
-state. The stage name keys its stores, so keep it stable across deployments.</p>
-<h2 id="testing-your-logic">Testing your logic</h2>
-<p>Handlers and folds are pure functions over values with equality, so the primary tests need
-no runtime at all:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">assertEquals</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">settlements</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="s">&quot;k&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">expected</span><span class="p">)),</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">        </span><span class="n">handler</span><span class="p">.</span><span class="na">handle</span><span class="p">(</span><span class="n">Message</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;k&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">order</span><span class="p">)));</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">assertEquals</span><span class="p">(</span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">expectedBalance</span><span class="p">,</span><span class="w"> </span><span class="n">settlements</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="s">&quot;k&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">expected</span><span class="p">)),</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">        </span><span class="n">fold</span><span class="p">.</span><span class="na">apply</span><span class="p">(</span><span class="n">balance</span><span class="p">,</span><span class="w"> </span><span class="n">Message</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;payments&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;k&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">payment</span><span class="p">)));</span>
+<p>Stamping is synchronous (sequence claims, see <a href="../../design/architecture/#the-stamp">the stamp</a>),
+so a hop costs one broker round trip and nothing waits on acknowledgements.</p>
+<h2 id="fan-out">Fan-out</h2>
+<p>One stage, several sinks:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>            +--&gt; c2
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>c1 --&gt; p1 --|
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>            +--&gt; c3
 </code></pre></div>
-<p>For the wiring, <code>Parsley.of(stage).testTopology()</code> returns a fresh broker-less topology for
-<code>TopologyTestDriver</code>: pipe records and assert on outputs. Stamp presence is observable via
-the <code>CausalHeaders</code> name constants; gating behaviour itself is Parsley's contract, verified
-by Parsley's own suite. The test topology is for the driver only — under a real cluster it
-neither captures consumer positions nor resolves real topic identity, and the adapter fails
-closed at the first delivered record.</p>
-<h2 id="what-the-runtime-wires-for-you">What the runtime wires for you</h2>
-<p><code>Parsley.streams</code> installs a client supplier that records consumer positions after each poll
-(the liveness signal — see <a href="../../foundations/liveness/#position-advance-bridging">liveness</a>),
-and resolves topic identity and sink end offsets through an admin client built from the same
-properties. A declared sink must exist before the application starts: init fails loudly
-rather than run with own-output claims silently off. The returned <code>CausalStreams</code> is a
-curated allowlist over the Kafka Streams runtime — lifecycle, state, listeners, metrics,
-lag — with no accessor to the underlying instance; members that could violate causality
-(pausing an instance freezes the release of held records fleet-wide, handing out the
-protocol stores) are absent by design. <code>metrics()</code> includes the stage's own gauges and
-counters in the <code>parsley-metrics</code> group, listed in the
-<a href="../../reference/metrics/">metrics reference</a>.</p>
-<h2 id="where-next">Where next</h2>
-<ul>
-<li><a href="../topologies/">Topology shapes</a> — the common wiring shapes (linear, fan-out, fan-in,
-  diamond, request and reply, event flows, cycles) and exactly what ordering each one gets.</li>
-<li><a href="../codecs/">Codecs and Avro</a> — the codec contract, writing your own, bridging serdes, and
-  schema-registry formats.</li>
-<li><a href="../expectations/">The contract</a> — everything Parsley expects of you and everything it
-  promises back, including the operational notes.</li>
-<li><a href="../clients/">Plain clients</a> — stamping from plain producers, observing from plain
-  consumers.</li>
-</ul>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">Stage</span><span class="w"> </span><span class="n">p1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;p1&quot;</span><span class="p">)</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">c1</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">                </span><span class="n">c2</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">summary</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">())),</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">                </span><span class="n">c3</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">audit</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">()))))</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(</span><span class="n">c2</span><span class="p">,</span><span class="w"> </span><span class="n">c3</span><span class="p">)</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</code></pre></div>
+<p>The emissions of one delivery are applied in list order, leave in one transaction, and are
+claimed in that order: if the handler above emits m2 to c2 and then m3 to c3, then m3 claims
+m2, and any stage that consumes both c2 and c3 delivers m2 before m3. A stage's sends are
+ordered across <em>all</em> its sinks this way, across deliveries too — downstream observers see
+one stage-task's output stream in send order, whichever topics it is spread over.</p>
+<p>The other fan-out is one topic with several consumers. Kafka Streams allows one source node
+per topic, so two stages of the same application cannot both consume c1; run the second
+consumer as its own application. Each consuming application gates independently and needs no
+awareness of the others.</p>
+<h2 id="fan-in">Fan-in</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>c1 --+
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>     |--&gt; p3 --&gt; c4
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>c2 --+
+</code></pre></div>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="n">Stage</span><span class="w"> </span><span class="n">p3</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;p3&quot;</span><span class="p">)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="w">        </span><span class="p">.</span><span class="na">state</span><span class="p">(</span><span class="n">pairCodec</span><span class="p">,</span><span class="w"> </span><span class="n">Pair</span><span class="p">::</span><span class="n">empty</span><span class="p">)</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">c1</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">s</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">joined</span><span class="p">(</span><span class="n">s</span><span class="p">.</span><span class="na">withLeft</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">()),</span><span class="w"> </span><span class="n">m</span><span class="p">))</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">c2</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">s</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">joined</span><span class="p">(</span><span class="n">s</span><span class="p">.</span><span class="na">withRight</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">()),</span><span class="w"> </span><span class="n">m</span><span class="p">))</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(</span><span class="n">c4</span><span class="p">)</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</code></pre></div>
+<p>Here <code>joined</code> is the pure join step: it returns the updated pair as the next state, plus an
+emission to c4 when both sides are present.</p>
+<p>A multi-source stage is where the gate earns its keep: records causally related across c1
+and c2 are delivered in causal order, so the fold's state never sees an effect before the
+cause it consumed. Two records with no causal relation are delivered in arrival order —
+the delivered history is one valid extension of the causal partial order, not a total order
+anyone chose. If the outcome must not depend on which concurrent record lands first, make
+the logic commutative for concurrent inputs; causal order fixes everything else.</p>
+<p>Two expectations come with the shape. Related keys must land on the same partition number of
+every source topic — in practice, the same key bytes and the same partition count — because
+the guarantee is per task and a task consumes one partition slice of each source
+(<a href="../../foundations/causal-model/#preconditions">preconditions</a>). And per-key fold state is
+keyed by the message key's encoded bytes, so records from c1 and c2 that agree on key bytes
+fold into the same state, which is exactly the agreement co-partitioning already requires.</p>
+<h2 id="diamond">Diamond</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>            +--&gt; c2 --&gt; p2 --&gt; c4 --+
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>c1 --&gt; p1 --|                       |--&gt; p4 --&gt; c6
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>            +--&gt; c3 --&gt; p3 --&gt; c5 --+
+</code></pre></div>
+<p>Two branches derive from a common source and a join consumes both. Within each branch the
+linear rules apply. Across branches, be precise about what is and is not ordered: the
+records p2 and p3 derive from the same input are causally <em>concurrent</em> — each claims the
+common input, neither claims the other — so p4 may receive either side first, and a join
+holds its partial result in fold state until the other side arrives, exactly as in fan-in.
+Wanting "the c4 record before the c5 record" at the join is not a causal property, and no
+sound protocol can grant it without inventing an order.</p>
+<p>What the diamond does guarantee is that no branch output outruns anything it <em>depends on</em>
+that the join consumes. The sharpest version is the base-and-derived triangle:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>c1 --+--------------&gt; p4
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>     |                ^
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>     +--&gt; p2 --&gt; c2 --+
+</code></pre></div>
+<p>p4 consumes both the base topic c1 and the derived topic c2. Every record p2 emits claims
+the base record it was derived from, so p4 always delivers the base before the derivation —
+whatever the branch's lag. This is the shape that removes the classic race where an
+enrichment, an index entry, or a projection arrives ahead of the record it describes.</p>
+<h2 id="request-and-reply">Request and reply</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>p1 --&gt; c1 --&gt; p2 --&gt; c2 --&gt; p1
+</code></pre></div>
+<p>p1 emits requests to c1; p2 consumes c1 and emits replies to c2; p1 consumes c2. A reply
+claims the request it answers, so any stage consuming both c1 and c2 sees each request
+before its reply. Correlation — which request a reply answers — rides in the key or payload
+as usual; Parsley orders the flow and adds no envelope.</p>
+<p>The property that makes the shape worth naming is effect-before-reply. Have the responder
+emit its effects before its reply, in one handler:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="n">Stage</span><span class="w"> </span><span class="n">p2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;p2&quot;</span><span class="p">)</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">c1</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">                </span><span class="n">c3</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">effect</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">())),</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">                </span><span class="n">c2</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">reply</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">()))))</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(</span><span class="n">c2</span><span class="p">,</span><span class="w"> </span><span class="n">c3</span><span class="p">)</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</code></pre></div>
+<p>The reply m3 claims the effect m2 (fan-out emission order), so a requester that consumes
+both c3 and c2 delivers the effect before the reply: by the time p1 processes an
+acknowledgement, everything it acknowledges is already visible locally. Read-your-writes
+across services, expressed as a topology shape.</p>
+<h2 id="event-flows">Event flows</h2>
+<p>An event notification is a record announcing state that lives elsewhere, and its classic
+failure is the dangling notification: the announcement arrives before the data it points
+at. The shape that fixes it is the fan-out order again, this time between a data topic and
+an event topic. Write the data m1 to c1, then the notification m2 to c2, from one stamping
+site — two emissions of one delivery, or a plain producer that folds its acknowledgements
+(<a href="../clients/">plain clients</a>). The notification claims the data record, so every stage
+consuming both topics delivers the data first, and a notification handler can always read
+what it was notified about.</p>
+<p>Event topics also cross the adoption boundary well: a producer that stamps nothing claims
+nothing, so its events deliver immediately and unordered, and stamping can be added one
+producer at a time as ordering starts to matter.</p>
+<h2 id="cycles">Cycles</h2>
+<p>Topics may wire stages into a cycle:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>c1 --&gt; p1 --&gt; c2 --&gt; p2 --&gt; c1
+</code></pre></div>
+<p>The protocol does not deadlock on cycles: every wait a gate can hold resolves strictly
+backward in append time, so the wait graph is acyclic whatever shape the topology takes
+(<a href="../../foundations/liveness/#why-over-claims-cannot-deadlock">liveness</a>). What a cycle does
+demand is a termination condition in the logic itself — a fold that re-emits on every
+delivery circulates forever, at one broker round trip per lap. Converge on a fixpoint,
+count rounds in the state, or emit only on change.</p>
 
 
 
@@ -1354,7 +1406,7 @@ counters in the <code>parsley-metrics</code> group, listed in the
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../../design/verification/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Verification">
+          <a href="../getting-started/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Getting started">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1364,20 +1416,20 @@ counters in the <code>parsley-metrics</code> group, listed in the
                 Previous
               </span>
               <div class="md-ellipsis">
-                Verification
+                Getting started
               </div>
             </div>
           </a>
         
         
           
-          <a href="../topologies/" class="md-footer__link md-footer__link--next" aria-label="Next: Topology shapes">
+          <a href="../codecs/" class="md-footer__link md-footer__link--next" aria-label="Next: Codecs and Avro">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Topology shapes
+                Codecs and Avro
               </div>
             </div>
             <div class="md-footer__button md-icon">

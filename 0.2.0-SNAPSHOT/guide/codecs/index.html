@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="../../design/verification/">
+        <link rel="prev" href="../topologies/">
       
       
-        <link rel="next" href="../topologies/">
+        <link rel="next" href="../expectations/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Getting started - Parsley</title>
+        <title>Codecs and Avro - Parsley</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#getting-started" class="md-skip">
+        <a href="#codecs-and-avro" class="md-skip">
           Skip to content
         </a>
       
@@ -110,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Getting started
+              Codecs and Avro
             
           </span>
         </div>
@@ -288,7 +288,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+        <a href="../getting-started/" class="md-tabs__link">
           
   
   
@@ -767,37 +767,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Getting started
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../getting-started/" class="md-nav__link">
         
   
   
@@ -813,114 +786,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-shape-functional-core-imperative-edges" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The shape: functional core, imperative edges
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#topics-and-codecs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Topics and codecs
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#a-stateless-stage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        A stateless stage
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#a-stateful-stage" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        A stateful stage
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#testing-your-logic" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Testing your logic
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-the-runtime-wires-for-you" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What the runtime wires for you
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#where-next" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Where next
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -958,10 +823,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../codecs/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Codecs and Avro
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -977,6 +869,81 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#the-codec-contract" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The codec contract
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#built-in-codecs-and-writing-your-own" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Built-in codecs and writing your own
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-codecs-are-identity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key codecs are identity
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bridging-kafka-serdes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bridging Kafka serdes
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#avro" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Avro
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1214,110 +1181,109 @@
   
 
 
-<h1 id="getting-started">Getting started</h1>
-<h2 id="requirements">Requirements</h2>
+<h1 id="codecs-and-avro">Codecs and Avro</h1>
+<p>A <code>Codec&lt;T&gt;</code> is two pure functions between a value and its bytes, and it is the only
+serialization vocabulary in the functional core: user logic sees decoded values, and Kafka
+serdes stay at the imperative edge, bridged in through <code>Codec.fromSerde</code>. Serialization runs
+exactly once on each side, inside the stage. Inbound bytes are held verbatim while a record
+is gated and decoded with the source topic's codecs at delivery; emissions are encoded with
+their topic's codecs at the stamping site, so the clock travels with the exact bytes it
+claims.</p>
+<h2 id="the-codec-contract">The codec contract</h2>
 <ul>
-<li>Java 21 or later.</li>
-<li>Kafka brokers new enough to serve topic IDs (3.7+).</li>
-<li><code>processing.guarantee=exactly_once_v2</code> — enforced by <code>Parsley.streams</code>, which also pins
-  the consumer to <code>read_committed</code>. Parsley's state is defined against EOS; there is no
-  at-least-once mode.</li>
+<li><strong>Never null.</strong> Null keys and null values pass through the runtime untouched — a tombstone
+  stays a tombstone — so <code>encode</code> and <code>decode</code> may assume their argument is present and need
+  no null branch.</li>
+<li><strong>Total on real data, and inverse.</strong> <code>decode</code> must accept every byte sequence <code>encode</code>
+  produces (and every byte sequence already on the topic), and <code>decode(encode(v))</code> must
+  equal <code>v</code> under the type's equality, which is what makes pure logic testable with plain
+  values.</li>
+<li><strong>Failure is loud.</strong> A codec that cannot decode should throw, not guess: an exception from
+  <code>decode</code> or <code>encode</code> fails the task, the transaction aborts, and the retry refetches. A
+  lenient codec that returns a placeholder converts a wiring bug into silent data corruption.</li>
 </ul>
-<h2 id="the-shape-functional-core-imperative-edges">The shape: functional core, imperative edges</h2>
-<p>Your logic is a pure function. It receives a causally delivered <code>Message</code> and returns
-<code>Emission</code> values; with per-key state, it is a fold that also returns the next state. It
-holds no reference to any runtime, imports nothing from Kafka, and is unit-testable with
-plain equality. Everything imperative — gating, decoding, state persistence, stamping,
-partitioning, the transaction — lives in the stage runtime that hosts it.</p>
-<h2 id="topics-and-codecs">Topics and codecs</h2>
-<p>Topics are typed values declared once — codecs live with the declaration, and a pipeline hop
-is the same <code>Topic</code> appearing as one stage's sink and another's source, which makes codec
-agreement across the hop hold by construction. A <code>Codec</code> is two pure functions between a
-value and its bytes; Kafka serdes (Avro, JSON Schema, and friends) bridge in with
-<code>Codec.fromSerde(serde, topicName)</code>. The codec contract, hand-rolled codecs, and the
-schema-registry formats are covered in <a href="../codecs/">codecs and Avro</a>.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="o">&gt;</span><span class="w">   </span><span class="n">orders</span><span class="w">      </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">orderCodec</span><span class="p">);</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Payment</span><span class="o">&gt;</span><span class="w"> </span><span class="n">payments</span><span class="w">    </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;payments&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">paymentCodec</span><span class="p">);</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Settled</span><span class="o">&gt;</span><span class="w"> </span><span class="n">settlements</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;settlements&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">settledCodec</span><span class="p">);</span>
+<h2 id="built-in-codecs-and-writing-your-own">Built-in codecs and writing your own</h2>
+<p><code>Codec.utf8()</code>, <code>Codec.int64()</code>, and <code>Codec.bytes()</code> cover strings, longs, and raw bytes.
+Everything else is <code>Codec.of(encoder, decoder)</code>. A fixed-layout value needs a dozen lines:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="kd">record</span> <span class="nc">Reading</span><span class="p">(</span><span class="kt">long</span><span class="w"> </span><span class="n">sensor</span><span class="p">,</span><span class="w"> </span><span class="kt">double</span><span class="w"> </span><span class="n">value</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">Codec</span><span class="o">&lt;</span><span class="n">Reading</span><span class="o">&gt;</span><span class="w"> </span><span class="n">readingCodec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">of</span><span class="p">(</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">        </span><span class="n">r</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">ByteBuffer</span><span class="p">.</span><span class="na">allocate</span><span class="p">(</span><span class="mi">16</span><span class="p">).</span><span class="na">putLong</span><span class="p">(</span><span class="n">r</span><span class="p">.</span><span class="na">sensor</span><span class="p">()).</span><span class="na">putDouble</span><span class="p">(</span><span class="n">r</span><span class="p">.</span><span class="na">value</span><span class="p">()).</span><span class="na">array</span><span class="p">(),</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">        </span><span class="n">b</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">            </span><span class="n">ByteBuffer</span><span class="w"> </span><span class="n">buf</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ByteBuffer</span><span class="p">.</span><span class="na">wrap</span><span class="p">(</span><span class="n">b</span><span class="p">);</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">            </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Reading</span><span class="p">(</span><span class="n">buf</span><span class="p">.</span><span class="na">getLong</span><span class="p">(),</span><span class="w"> </span><span class="n">buf</span><span class="p">.</span><span class="na">getDouble</span><span class="p">());</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">        </span><span class="p">});</span>
 </code></pre></div>
-<h2 id="a-stateless-stage">A stateless stage</h2>
-<p>A <code>Handler</code> maps one delivered message to its emissions. Emissions are created by the sink
-topic itself — <code>topic.send(key, value)</code> — so the payload type-checks at the construction
-site, and an emission to an undeclared sink fails loudly at the stamping site.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">Stage</span><span class="w"> </span><span class="n">settlement</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;settlement&quot;</span><span class="p">)</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">orders</span><span class="p">,</span><span class="w">   </span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">settlements</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">settle</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">()))))</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">payments</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">settlements</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">apply</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">()))))</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(</span><span class="n">settlements</span><span class="p">)</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">Properties</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Properties</span><span class="p">();</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">props</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">StreamsConfig</span><span class="p">.</span><span class="na">APPLICATION_ID_CONFIG</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;settlements-app&quot;</span><span class="p">);</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">props</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">StreamsConfig</span><span class="p">.</span><span class="na">BOOTSTRAP_SERVERS_CONFIG</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;broker:9092&quot;</span><span class="p">);</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="n">CausalStreams</span><span class="w"> </span><span class="n">app</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Parsley</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">settlement</span><span class="p">).</span><span class="na">streams</span><span class="p">(</span><span class="n">props</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="n">app</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="c1">// run until shutdown</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="p">}</span>
+<p>For JSON, wrap a mapper and rethrow its checked exceptions unchecked — the runtime treats
+any codec exception as a task failure, which is the behaviour you want:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="kd">static</span><span class="w"> </span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Codec</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="nf">json</span><span class="p">(</span><span class="n">ObjectMapper</span><span class="w"> </span><span class="n">mapper</span><span class="p">,</span><span class="w"> </span><span class="n">Class</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">type</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">of</span><span class="p">(</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">            </span><span class="n">v</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">                </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">                    </span><span class="k">return</span><span class="w"> </span><span class="n">mapper</span><span class="p">.</span><span class="na">writeValueAsBytes</span><span class="p">(</span><span class="n">v</span><span class="p">);</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="w">                </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">JsonProcessingException</span><span class="w"> </span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">                    </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">UncheckedIOException</span><span class="p">(</span><span class="n">e</span><span class="p">);</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">                </span><span class="p">}</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">            </span><span class="p">},</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">            </span><span class="n">b</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">                </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">                    </span><span class="k">return</span><span class="w"> </span><span class="n">mapper</span><span class="p">.</span><span class="na">readValue</span><span class="p">(</span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">type</span><span class="p">);</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">                </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">IOException</span><span class="w"> </span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">                    </span><span class="k">throw</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">UncheckedIOException</span><span class="p">(</span><span class="n">e</span><span class="p">);</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">                </span><span class="p">}</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">            </span><span class="p">});</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="p">}</span>
 </code></pre></div>
-<p>Every cause the stage consumes has already been delivered when a handler runs; that is the
-guarantee. A message carries its own coordinate — source topic, partition, offset,
-timestamp — and for a message released from the hold queue, the coordinate is its own, not
-the release trigger's. By default an emission inherits the handled message's timestamp;
-<code>send(key, value, timestamp)</code> overrides it.</p>
-<h2 id="a-stateful-stage">A stateful stage</h2>
-<p>Declaring <code>state</code> gives the stage per-key state, and sources fold over it: the runtime
-resolves the state for the message's key (the declared initial value for an unseen key),
-applies the pure <code>Fold</code>, persists the returned state, and applies the returned emissions —
-all in the same transaction as the delivery. Causal order plus a pure fold makes the state a
-deterministic function of the delivered history.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">Stage</span><span class="w"> </span><span class="n">balances</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;balances&quot;</span><span class="p">)</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">        </span><span class="p">.</span><span class="na">state</span><span class="p">(</span><span class="n">balanceCodec</span><span class="p">,</span><span class="w"> </span><span class="n">Balance</span><span class="p">::</span><span class="n">zero</span><span class="p">)</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">orders</span><span class="p">,</span><span class="w">   </span><span class="p">(</span><span class="n">bal</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">bal</span><span class="p">.</span><span class="na">minus</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">().</span><span class="na">total</span><span class="p">()),</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">                                          </span><span class="n">settlements</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">settled</span><span class="p">(</span><span class="n">bal</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="p">))))</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">payments</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">bal</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">bal</span><span class="p">.</span><span class="na">plus</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">().</span><span class="na">amount</span><span class="p">())))</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(</span><span class="n">settlements</span><span class="p">)</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<h2 id="key-codecs-are-identity">Key codecs are identity</h2>
+<p>A key's encoded bytes are load-bearing three times over. They choose the partition (the
+producer-default murmur2 hash of the encoded key), they key the stage's per-key fold state,
+and they are the unit of the co-partitioning agreement across topics and producers. A key
+codec must therefore be <strong>canonical and stable</strong>: the same logical key produces the same
+bytes on every producer, in every version, forever. <code>Codec.utf8()</code>, <code>Codec.int64()</code>, and
+<code>Codec.bytes()</code> all qualify.</p>
+<p>Registry-framed encodings do not: an Avro, JSON Schema, or Protobuf serializer prefixes the
+payload with a schema id, so re-registering the key schema changes the bytes of every key —
+which re-partitions the topic and orphans existing fold state. Keep registry-framed codecs
+on values, and give keys a primitive or hand-rolled canonical codec.</p>
+<h2 id="bridging-kafka-serdes">Bridging Kafka serdes</h2>
+<p><code>Codec.fromSerde(serde, topic)</code> turns any configured <code>Serde&lt;T&gt;</code> into a codec. The topic name
+is fixed at bridge time because serdes take it per call — schema-registry serdes derive
+their subject from it — so bridge one codec per topic rather than sharing one across topics.
+The caller configures the serde before bridging and owns its lifecycle. The bridged codec
+inherits the codec contract's null rule: the serde's null path is never exercised, because
+nulls do not reach codecs.</p>
+<h2 id="avro">Avro</h2>
+<p>Avro arrives through the serde bridge. Add Confluent's serde artifact (it lives in the
+Confluent Maven repository, not Central):</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">&lt;dependency&gt;</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nt">&lt;groupId&gt;</span>io.confluent<span class="nt">&lt;/groupId&gt;</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">&lt;artifactId&gt;</span>kafka-streams-avro-serde<span class="nt">&lt;/artifactId&gt;</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&lt;version&gt;</span>8.0.0<span class="nt">&lt;/version&gt;</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nt">&lt;/dependency&gt;</span>
 </code></pre></div>
-<p>State is keyed by the message key's encoded bytes — the same agreement co-partitioning
-already requires — and scoped to the stage. Returning <code>Step.of(null, ...)</code> deletes the key's
-state. The stage name keys its stores, so keep it stable across deployments.</p>
-<h2 id="testing-your-logic">Testing your logic</h2>
-<p>Handlers and folds are pure functions over values with equality, so the primary tests need
-no runtime at all:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">assertEquals</span><span class="p">(</span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">settlements</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="s">&quot;k&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">expected</span><span class="p">)),</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">        </span><span class="n">handler</span><span class="p">.</span><span class="na">handle</span><span class="p">(</span><span class="n">Message</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;k&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">order</span><span class="p">)));</span>
+<p>Configure a serde per value type, bridge it per topic, and declare the topic once:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">SpecificAvroSerde</span><span class="o">&lt;</span><span class="n">Reading</span><span class="o">&gt;</span><span class="w"> </span><span class="n">readingSerde</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">SpecificAvroSerde</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">readingSerde</span><span class="p">.</span><span class="na">configure</span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;schema.registry.url&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;http://registry:8081&quot;</span><span class="p">),</span><span class="w"> </span><span class="kc">false</span><span class="p">);</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">assertEquals</span><span class="p">(</span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">expectedBalance</span><span class="p">,</span><span class="w"> </span><span class="n">settlements</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="s">&quot;k&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">expected</span><span class="p">)),</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">        </span><span class="n">fold</span><span class="p">.</span><span class="na">apply</span><span class="p">(</span><span class="n">balance</span><span class="p">,</span><span class="w"> </span><span class="n">Message</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;payments&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;k&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">payment</span><span class="p">)));</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Reading</span><span class="o">&gt;</span><span class="w"> </span><span class="n">c1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;c1&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">fromSerde</span><span class="p">(</span><span class="n">readingSerde</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;c1&quot;</span><span class="p">));</span>
 </code></pre></div>
-<p>For the wiring, <code>Parsley.of(stage).testTopology()</code> returns a fresh broker-less topology for
-<code>TopologyTestDriver</code>: pipe records and assert on outputs. Stamp presence is observable via
-the <code>CausalHeaders</code> name constants; gating behaviour itself is Parsley's contract, verified
-by Parsley's own suite. The test topology is for the driver only — under a real cluster it
-neither captures consumer positions nor resolves real topic identity, and the adapter fails
-closed at the first delivered record.</p>
-<h2 id="what-the-runtime-wires-for-you">What the runtime wires for you</h2>
-<p><code>Parsley.streams</code> installs a client supplier that records consumer positions after each poll
-(the liveness signal — see <a href="../../foundations/liveness/#position-advance-bridging">liveness</a>),
-and resolves topic identity and sink end offsets through an admin client built from the same
-properties. A declared sink must exist before the application starts: init fails loudly
-rather than run with own-output claims silently off. The returned <code>CausalStreams</code> is a
-curated allowlist over the Kafka Streams runtime — lifecycle, state, listeners, metrics,
-lag — with no accessor to the underlying instance; members that could violate causality
-(pausing an instance freezes the release of held records fleet-wide, handing out the
-protocol stores) are absent by design. <code>metrics()</code> includes the stage's own gauges and
-counters in the <code>parsley-metrics</code> group, listed in the
-<a href="../../reference/metrics/">metrics reference</a>.</p>
-<h2 id="where-next">Where next</h2>
+<p>The <code>false</code> in <code>configure</code> marks it a value serde, and the bridge's topic name gives the
+registry subject (<code>c1-value</code> under the default naming strategy). <code>GenericAvroSerde</code> works
+identically for <code>GenericRecord</code> values, as do Confluent's JSON Schema and Protobuf serdes —
+the bridge does not care which framing sits behind the serde.</p>
+<p>What Avro-specific behaviour to expect at runtime:</p>
 <ul>
-<li><a href="../topologies/">Topology shapes</a> — the common wiring shapes (linear, fan-out, fan-in,
-  diamond, request and reply, event flows, cycles) and exactly what ordering each one gets.</li>
-<li><a href="../codecs/">Codecs and Avro</a> — the codec contract, writing your own, bridging serdes, and
-  schema-registry formats.</li>
-<li><a href="../expectations/">The contract</a> — everything Parsley expects of you and everything it
-  promises back, including the operational notes.</li>
-<li><a href="../clients/">Plain clients</a> — stamping from plain producers, observing from plain
-  consumers.</li>
+<li><strong>The registry is a runtime dependency of both codec sites.</strong> Encoding at the stamping
+  site registers or looks up the writer schema; decoding at delivery fetches the writer
+  schema by the id in the frame. A registry outage therefore fails the task rather than
+  producing or accepting unreadable bytes, and the transaction's retry refetches.</li>
+<li><strong>Held records and schema evolution compose cleanly.</strong> A record can wait in the hold queue
+  for its causes; it waits as the original bytes and is decoded only at delivery. The frame
+  carries the writer-schema id, so a record written under an older schema decodes under
+  whatever compatible reader schema is in force when it is finally released. Avro's usual
+  compatibility rules apply unchanged; Parsley adds no constraint of its own.</li>
+<li><strong>Keep Avro off keys.</strong> The schema-id frame makes registry-encoded keys non-canonical —
+  see <a href="#key-codecs-are-identity">key codecs are identity</a>.</li>
 </ul>
 
 
@@ -1354,7 +1320,7 @@ counters in the <code>parsley-metrics</code> group, listed in the
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../../design/verification/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Verification">
+          <a href="../topologies/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Topology shapes">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1364,20 +1330,20 @@ counters in the <code>parsley-metrics</code> group, listed in the
                 Previous
               </span>
               <div class="md-ellipsis">
-                Verification
+                Topology shapes
               </div>
             </div>
           </a>
         
         
           
-          <a href="../topologies/" class="md-footer__link md-footer__link--next" aria-label="Next: Topology shapes">
+          <a href="../expectations/" class="md-footer__link md-footer__link--next" aria-label="Next: The contract">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Topology shapes
+                The contract
               </div>
             </div>
             <div class="md-footer__button md-icon">

@@ -799,6 +799,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#the-broker-smoke-suite" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The broker smoke suite
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-the-simulator-does-not-cover" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -833,6 +844,12 @@
   
     
     
+      
+        
+      
+        
+      
+        
       
         
       
@@ -916,6 +933,90 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guide/topologies/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Topology shapes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/codecs/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Codecs and Avro
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/expectations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guide/clients/" class="md-nav__link">
         
   
@@ -952,6 +1053,10 @@
   
     
     
+      
+        
+      
+        
       
         
       
@@ -1013,6 +1118,62 @@
     
   
     Wire format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/metrics/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
   
 
     
@@ -1162,7 +1323,9 @@ cycles, truncation mid-history, log-start stability (full-retention truncation e
 stamp-side clocks, and a from-earliest joiner arriving after truncation), scope shrink across
 a restart, and the wide soak combining most of the above.</p>
 <h2 id="mutation-testing">Mutation testing</h2>
-<p>PIT runs over the whole package inside <code>mvn verify</code>, at four threads with a 60% floor. Four
+<p>PIT runs over the whole package inside <code>mvn verify</code>, at four threads with a 75% mutation
+floor and an 80% line-coverage floor, both a few points below the standing scores so
+refactoring noise does not flake the build. Four
 threads is measured verdict-identical to a serial run on this suite; the hazard being checked
 is that a timeout under CPU contention counts as a kill, so the comparison is repeated
 (one <code>-Dpitest.threads=1</code> run, diff <code>mutations.xml</code>) whenever the suite slows appreciably.
@@ -1172,13 +1335,38 @@ persistence (killed instead by the directed <code>CausalNodePersistenceTest</cod
 paths (removing acknowledgement folding survives because sequence claims soundly cover it),
 and operational transitions like rescope, which dedicated scenarios now drive. One survivor
 class is accepted by design: mutants whose only effect is degrading an optimisation the
-protocol does not rely on for safety.</p>
+protocol does not rely on for safety. The remaining uncovered mutants sit in the
+Admin-backed seam (<code>AdminBrokerOffsets</code>, the admin resolver in <code>TopicIds</code>), which runs only
+against a real cluster and so falls outside PIT's measurement; the seam stays thin, the
+logic behind it is driven through <code>BrokerOffsets</code> by the simulator, and the broker smoke
+suite exercises it against a live broker.</p>
+<h2 id="the-broker-smoke-suite">The broker smoke suite</h2>
+<p>The <code>broker-it</code> Maven profile runs the <code>*IT</code> test classes under failsafe against a real
+single-node broker in a Docker container (Testcontainers), pinned to the minimum supported
+broker version so the stated floor is the one actually tested. It carries the two
+obligations only a live cluster can discharge:</p>
+<ul>
+<li><strong>The broker side of the seam contract.</strong> <code>AdminBrokerOffsetsIT</code> asserts that a real
+  cluster answers the two <code>BrokerOffsets</code> queries as the protocol assumes: end offsets per
+  partition with empty partitions included, log starts advanced by record deletion, and
+  definitive absence by topic ID that survives recreating a topic under the same name.</li>
+<li><strong>The assembled runtime on a live cluster.</strong> <code>ParsleyStreamsIT</code> runs <code>Parsley.streams</code>
+  end to end under exactly-once: records flow from source to sink carrying parseable clock,
+  sender, and sequence headers on the wire, and a restart of the same application on the
+  same state directory resumes without loss or duplication.</li>
+</ul>
+<p>The suite is a smoke test of plumbing, not a correctness gate: a real broker offers no
+control over interleavings, so every causal-order obligation stays with the simulator. It
+sits outside the default <code>mvn clean verify</code> gate (it needs Docker) and outside PIT's
+measurement, and CI runs it as a separate workflow whose failure does not block a snapshot
+publish.</p>
 <h2 id="what-the-simulator-does-not-cover">What the simulator does not cover</h2>
 <p>Real broker behaviour outside the model: rebalances and task migration, consumer-group
-protocol edge cases, the adapter's client-supplier wiring under a live
-cluster, and timing that depends on actual I/O. Those belong to broker integration tests,
-which this cut does not yet include; <code>TopologyTestDriver</code> smoke tests cover the adapter's
-plumbing (hold-and-release, stamp content, fail-closed corrupt headers) without a broker.</p>
+protocol edge cases, and timing that depends on actual I/O. The broker smoke suite covers
+the seam contract and the assembled plumbing on a live cluster; <code>TopologyTestDriver</code> smoke
+tests cover the adapter's plumbing (hold-and-release, stamp content, fail-closed corrupt
+headers, the buffered-batch position guard) without a broker. Rebalance and task-migration behaviour has no automated
+coverage.</p>
 
 
 
