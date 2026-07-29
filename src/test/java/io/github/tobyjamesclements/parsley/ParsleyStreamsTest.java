@@ -103,6 +103,51 @@ class ParsleyStreamsTest {
                 "a restore listener must be rejected once the runtime has left CREATED");
     }
 
+    /** A handler that yields a decision keeps that decision, whatever it is. */
+    @Test
+    void totalDecisionKeepsTheHandlersDecision() {
+        var failure = new RuntimeException("processing failure");
+        for (var response : org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler
+                .StreamThreadExceptionResponse.values()) {
+            assertEquals(response, CausalStreams.totalDecision(e -> response, failure),
+                    "a well-behaved handler's decision must pass through untouched");
+        }
+    }
+
+    /**
+     * A handler that throws resolves to SHUTDOWN_CLIENT. Kafka Streams invokes the handler
+     * uncaught on the failing thread, so a propagated handler failure would discard the
+     * decision, kill the thread without replacement, and leave the client RUNNING with no
+     * threads. The totalized form converts that silent wedge into a loud shutdown.
+     */
+    @Test
+    void totalDecisionShutsDownWhenTheHandlerThrows() {
+        assertEquals(
+                org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler
+                        .StreamThreadExceptionResponse.SHUTDOWN_CLIENT,
+                CausalStreams.totalDecision(
+                        e -> { throw new IllegalStateException("handler failure"); },
+                        new RuntimeException("processing failure")),
+                "a throwing handler must resolve to SHUTDOWN_CLIENT, not propagate");
+        assertEquals(
+                org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler
+                        .StreamThreadExceptionResponse.SHUTDOWN_CLIENT,
+                CausalStreams.totalDecision(
+                        e -> { throw new AssertionError("handler error"); },
+                        new RuntimeException("processing failure")),
+                "an Error from the handler must also resolve to SHUTDOWN_CLIENT");
+    }
+
+    /** A handler that returns null resolves to SHUTDOWN_CLIENT instead of failing the switch. */
+    @Test
+    void totalDecisionShutsDownWhenTheHandlerReturnsNull() {
+        assertEquals(
+                org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler
+                        .StreamThreadExceptionResponse.SHUTDOWN_CLIENT,
+                CausalStreams.totalDecision(e -> null, new RuntimeException("processing failure")),
+                "a null decision must resolve to SHUTDOWN_CLIENT");
+    }
+
     /** The thread and lag views delegate to the runtime rather than answering empty. */
     @Test
     void runtimeViewsAnswerBeforeStart() {
