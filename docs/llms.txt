@@ -47,6 +47,7 @@ matching pages are under the `dev` alias; the site's default `latest` alias serv
 ## Reference
 
 - [Wire format](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/reference/wire-format.md): the record headers and state-store layouts; the compatibility surface
+- [Conformance kit](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/reference/conformance-kit.md): the simulator and oracle as a consumable test-jar; the host contract, and how a vendored copy or alternative host verifies itself
 - [Metrics](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/reference/metrics.md): the vc-metrics group, gauges, and counters
 - [README](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/README.md): the one-page overview
 

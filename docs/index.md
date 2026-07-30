@@ -49,7 +49,10 @@ not broker integration tests. The simulator models EOS transactions, marker and 
 offsets, asynchronous acknowledgements, crashes with transactional rollback, and seeded random
 interleavings; the oracle tracks real happened-before ancestry outside the protocol and checks
 every delivery. [Verification](design/verification.md) states the obligations and how each is
-enforced, including the self-test that proves the oracle catches a broken protocol.
+enforced, including the self-tests that prove the harness catches a broken protocol and a
+broken host. The whole apparatus ships as the
+[conformance kit](reference/conformance-kit.md), so a vendored copy or an alternative host
+can run the same verification.
 
 ## Reading order
 

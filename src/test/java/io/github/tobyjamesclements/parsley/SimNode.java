@@ -15,8 +15,22 @@ import java.util.function.BiFunction;
  * the user behavior on each delivery, performs sends with protocol stamps, and commits
  * everything step-atomically. A step can be aborted mid-flight to model a crash inside an EOS
  * transaction.
+ *
+ * <p>{@link HostFault} switches one host duty off, for {@link HostContractSelfTest} only: the
+ * conformance kit must flag a host that shirks a duty, and the only way to prove it can is to
+ * run such a host. Every simulation outside that self-test runs with {@link HostFault#NONE}.
  */
 final class SimNode {
+
+    /** A deliberately broken host duty; see {@link HostContractSelfTest}. */
+    enum HostFault {
+        /** All duties upheld — every run outside the host self-test. */
+        NONE,
+        /** Breaks step-atomicity: a crash aborts the transaction but the store commits anyway. */
+        COMMIT_STORE_ON_CRASH,
+        /** Withholds the liveness signal: consumer position advances are never reported. */
+        DROP_POSITION_ADVANCE
+    }
 
     final String name;
     private final SimWorld world;
@@ -28,6 +42,7 @@ final class SimNode {
     final SimStateStore store = new SimStateStore();
     final SimBrokerOffsets offsets;
     boolean up;
+    HostFault fault = HostFault.NONE;
 
     /** Committed consumer positions (next offset to fetch). */
     private final Map<Channel, Long> positions = new HashMap<>();
@@ -88,7 +103,7 @@ final class SimNode {
      * the position but the log continues past it (trailing markers / aborted records).
      */
     boolean hasPositionAdvance(Channel c) {
-        if (!up) return false;
+        if (!up || fault == HostFault.DROP_POSITION_ADVANCE) return false;
         long pos = positions.get(c);
         return world.broker.nextFetchable(c, pos) < 0 && world.broker.endOffset(c) > pos;
     }
@@ -147,7 +162,13 @@ final class SimNode {
                 world.broker.markAborted((Channel) coord[0], (Long) coord[1]);
             }
             world.broker.appendMarkers(touchedThisStep);
-            store.discard();
+            // The broker side of the abort is reality either way; the faulty host's bug is
+            // local — its store keeps the transaction the broker rolled back.
+            if (fault == HostFault.COMMIT_STORE_ON_CRASH) {
+                store.commit();
+            } else {
+                store.discard();
+            }
             world.oracle.abort(name);
             up = false;
         } else {

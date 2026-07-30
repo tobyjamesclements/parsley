@@ -47,11 +47,17 @@ transactional rollback, and seeded random interleavings. The oracle tracks real
 happened-before ancestry entirely outside the protocol and checks every delivery for causal
 order, per-channel FIFO, and duplicates, plus completeness and drain at the end of every run.
 Scenarios assert that the machinery under test actually fired — gate holds, crash injections,
-position advances — and a self-test proves the oracle flags a deliberately broken protocol.
+position advances — and self-tests prove the harness flags a deliberately broken protocol and
+a deliberately broken host.
 
 ```
 mvn verify
 ```
+
+The simulator and oracle also ship as the
+[conformance kit](docs/reference/conformance-kit.md) — the `test-jar` artifact of the same
+Maven coordinates — so a vendored copy or an alternative host can run this verification in
+its own CI.
 
 ## Using it
 

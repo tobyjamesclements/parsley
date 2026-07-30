@@ -114,6 +114,29 @@
                 <version>3.5.2</version>
             </plugin>
             <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+                <executions>
+                    <execution>
+                        <!-- The conformance kit (docs/reference/conformance-kit.md): the
+                             simulator, oracle, and protocol tests as a consumable artifact, so
+                             a vendored copy or an alternative host can run the verification
+                             this library's own guarantees rest on. The broker *IT classes stay
+                             out: the kit must run without Docker or Testcontainers. -->
+                        <id>conformance-kit</id>
+                        <goals>
+                            <goal>test-jar</goal>
+                        </goals>
+                        <configuration>
+                            <excludes>
+                                <exclude>**/*IT.class</exclude>
+                            </excludes>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
                 <groupId>org.pitest</groupId>
                 <artifactId>pitest-maven</artifactId>
                 <version>1.25.7</version>
