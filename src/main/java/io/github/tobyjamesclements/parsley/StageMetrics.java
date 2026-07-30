@@ -49,6 +49,8 @@ final class StageMetrics {
     private final Map<Channel, HeadMark> headMarks = new HashMap<>();
     /** The replay count already drained into the sensor; {@link #sample} records the delta. */
     private long replaysRecorded;
+    /** The wall clock of the most recent {@link #sample}, which {@link #heldMs} ages against. */
+    private long lastSampleMs;
 
     StageMetrics(StreamsMetrics registry, String stage, String taskId,
                  Map<Channel, String> topicByChannel, CausalNode node) {
@@ -142,6 +144,7 @@ final class StageMetrics {
      * observation, so restored holds age from the first sample after init.
      */
     void sample(long nowMs) {
+        lastSampleMs = nowMs;
         Map<Channel, Integer> held = node.heldCounts();
         Map<Channel, Long> heads = node.headOffsets();
         headMarks.keySet().retainAll(heads.keySet());
@@ -177,6 +180,18 @@ final class StageMetrics {
             replaysSkipped.record(replays - replaysRecorded);
             replaysRecorded = replays;
         }
+    }
+
+    /**
+     * How long this channel's current head has been held, as of the last {@link #sample} —
+     * the same measurement the {@code records-held-age-max-ms} gauge reports, reused so the
+     * gauge, the diagnosis surface, and the hold warning cannot disagree.
+     *
+     * @return the age in milliseconds, or {@code 0} when the channel has no head marked
+     */
+    long heldMs(Channel c) {
+        HeadMark mark = headMarks.get(c);
+        return mark == null ? 0 : lastSampleMs - mark.sinceMs();
     }
 
     /** Removes every registered sensor; called when the task's processor closes. */

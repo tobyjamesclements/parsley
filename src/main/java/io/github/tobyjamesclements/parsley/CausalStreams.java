@@ -10,6 +10,7 @@ import org.apache.kafka.streams.errors.StreamsUncaughtExceptionHandler;
 import org.apache.kafka.streams.processor.StateRestoreListener;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -42,10 +43,12 @@ public final class CausalStreams implements AutoCloseable {
 
     private final KafkaStreams streams;
     private final Admin admin;
+    private final String applicationId;
 
-    CausalStreams(KafkaStreams streams, Admin admin) {
+    CausalStreams(KafkaStreams streams, Admin admin, String applicationId) {
         this.streams = streams;
         this.admin = admin;
+        this.applicationId = applicationId;
     }
 
     /** Registers a state-transition listener. Before {@link #start()}. */
@@ -113,6 +116,29 @@ public final class CausalStreams implements AutoCloseable {
     /** Store-partition restoration lag, keyed by store name; covers the protocol and fold stores. */
     public Map<String, Map<Integer, LagInfo>> allLocalStorePartitionLags() {
         return streams.allLocalStorePartitionLags();
+    }
+
+    /**
+     * Why records are currently waiting at the gate, longest-held first: one entry per gating
+     * head across this instance's local tasks, each naming the causes it still waits for and
+     * the local watermarks that show the gap. Empty when nothing is held.
+     *
+     * <p>This is the answer to "why is nothing coming out", and it exists so the correct next
+     * step is cheaper than the wrong one. A held record means a cause is missing, lagging, or
+     * unstamped; the fix is to deliver that cause, never to skip, reorder, or add a timeout.
+     * Each {@link HeldRecord.Diagnosis} carries the documentation anchor for its case, and
+     * {@code docs/guide/diagnosing-holds.md} walks them through.
+     *
+     * <p>It is present on this allowlist where {@code store()} is not, because it is causally
+     * and operationally inert. It returns coordinates, claims, and watermarks — never key or
+     * value bytes, so it cannot become a back door to state a query would have observed — it
+     * reads only a snapshot each task published from its own stream thread, so it takes no
+     * locks on the processing path, and it changes nothing. The snapshots refresh on the
+     * task's wall-clock punctuator, so a reading is at most that stale, and it describes the
+     * task's in-flight view, which an aborted transaction may roll back.
+     */
+    public List<HeldRecord> explainHolds() {
+        return Holds.forApplication(applicationId);
     }
 
     @Override

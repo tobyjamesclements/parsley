@@ -382,6 +382,61 @@ final class CausalNode implements DeliveryProtocol {
     }
 
     /**
+     * One claim a held head is still waiting for, with the local watermarks it is measured
+     * against. An offset claim carries {@code claimedOffset} and a null sender; a sequence
+     * claim carries {@code sender} and {@code claimedSeq}.
+     */
+    record UnmetClaim(Channel channel, long claimedOffset, long localFrontier, long localPosition,
+                      UUID sender, long claimedSeq, long deliveredSeq) {}
+
+    /** One channel's gating head: the record, its queue depth, and what it still waits on. */
+    record HeadHold(Channel channel, long offset, int queueDepth, List<UnmetClaim> unmet) {}
+
+    /**
+     * Why each non-empty hold queue's head is waiting: the same predicate as
+     * {@link #deliverable}, collecting every unmet claim instead of stopping at the first.
+     * Only heads are reported, because only heads are gated — everything behind a head waits
+     * on the head, not on causes of its own.
+     *
+     * <p>Read-only, and called from the host's punctuator on the stream thread; a head with no
+     * unmet claim is deliverable and so never appears.
+     */
+    List<HeadHold> explainHeads() {
+        List<HeadHold> out = new ArrayList<>();
+        queues.forEach((c, q) -> {
+            Held h = q.held.peekFirst();
+            if (h == null) return;
+            List<UnmetClaim> unmet = new ArrayList<>();
+            long position = positionKnown.getOrDefault(c, 0L);
+            h.clock().forEach((ch, off) -> {
+                if (ch.equals(c) || !config.consumed().contains(ch)) return;
+                if (frontierOf(ch) < off) {
+                    unmet.add(new UnmetClaim(ch, off, frontierOf(ch),
+                            positionKnown.getOrDefault(ch, 0L), null, VectorClock.NOTHING,
+                            VectorClock.NOTHING));
+                }
+            });
+            h.clock().forEachSeq((key, seq) -> {
+                Channel ch = key.channel();
+                if (ch.equals(c) || !config.consumed().contains(ch)) return;
+                SeqMark mark = seqMark(ch, key.sender());
+                if (mark == null || mark.seq() < seq) {
+                    unmet.add(new UnmetClaim(ch, VectorClock.NOTHING, frontierOf(ch),
+                            positionKnown.getOrDefault(ch, 0L), key.sender(), seq,
+                            mark == null ? VectorClock.NOTHING : mark.seq()));
+                }
+            });
+            if (!unmet.isEmpty()) {
+                out.add(new HeadHold(c, h.offset(), q.held.size(), unmet));
+            } else {
+                LOG.debug("{}: head {} offset {} has no unmet claim; it releases on the next"
+                        + " cascade", config.nodeId(), c, h.offset());
+            }
+        });
+        return out;
+    }
+
+    /**
      * The width of the merged stamp-side clock, the claims {@link #prepareSend} stamps before
      * normalisation and the fresh self-claims. Growth against a steady workload means
      * truncation is not keeping up with the clock's footprint.

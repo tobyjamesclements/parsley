@@ -11,7 +11,8 @@ them. The functional core is the vocabulary user logic is written in: `Topic`, `
 `Message`, `Emission`, `Handler`, `Fold`, and `Step`. The imperative edges run that logic:
 `Stage` wires it to topics, `Parsley` composes stages, `CausalStreams` is the running
 application, `CausalClock` with `CausalHeaders` serve plain clients at the application's
-borders, and `ContractProbes` checks the application contract from the application's own
-test suite. Everything else is package-private, because the protocol is only sound under a host
+borders, `ContractProbes` checks the application contract from the application's own
+test suite, and `HeldRecord` is what `CausalStreams.explainHolds()` reports when records are
+waiting at the gate. Everything else is package-private, because the protocol is only sound under a host
 contract no API can enforce, and the one host that upholds that contract ships inside the
 package.
