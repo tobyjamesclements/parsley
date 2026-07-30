@@ -715,6 +715,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -829,6 +833,62 @@
     
   
     Codecs and Avro
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Error handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/ticks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ticks
   
 
     
@@ -1160,7 +1220,7 @@
 
 
 <h1 id="metrics">Metrics</h1>
-<p>Every stage task registers its metrics in the group <code>parsley-metrics</code> on the Kafka Streams
+<p>Every stage task registers its metrics in the group <code>vc-metrics</code> on the Kafka Streams
 metrics registry, next to the Streams built-ins. They reach JMX under the <code>kafka.streams</code>
 domain, every configured metrics reporter, and <a href="../api/"><code>CausalStreams.metrics()</code></a>. All of
 them carry the tags <code>thread-id</code>, <code>task-id</code>, and <code>stage</code>; the per-topic breakdowns add
@@ -1211,6 +1271,11 @@ the event it reflects by up to half a second. Counters are recorded at their eve
 <td><code>truncation-sweeps-skipped-total</code></td>
 <td>total</td>
 <td>The total number of truncation sweeps that failed and skipped their cycle. A climbing value means stamp-side clock entries are not being garbage-collected.</td>
+</tr>
+<tr>
+<td><code>ticks-emitted-total</code></td>
+<td>total</td>
+<td>The total number of tick records the task has emitted to its tick channel. Absent growth on a ticking stage means the tick punctuator is not firing.</td>
 </tr>
 <tr>
 <td><code>stamp-offset-entries</code></td>

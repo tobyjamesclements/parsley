@@ -717,6 +717,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -969,6 +973,62 @@
     
   
     Codecs and Avro
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Error handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ticks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ticks
   
 
     
@@ -1303,10 +1363,11 @@ and resolves topic identity and sink end offsets through an admin client built f
 properties. A declared sink must exist before the application starts: init fails loudly
 rather than run with own-output claims silently off. The returned <code>CausalStreams</code> is a
 curated allowlist over the Kafka Streams runtime — lifecycle, state, listeners, metrics,
-lag — with no accessor to the underlying instance; members that could violate causality
-(pausing an instance freezes the release of held records fleet-wide, handing out the
-protocol stores) are absent by design. <code>metrics()</code> includes the stage's own gauges and
-counters in the <code>parsley-metrics</code> group, listed in the
+lag — with no accessor to the underlying instance. The withheld members are absent for
+stated reasons, on the class Javadoc member by member: interactive queries can observe
+uncommitted transactional state, pausing an instance freezes the release of held records
+fleet-wide, and the rest duplicates what scaling by instances already expresses. <code>metrics()</code> includes the stage's own gauges and
+counters in the <code>vc-metrics</code> group, listed in the
 <a href="../../reference/metrics/">metrics reference</a>.</p>
 <h2 id="where-next">Where next</h2>
 <ul>
@@ -1314,6 +1375,8 @@ counters in the <code>parsley-metrics</code> group, listed in the
   diamond, request and reply, event flows, cycles) and exactly what ordering each one gets.</li>
 <li><a href="../codecs/">Codecs and Avro</a> — the codec contract, writing your own, bridging serdes, and
   schema-registry formats.</li>
+<li><a href="../ticks/">Ticks</a> — time-driven policy as delivered records: the runtime emits a stamped
+  tick per interval, and pure logic folds over it.</li>
 <li><a href="../expectations/">The contract</a> — everything Parsley expects of you and everything it
   promises back, including the operational notes.</li>
 <li><a href="../clients/">Plain clients</a> — stamping from plain producers, observing from plain

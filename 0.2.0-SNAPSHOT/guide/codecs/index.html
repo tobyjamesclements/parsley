@@ -14,7 +14,7 @@
         <link rel="prev" href="../topologies/">
       
       
-        <link rel="next" href="../expectations/">
+        <link rel="next" href="../error-handling/">
       
       
         
@@ -717,6 +717,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -908,6 +912,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#decoding-failure-you-can-route" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Decoding failure you can route
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#key-codecs-are-identity" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -944,6 +959,62 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Error handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ticks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ticks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -1200,7 +1271,9 @@ claims.</p>
   values.</li>
 <li><strong>Failure is loud.</strong> A codec that cannot decode should throw, not guess: an exception from
   <code>decode</code> or <code>encode</code> fails the task, the transaction aborts, and the retry refetches. A
-  lenient codec that returns a placeholder converts a wiring bug into silent data corruption.</li>
+  lenient codec that returns a placeholder converts a wiring bug into silent data corruption.
+  For bytes whose malformedness is a domain fact rather than a wiring bug, see
+  <a href="#decoding-failure-you-can-route">decoding failure you can route</a>.</li>
 </ul>
 <h2 id="built-in-codecs-and-writing-your-own">Built-in codecs and writing your own</h2>
 <p><code>Codec.utf8()</code>, <code>Codec.int64()</code>, and <code>Codec.bytes()</code> cover strings, longs, and raw bytes.
@@ -1234,6 +1307,41 @@ any codec exception as a task failure, which is the behaviour you want:</p>
 <a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="w">            </span><span class="p">});</span>
 <a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="p">}</span>
 </code></pre></div>
+<h2 id="decoding-failure-you-can-route">Decoding failure you can route</h2>
+<p>The codec contract's loud-failure rule is about wiring bugs: between your own producers and
+consumers, undecodable bytes mean a broken deployment, and failing the task is the correct
+response. A source topic whose producers you do not control is different — there, malformed
+bytes can be a fact of the domain, and they arrive before user logic runs, so no handler
+can catch them. The escape is to make the codec itself total over a sum type that keeps the
+failure explicit:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="kd">sealed</span><span class="w"> </span><span class="kd">interface</span> <span class="nc">Decoded</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="kd">record</span> <span class="nc">Ok</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">(</span><span class="n">T</span><span class="w"> </span><span class="n">value</span><span class="p">)</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">Decoded</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="kd">record</span> <span class="nc">Malformed</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="p">(</span><span class="kt">byte</span><span class="o">[]</span><span class="w"> </span><span class="n">raw</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="w"> </span><span class="n">reason</span><span class="p">)</span><span class="w"> </span><span class="kd">implements</span><span class="w"> </span><span class="n">Decoded</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{}</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="kd">static</span><span class="w"> </span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">Codec</span><span class="o">&lt;</span><span class="n">Decoded</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="nf">attempting</span><span class="p">(</span><span class="n">Codec</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">codec</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">of</span><span class="p">(</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">            </span><span class="n">d</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="k">switch</span><span class="w"> </span><span class="p">(</span><span class="n">d</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">                </span><span class="k">case</span><span class="w"> </span><span class="n">Decoded</span><span class="p">.</span><span class="na">Ok</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">ok</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">codec</span><span class="p">.</span><span class="na">encode</span><span class="p">(</span><span class="n">ok</span><span class="p">.</span><span class="na">value</span><span class="p">());</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">                </span><span class="k">case</span><span class="w"> </span><span class="n">Decoded</span><span class="p">.</span><span class="na">Malformed</span><span class="o">&lt;</span><span class="n">T</span><span class="o">&gt;</span><span class="w"> </span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">m</span><span class="p">.</span><span class="na">raw</span><span class="p">();</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">            </span><span class="p">},</span>
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">            </span><span class="n">b</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">                </span><span class="k">try</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="w">                    </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Decoded</span><span class="p">.</span><span class="na">Ok</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="n">codec</span><span class="p">.</span><span class="na">decode</span><span class="p">(</span><span class="n">b</span><span class="p">));</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="w">                </span><span class="p">}</span><span class="w"> </span><span class="k">catch</span><span class="w"> </span><span class="p">(</span><span class="n">RuntimeException</span><span class="w"> </span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="w">                    </span><span class="k">return</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Decoded</span><span class="p">.</span><span class="na">Malformed</span><span class="o">&lt;&gt;</span><span class="p">(</span><span class="n">b</span><span class="p">,</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="na">toString</span><span class="p">());</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="w">                </span><span class="p">}</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a><span class="w">            </span><span class="p">});</span>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="p">}</span>
+</code></pre></div>
+<p>The handler then receives <code>Decoded&lt;T&gt;</code> and routes the <code>Malformed</code> case to a declared error
+sink, in causal order like every other emission — see
+<a href="../error-handling/#domain-failures-are-data">domain failures are data</a>. This is not the
+lenient placeholder the contract forbids: a placeholder pretends decoding succeeded and
+corrupts silently, while the sum type forces every consumer of the value to decide the
+failure case in the type system. Keep total codecs on values from foreign producers only;
+a topic your own stages write should keep the loud contract, because there malformed bytes
+are a bug you want to fail on.</p>
 <h2 id="key-codecs-are-identity">Key codecs are identity</h2>
 <p>A key's encoded bytes are load-bearing three times over. They choose the partition (the
 producer-default murmur2 hash of the encoded key), they key the stage's per-key fold state,
@@ -1255,17 +1363,17 @@ nulls do not reach codecs.</p>
 <h2 id="avro">Avro</h2>
 <p>Avro arrives through the serde bridge. Add Confluent's serde artifact (it lives in the
 Confluent Maven repository, not Central):</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">&lt;dependency&gt;</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span><span class="nt">&lt;groupId&gt;</span>io.confluent<span class="nt">&lt;/groupId&gt;</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="nt">&lt;artifactId&gt;</span>kafka-streams-avro-serde<span class="nt">&lt;/artifactId&gt;</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">    </span><span class="nt">&lt;version&gt;</span>8.0.0<span class="nt">&lt;/version&gt;</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="nt">&lt;/dependency&gt;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">&lt;dependency&gt;</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span><span class="nt">&lt;groupId&gt;</span>io.confluent<span class="nt">&lt;/groupId&gt;</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="nt">&lt;artifactId&gt;</span>kafka-streams-avro-serde<span class="nt">&lt;/artifactId&gt;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="nt">&lt;version&gt;</span>8.0.0<span class="nt">&lt;/version&gt;</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="nt">&lt;/dependency&gt;</span>
 </code></pre></div>
 <p>Configure a serde per value type, bridge it per topic, and declare the topic once:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="n">SpecificAvroSerde</span><span class="o">&lt;</span><span class="n">Reading</span><span class="o">&gt;</span><span class="w"> </span><span class="n">readingSerde</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">SpecificAvroSerde</span><span class="o">&lt;&gt;</span><span class="p">();</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="n">readingSerde</span><span class="p">.</span><span class="na">configure</span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;schema.registry.url&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;http://registry:8081&quot;</span><span class="p">),</span><span class="w"> </span><span class="kc">false</span><span class="p">);</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Reading</span><span class="o">&gt;</span><span class="w"> </span><span class="n">c1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;c1&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">fromSerde</span><span class="p">(</span><span class="n">readingSerde</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;c1&quot;</span><span class="p">));</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="n">SpecificAvroSerde</span><span class="o">&lt;</span><span class="n">Reading</span><span class="o">&gt;</span><span class="w"> </span><span class="n">readingSerde</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">SpecificAvroSerde</span><span class="o">&lt;&gt;</span><span class="p">();</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="n">readingSerde</span><span class="p">.</span><span class="na">configure</span><span class="p">(</span><span class="n">Map</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;schema.registry.url&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;http://registry:8081&quot;</span><span class="p">),</span><span class="w"> </span><span class="kc">false</span><span class="p">);</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Reading</span><span class="o">&gt;</span><span class="w"> </span><span class="n">c1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;c1&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">fromSerde</span><span class="p">(</span><span class="n">readingSerde</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;c1&quot;</span><span class="p">));</span>
 </code></pre></div>
 <p>The <code>false</code> in <code>configure</code> marks it a value serde, and the bridge's topic name gives the
 registry subject (<code>c1-value</code> under the default naming strategy). <code>GenericAvroSerde</code> works
@@ -1337,13 +1445,13 @@ the bridge does not care which framing sits behind the serde.</p>
         
         
           
-          <a href="../expectations/" class="md-footer__link md-footer__link--next" aria-label="Next: The contract">
+          <a href="../error-handling/" class="md-footer__link md-footer__link--next" aria-label="Next: Error handling">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                The contract
+                Error handling
               </div>
             </div>
             <div class="md-footer__button md-icon">

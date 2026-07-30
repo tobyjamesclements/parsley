@@ -715,6 +715,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -829,6 +833,62 @@
     
   
     Codecs and Avro
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Error handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/ticks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ticks
   
 
     
@@ -1079,6 +1139,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#tick-record" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tick record
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#fold-state-store" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1233,16 +1304,16 @@ as empty (<a href="../../foundations/delivery-gate/#the-predicate">fail closed</
 </thead>
 <tbody>
 <tr>
-<td><code>parsley-clock</code></td>
+<td><code>vc</code></td>
 <td>The record's dependency clock, serialized as above. Absent means the producer claims nothing.</td>
 </tr>
 <tr>
-<td><code>parsley-sender</code></td>
+<td><code>vc-sender</code></td>
 <td>The producing node's stable sender identity: 16 bytes, UUID most- then least-significant. Absent on edge-produced records.</td>
 </tr>
 <tr>
-<td><code>parsley-seq</code></td>
-<td>The record's per-channel send sequence at its sender: 8 bytes. Present exactly when <code>parsley-sender</code> is.</td>
+<td><code>vc-seq</code></td>
+<td>The record's per-channel send sequence at its sender: 8 bytes. Present exactly when <code>vc-sender</code> is.</td>
 </tr>
 </tbody>
 </table>
@@ -1309,11 +1380,18 @@ fetched:</p>
 </code></pre></div>
 <p>Non-Parsley headers are not yet part of the envelope; a held record is delivered with empty
 headers. This is a known limit of the current cut.</p>
+<h2 id="tick-record">Tick record</h2>
+<p>A stage with declared ticks emits one record per interval per task to its tick topic,
+<code>vc-&lt;stage&gt;-ticks</code>. The key is the emitting task's partition as a big-endian <code>int32</code> —
+the sink partitioner reads it back to land the tick on the emitting task's own channel — the
+value is null, the timestamp is the task's wall clock at emission, and the headers are the
+standard stamp above.</p>
 <h2 id="fold-state-store">Fold-state store</h2>
-<p>A stateful stage keeps its per-key fold state in a second store, <code>parsley-&lt;stage&gt;-fold</code>.
+<p>A stateful stage keeps its per-key fold state in a second store, <code>vc-&lt;stage&gt;-fold</code>.
 Keys are the message key's encoded bytes with a one-byte presence prefix — <code>0x00</code> alone for
 a null key, <code>0x01</code> followed by the key bytes otherwise — so a null key folds under its own
-state without colliding with an empty key. Values are whatever the stage's state codec
+state without colliding with an empty key. The tick state occupies the single key <code>0x02</code>,
+its own namespace beside the presence prefixes. Values are whatever the stage's state codec
 produces; Parsley adds no framing.</p>
 <h2 id="not-persisted">Not persisted</h2>
 <p><code>ownOutputs</code> (re-seeded from sink end offsets at every init, which dominate any persisted

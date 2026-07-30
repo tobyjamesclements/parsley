@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="../..">
+        <link rel="prev" href="../codecs/">
       
       
-        <link rel="next" href="../delivery-gate/">
+        <link rel="next" href="../ticks/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>The causal model - Parsley</title>
+        <title>Error handling - Parsley</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#the-causal-model" class="md-skip">
+        <a href="#error-handling" class="md-skip">
           Skip to content
         </a>
       
@@ -110,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              The causal model
+              Error handling
             
           </span>
         </div>
@@ -238,13 +238,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../../foundations/causal-model/" class="md-tabs__link">
           
   
   
@@ -284,11 +282,13 @@
   
   
   
+    
+  
   
     
     
-      <li class="md-tabs__item">
-        <a href="../../guide/getting-started/" class="md-tabs__link">
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../getting-started/" class="md-tabs__link">
           
   
   
@@ -402,10 +402,8 @@
       
   
   
-    
   
   
-  
     
     
       
@@ -419,20 +417,17 @@
     
     
       
-        
-        
-      
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
         
           
-          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
             
   
   
@@ -450,7 +445,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_2">
             <span class="md-nav__icon md-icon"></span>
             
@@ -465,37 +460,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    The causal model
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../../foundations/causal-model/" class="md-nav__link">
         
   
   
@@ -511,81 +479,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#happened-before" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Happened-before
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#channels-coordinates-clocks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Channels, coordinates, clocks
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#what-breaks-the-textbook-algorithms-here" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What breaks the textbook algorithms here
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-delivery-invariant" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The delivery invariant
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#preconditions" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Preconditions
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -598,7 +491,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../delivery-gate/" class="md-nav__link">
+      <a href="../../foundations/delivery-gate/" class="md-nav__link">
         
   
   
@@ -626,7 +519,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../liveness/" class="md-nav__link">
+      <a href="../../foundations/liveness/" class="md-nav__link">
         
   
   
@@ -807,8 +700,10 @@
       
   
   
+    
   
   
+  
     
     
       
@@ -830,17 +725,20 @@
     
     
       
+        
+        
+      
       
     
     
-    <li class="md-nav__item md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
         
           
-          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
             
   
   
@@ -858,7 +756,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
           <label class="md-nav__title" for="__nav_4">
             <span class="md-nav__icon md-icon"></span>
             
@@ -876,7 +774,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guide/getting-started/" class="md-nav__link">
+      <a href="../getting-started/" class="md-nav__link">
         
   
   
@@ -904,7 +802,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guide/topologies/" class="md-nav__link">
+      <a href="../topologies/" class="md-nav__link">
         
   
   
@@ -932,7 +830,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guide/codecs/" class="md-nav__link">
+      <a href="../codecs/" class="md-nav__link">
         
   
   
@@ -957,10 +855,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../../guide/error-handling/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Error handling
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -976,6 +901,81 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-happens-when-logic-throws" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What happens when logic throws
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#why-abort-and-retry-is-the-default" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Why abort-and-retry is the default
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#domain-failures-are-data" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Domain failures are data
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#malformed-records" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Malformed records
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-stream-thread-policy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The stream-thread policy
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -988,7 +988,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guide/ticks/" class="md-nav__link">
+      <a href="../ticks/" class="md-nav__link">
         
   
   
@@ -1016,7 +1016,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guide/expectations/" class="md-nav__link">
+      <a href="../expectations/" class="md-nav__link">
         
   
   
@@ -1044,7 +1044,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../guide/clients/" class="md-nav__link">
+      <a href="../clients/" class="md-nav__link">
         
   
   
@@ -1241,92 +1241,88 @@
   
 
 
-<h1 id="the-causal-model">The causal model</h1>
-<h2 id="happened-before">Happened-before</h2>
-<p>The happened-before relation is a partial order on events, written A → B. It holds when A and
-B occur in the same process and A occurs first, when A is the sending of a message and B its
-receipt, or transitively through any chain of the first two. Causal delivery, applied to
-stream processing, says: if record A happened-before record B, then any processor that
-consumes both delivers A before B. The transitive case is the one that matters in practice — a
-consumer need not subscribe to every intermediate step to be bound by the ordering that runs
-through them.</p>
-<p>In the consistency hierarchy this sits above eventual consistency, which constrains no order,
-and below linearisability, which forces a single global timeline. Causal consistency is the
-strongest model maintainable without coordination, which is what lets a new application join
-by simply starting to consume.</p>
-<h2 id="channels-coordinates-clocks">Channels, coordinates, clocks</h2>
-<p>Kafka's unit of total order is the partition, not the process, so Parsley's clocks are indexed
-by channel:</p>
+<h1 id="error-handling">Error handling</h1>
+<p>Handlers and folds carry no error channel in their signatures: a handler returns emissions,
+a fold returns a step, and there is no <code>Either</code> or result wrapper around either. This page
+states what the runtime does when logic throws, why that is the default, and how to model
+failures that are part of your domain.</p>
+<h2 id="what-happens-when-logic-throws">What happens when logic throws</h2>
+<p>An uncaught <code>RuntimeException</code> from a handler, a fold, or a codec fails the stream task. The
+task's transaction aborts atomically: the delivery, the fold state it wrote, the emissions
+it caused, and the sequence claims stamped on them all roll back together, and the
+committed state remains exactly what the last successful delivery left. What happens to the
+application next is the host runtime's policy, decided by the
+<a href="#the-stream-thread-policy">uncaught-exception handler</a>.</p>
+<p>On restart the task refetches from its committed position and redelivers the same records
+in the same causal order. The two failure classes therefore behave differently:</p>
 <ul>
-<li>A <strong>channel</strong> is <code>(topicId, partition)</code>, where <code>topicId</code> is the topic's stable Kafka UUID. A
-  topic deleted and recreated under the same name is a different channel, so a coordinate can
-  never silently rebind to a different record history.</li>
-<li>A <strong>coordinate</strong> is a channel plus a broker offset — the identity of one appended record.</li>
-<li>A <strong>clock</strong> maps channels to offset watermarks: an entry <code>(c, n)</code> claims every offset at or
-  below <code>n</code> on <code>c</code>. Absent channels claim nothing.</li>
+<li>A <strong>transient failure</strong> — a schema-registry outage, a broker hiccup — retries with
+  exactly-once semantics. The aborted attempt leaves no trace, and the retry delivers the
+  record as if the failure never happened.</li>
+<li>A <strong>deterministic failure</strong> — a bug, a message the logic cannot handle — recurs on every
+  redelivery and fails the task each time. The record blocks its channel until the logic
+  changes.</li>
 </ul>
-<p>A clock plays two roles, distinguished in the literature as VT(m) and VT(p): attached to a
-record it states the record's dependencies; held by a node it accumulates what the node has
-delivered and learned. The <a href="../delivery-gate/">gate</a> compares the first against the node's
-frontier; the <a href="../../design/architecture/#the-stamp">stamp</a> publishes the second.</p>
-<h2 id="what-breaks-the-textbook-algorithms-here">What breaks the textbook algorithms here</h2>
-<p>Classical causal broadcast rests on two assumptions, and Kafka stream processing violates
-both:</p>
-<p><strong>Total visibility.</strong> COPS-style systems and group-broadcast protocols assume every node that
-enforces causal order receives every write, so the delivery predicate always converges. A
-stream processor subscribes to a few topics out of many; most coordinates in a dependency
-clock name channels it will never see. Parsley's answer is not to restore visibility but to
-make the predicate sound without it — the gate's ignore branch, developed in
-<a href="../delivery-gate/">the delivery gate</a>.</p>
-<p><strong>Reliable dense FIFO channels.</strong> A Kafka partition observed through a <code>read_committed</code>
-consumer is not dense: transaction commit markers and aborted records occupy real offsets the
-consumer never returns, and retention means consumption need not start at zero. The density
-adaptation (seeding, bridging, position advance) repairs this at receive time — see
-<a href="../../design/state/#density-adaptation">state and recovery</a> and
-<a href="../liveness/">liveness</a>.</p>
-<p>One further deviation from the textbook is Kafka-specific: the sender's clock increment is
-performed by the broker (offset assignment), learned asynchronously from producer
-acknowledgements. A record's own coordinate therefore cannot appear in its own stamp, and a
-node claims its in-flight sends in its own send-sequence space, resolved by receivers from
-the sender tag every stamped record carries — developed in
-<a href="../../design/architecture/#the-stamp">architecture</a>.</p>
-<h2 id="the-delivery-invariant">The delivery invariant</h2>
-<p>Stated the way the verification oracle checks it, with no reference to the protocol's own
-clocks: when record <code>m</code> is delivered to the user processor at node <code>n</code>, every ancestor <code>a</code> of
-<code>m</code> (under real happened-before) with <code>a</code>'s channel consumed by <code>n</code> and <code>a</code>'s offset at or
-above <code>n</code>'s baseline on that channel has already been delivered at <code>n</code>. The baseline is the
-seed point — history below a node's first sighting of a channel is outside its scope by
-definition, a finite-retention fact rather than an ordering exception.</p>
-<h2 id="preconditions">Preconditions</h2>
-<p>The guarantee holds under these environmental conditions:</p>
+<h2 id="why-abort-and-retry-is-the-default">Why abort-and-retry is the default</h2>
+<p>The runtime cannot tell the two classes apart: a throw carries no evidence of whether the
+same inputs produce it again. Aborting is the only response that is safe under both
+readings. Committing a failure outcome instead — routing the record to an error topic, for
+example — is irrevocable under exactly-once semantics, and performed on a transient throw it
+misroutes a record that a retry delivers normally. A blocked channel is loud, visible in the
+<a href="../../reference/metrics/">hold metrics</a>, and fully recoverable by deploying fixed logic; a
+misrouted record is none of those.</p>
+<p>For the same reason there is no retry budget and no skip-after-N-attempts policy. An
+attempt count is a function of crash timing, not of the delivered history, so any outcome
+keyed to it makes fold state and emissions depend on how often a task happened to restart —
+the same class of guess as delivering on a timeout, which the
+<a href="../expectations/#what-parsley-promises">contract</a> excludes.</p>
+<h2 id="domain-failures-are-data">Domain failures are data</h2>
+<p>A failure that belongs to your domain — a validation reject, a request the business logic
+refuses — is not an exception to the model above, because it is not a task failure at all.
+Model it as an emission: declare an error sink, and return the failure through it. An error
+emission is stamped, claimed, and causally ordered downstream like any other, so a consumer
+of the error topic sees rejects in causal order too.</p>
+<p><code>Handler.recovering</code> and <code>Fold.recovering</code> package this pattern for logic that signals
+failure by throwing. The decorator catches a <code>RuntimeException</code> and converts it into the
+emissions a recovery function yields, typically to a declared error sink:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Order</span><span class="o">&gt;</span><span class="w"> </span><span class="n">orders</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;orders&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">orderCodec</span><span class="p">);</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">Shipment</span><span class="o">&gt;</span><span class="w"> </span><span class="n">shipments</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;shipments&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">shipmentCodec</span><span class="p">);</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">Topic</span><span class="o">&lt;</span><span class="n">String</span><span class="p">,</span><span class="w"> </span><span class="n">String</span><span class="o">&gt;</span><span class="w"> </span><span class="n">rejects</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Topic</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;rejects&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">(),</span><span class="w"> </span><span class="n">Codec</span><span class="p">.</span><span class="na">utf8</span><span class="p">());</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">Stage</span><span class="w"> </span><span class="n">stage</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;shipping&quot;</span><span class="p">)</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">orders</span><span class="p">,</span><span class="w"> </span><span class="n">Handler</span><span class="p">.</span><span class="na">recovering</span><span class="p">(</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">                </span><span class="n">m</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">shipments</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">ship</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">()))),</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">                </span><span class="p">(</span><span class="n">m</span><span class="p">,</span><span class="w"> </span><span class="n">e</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">rejects</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">key</span><span class="p">(),</span><span class="w"> </span><span class="n">e</span><span class="p">.</span><span class="na">getMessage</span><span class="p">()))))</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(</span><span class="n">shipments</span><span class="p">,</span><span class="w"> </span><span class="n">rejects</span><span class="p">)</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+</code></pre></div>
+<p>The fold form keeps the key's prior state unchanged and carries the recovery's emissions in
+its step. In both forms the recovery commits in the same transaction as the delivery — it
+is exactly-once and never retried — which is what makes the caveat above load-bearing:</p>
 <ul>
-<li><strong>Stable channel identity</strong>: topic UUIDs do not change mid-run. A recreated topic is a new
-  channel; its old incarnation's history is loss, never reordering.</li>
-<li><strong>Exactly-once processing</strong>: <code>exactly_once_v2</code>, with <code>read_committed</code> consumption. All of
-  Parsley's state commits in the task's transaction, which is what makes crash recovery a
-  pure restore.</li>
-<li><strong>Truthful stamps between causally related topics</strong>: every processor on a causal path
-  stamps its outputs (Parsley stages do this automatically; plain producers use a
-  <a href="../../guide/clients/"><code>CausalClock</code></a>). An absent stamp claims nothing — safe for the record
-  itself, invisible to downstream ordering.</li>
-<li><strong>Closed handler effects.</strong> A handler's logic is arbitrary, but the guarantee covers only
-  effects that leave through its return value: returned emissions are stamped, claimed, and
-  ordered downstream, and returned fold state commits with the delivery. An effect that
-  bypasses the boundary — a write to an external system, a send through a private producer,
-  a mutation of shared state — is invisible to the causal model; no stamp claims it and no
-  gate can order against it. Keep logic pure and route causally significant effects through
-  emissions.</li>
-<li><strong>Co-partitioning by key across a stage's input topics.</strong> A task consumes partition <em>p</em> of
-  every source topic, and the guarantee is per task: every cause <em>this task</em> consumes is
-  delivered first. Causally related records keyed to different partition slices land in
-  different tasks, each of which correctly ignores the other slice's dependency — so a
-  processor reading its inputs as whole topics observes causal order only when related keys
-  route to the same slice. This is the same precondition Kafka Streams processors carry for
-  joins and aggregations, and like Streams, Parsley does not enforce it.</li>
-<li><strong>Retention covers consumer lag</strong> on causal topics: a consumer must be able to fetch, or
-  observe the skip of, every offset a claim names. An undersized retention fails loudly at
-  the consumer's position reset, never silently.</li>
+<li><strong>Wrap only logic whose throws are deterministic</strong> in the message (and, for a fold, the
+  state). A transient failure caught by the decorator routes a good record to the error
+  sink irrevocably, where the undecorated form's abort-and-retry delivers it.</li>
+<li>An <code>Error</code> propagates through the decorator and fails the task. Only <code>RuntimeException</code>
+  is recoverable, because only it can plausibly be a domain outcome.</li>
 </ul>
+<h2 id="malformed-records">Malformed records</h2>
+<p>Codec failures sit before user logic — inbound bytes decode at delivery, with no handler
+frame on the stack — so the decorators cannot reach them, and a codec exception fails the
+task as <a href="../codecs/#the-codec-contract">the codec contract</a> requires. For a source topic
+whose producers you do not control, where malformed bytes are a fact of the domain rather
+than a wiring bug, make the codec total over a sum type instead:
+<a href="../codecs/#decoding-failure-you-can-route">decoding failure you can route</a>. The failure
+then arrives in the handler as a value, and the handler routes it like any other domain
+failure.</p>
+<h2 id="the-stream-thread-policy">The stream-thread policy</h2>
+<p>The division of labour: the transaction decides what a failure does to the data (nothing —
+it aborts), and the <code>StreamsUncaughtExceptionHandler</code> registered on
+<a href="../getting-started/#what-the-runtime-wires-for-you"><code>CausalStreams</code></a> decides what it does
+to the application — replace the thread, shut down the client, or shut down the
+application. <code>CausalStreams</code> registers the handler totalized: a handler that itself throws,
+or returns null, resolves to <code>SHUTDOWN_CLIENT</code> with both failures logged, so a handler bug
+shuts the client down loudly instead of silently losing the stream thread.</p>
 
 
 
@@ -1362,7 +1358,7 @@ definition, a finite-retention fact rather than an ordering exception.</p>
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../.." class="md-footer__link md-footer__link--prev" aria-label="Previous: Home">
+          <a href="../codecs/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Codecs and Avro">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1372,20 +1368,20 @@ definition, a finite-retention fact rather than an ordering exception.</p>
                 Previous
               </span>
               <div class="md-ellipsis">
-                Home
+                Codecs and Avro
               </div>
             </div>
           </a>
         
         
           
-          <a href="../delivery-gate/" class="md-footer__link md-footer__link--next" aria-label="Next: The delivery gate">
+          <a href="../ticks/" class="md-footer__link md-footer__link--next" aria-label="Next: Ticks">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                The delivery gate
+                Ticks
               </div>
             </div>
             <div class="md-footer__button md-icon">

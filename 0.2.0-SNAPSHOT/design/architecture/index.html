@@ -833,6 +833,10 @@
       
         
       
+        
+      
+        
+      
     
     
     
@@ -947,6 +951,62 @@
     
   
     Codecs and Avro
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/error-handling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Error handling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/ticks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ticks
   
 
     
@@ -1363,6 +1423,13 @@ as the delivery — causal order plus a pure fold makes the state a deterministi
 the delivered history. Serialization happens exactly once on each side, inside the stage, so
 the stamp travels with the exact bytes it claims. Stages are immutable: wiring is captured
 by the topology's node suppliers at assembly, never stored on the stage.</p>
+<p>A stage with declared <a href="../../guide/ticks/">ticks</a> closes a loop through the broker: a
+wall-clock punctuator emits one stamped record per interval to the stage's own tick topic,
+routed back to the emitting task's partition, consumed as one of the stage's sources, and
+gated like any other record — the protocol's own-channel handling makes a self-claim
+structurally satisfied, so the loop cannot deadlock. Time thereby enters user logic only as
+data on a delivered record, and the tick's stamp claims the task's consumed history at
+emission.</p>
 <p><code>Parsley.streams</code> supplies the production wiring: it enforces <code>exactly_once_v2</code> and
 <code>read_committed</code>, installs a client supplier whose main consumers record a post-poll view
 into a thread-local — the consumer position paired with the highest record offset the polls
