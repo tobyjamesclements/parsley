@@ -14,9 +14,9 @@ import java.util.UUID;
  */
 public final class CausalHeaders {
 
-    public static final String CLOCK = "parsley-clock";
-    public static final String SENDER = "parsley-sender";
-    public static final String SEQ = "parsley-seq";
+    public static final String CLOCK = "vc";
+    public static final String SENDER = "vc-sender";
+    public static final String SEQ = "vc-seq";
 
     private CausalHeaders() {}
 

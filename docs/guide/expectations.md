@@ -24,7 +24,7 @@ holds the formal versions; the links under each item lead to the reasoning.
 - Every declared topic exists before the application starts. Sinks are resolved at init and
   a missing one fails loudly; nothing is auto-created, and there are no automatic
   repartition topics.
-- A stage that declares [ticks](ticks.md) owns the topic `parsley-<stage-name>-ticks`, which
+- A stage that declares [ticks](ticks.md) owns the topic `vc-<stage-name>-ticks`, which
   likewise exists before start, with exactly the partition count of the stage's widest
   source topic — assembly fails loudly on a mismatch. Short retention suffices; ticks are
   transient.

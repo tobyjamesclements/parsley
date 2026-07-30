@@ -114,7 +114,7 @@ lag — with no accessor to the underlying instance. The withheld members are ab
 stated reasons, on the class Javadoc member by member: interactive queries can observe
 uncommitted transactional state, pausing an instance freezes the release of held records
 fleet-wide, and the rest duplicates what scaling by instances already expresses. `metrics()` includes the stage's own gauges and
-counters in the `parsley-metrics` group, listed in the
+counters in the `vc-metrics` group, listed in the
 [metrics reference](../reference/metrics.md).
 
 ## Where next

@@ -103,7 +103,7 @@ class ParsleyTest {
 
         Stage ticking = Stage.named("a").on(T1, drop).ticks(second, tick -> List.of()).build();
         Stage poacher = Stage.named("b")
-                .on(Topic.of("parsley-a-ticks", Codec.utf8(), Codec.utf8()), drop)
+                .on(Topic.of("vc-a-ticks", Codec.utf8(), Codec.utf8()), drop)
                 .build();
         assertThrows(IllegalArgumentException.class, () -> Parsley.of(ticking, poacher),
                 "a stage sourcing another stage's tick topic must be rejected");

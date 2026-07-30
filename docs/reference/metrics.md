@@ -1,6 +1,6 @@
 # Metrics
 
-Every stage task registers its metrics in the group `parsley-metrics` on the Kafka Streams
+Every stage task registers its metrics in the group `vc-metrics` on the Kafka Streams
 metrics registry, next to the Streams built-ins. They reach JMX under the `kafka.streams`
 domain, every configured metrics reporter, and [`CausalStreams.metrics()`](api.md). All of
 them carry the tags `thread-id`, `task-id`, and `stage`; the per-topic breakdowns add

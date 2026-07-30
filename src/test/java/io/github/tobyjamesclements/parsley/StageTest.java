@@ -508,7 +508,7 @@ class StageTest {
             TestOutputTopic<String, String> t3 =
                     driver.createOutputTopic("t3", new StringDeserializer(), new StringDeserializer());
             TestOutputTopic<byte[], byte[]> tickTopic = driver.createOutputTopic(
-                    "parsley-ticker-ticks",
+                    "vc-ticker-ticks",
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer());
 
@@ -600,7 +600,7 @@ class StageTest {
             TestOutputTopic<String, String> t3 =
                     driver.createOutputTopic("t3", new StringDeserializer(), new StringDeserializer());
             TestOutputTopic<byte[], byte[]> tickTopic = driver.createOutputTopic(
-                    "parsley-gated-ticks",
+                    "vc-gated-ticks",
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer());
 
@@ -658,7 +658,7 @@ class StageTest {
                 .ticks(Duration.ofSeconds(1), tick -> List.of())
                 .build();
         TopicIds ids = topic -> new TopicIds.Resolved(
-                Stage.testChannel(topic, 0).topicId(), topic.startsWith("parsley-") ? 1 : 2);
+                Stage.testChannel(topic, 0).topicId(), topic.startsWith("vc-") ? 1 : 2);
         IllegalStateException e = assertThrows(IllegalStateException.class,
                 () -> stage.addTo(new Topology(), ids, (i, s) -> NO_OFFSETS, true),
                 "a tick topic narrower than the widest source must fail assembly");

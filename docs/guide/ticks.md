@@ -69,7 +69,7 @@ cadence floor, not an exact schedule.
 
 ## The tick topic
 
-The tick topic is named `parsley-<stage-name>-ticks` and is the stage's own: it appears as
+The tick topic is named `vc-<stage-name>-ticks` and is the stage's own: it appears as
 one of the stage's sources, so composition rules prevent any other stage from consuming it.
 Like every declared topic it must exist before the application starts, and assembly fails
 loudly when it is missing or its partition count differs from the stage's widest source

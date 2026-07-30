@@ -41,9 +41,9 @@ as empty ([fail closed](../foundations/delivery-gate.md#the-predicate)).
 
 | Header | Value |
 |---|---|
-| `parsley-clock` | The record's dependency clock, serialized as above. Absent means the producer claims nothing. |
-| `parsley-sender` | The producing node's stable sender identity: 16 bytes, UUID most- then least-significant. Absent on edge-produced records. |
-| `parsley-seq` | The record's per-channel send sequence at its sender: 8 bytes. Present exactly when `parsley-sender` is. |
+| `vc` | The record's dependency clock, serialized as above. Absent means the producer claims nothing. |
+| `vc-sender` | The producing node's stable sender identity: 16 bytes, UUID most- then least-significant. Absent on edge-produced records. |
+| `vc-seq` | The record's per-channel send sequence at its sender: 8 bytes. Present exactly when `vc-sender` is. |
 
 These headers, plus the state stores below, are Parsley's entire byte footprint.
 
@@ -88,14 +88,14 @@ headers. This is a known limit of the current cut.
 ## Tick record
 
 A stage with declared ticks emits one record per interval per task to its tick topic,
-`parsley-<stage>-ticks`. The key is the emitting task's partition as a big-endian `int32` —
+`vc-<stage>-ticks`. The key is the emitting task's partition as a big-endian `int32` —
 the sink partitioner reads it back to land the tick on the emitting task's own channel — the
 value is null, the timestamp is the task's wall clock at emission, and the headers are the
 standard stamp above.
 
 ## Fold-state store
 
-A stateful stage keeps its per-key fold state in a second store, `parsley-<stage>-fold`.
+A stateful stage keeps its per-key fold state in a second store, `vc-<stage>-fold`.
 Keys are the message key's encoded bytes with a one-byte presence prefix — `0x00` alone for
 a null key, `0x01` followed by the key bytes otherwise — so a null key folds under its own
 state without colliding with an empty key. The tick state occupies the single key `0x02`,

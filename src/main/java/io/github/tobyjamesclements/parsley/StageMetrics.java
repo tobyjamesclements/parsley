@@ -28,7 +28,7 @@ import java.util.Map;
  */
 final class StageMetrics {
 
-    static final String GROUP = "parsley-metrics";
+    static final String GROUP = "vc-metrics";
 
     /** The head a channel's hold age is measured against: its offset and when it became head. */
     private record HeadMark(long offset, long sinceMs) {}
@@ -58,7 +58,7 @@ final class StageMetrics {
         tags.put("thread-id", Thread.currentThread().getName());
         tags.put("task-id", taskId);
         tags.put("stage", stage);
-        String prefix = "parsley-" + stage + "-" + taskId + "-";
+        String prefix = "vc-" + stage + "-" + taskId + "-";
 
         recordsHeld = gauge(prefix, "records-held",
                 "The number of records currently held across the task's hold queues.",

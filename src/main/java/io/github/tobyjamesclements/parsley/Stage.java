@@ -139,7 +139,7 @@ public final class Stage {
 
         /**
          * Declares ticks: the runtime emits one stamped record per interval to the stage's
-         * own tick topic ({@code parsley-<name>-ticks}, which must exist with the same
+         * own tick topic ({@code vc-<name>-ticks}, which must exist with the same
          * partition count as the stage's widest source topic), consumes it back through the
          * gate, and hands it to {@code logic} as a {@link Tick}. Callable once.
          */
@@ -208,7 +208,7 @@ public final class Stage {
          * Declares ticks folded over the stage's tick state: one reserved per-partition slot
          * of the stage's state type, distinct from every per-key slot. The runtime emits one
          * stamped record per interval to the stage's own tick topic
-         * ({@code parsley-<name>-ticks}, which must exist with the same partition count as
+         * ({@code vc-<name>-ticks}, which must exist with the same partition count as
          * the stage's widest source topic), consumes it back through the gate, and folds it
          * with {@code logic}. Callable once.
          */
@@ -248,27 +248,27 @@ public final class Stage {
     }
 
     String protocolStoreName() {
-        return "parsley-" + name + "-state";
+        return "vc-" + name + "-state";
     }
 
     private String foldStoreName() {
-        return "parsley-" + name + "-fold";
+        return "vc-" + name + "-fold";
     }
 
     private String sourceNode() {
-        return "parsley-" + name + "-source";
+        return "vc-" + name + "-source";
     }
 
     private String processorNode() {
-        return "parsley-" + name + "-processor";
+        return "vc-" + name + "-processor";
     }
 
     private String sinkNode(String topic) {
-        return "parsley-" + name + "-sink-" + topic;
+        return "vc-" + name + "-sink-" + topic;
     }
 
     String tickTopicName() {
-        return "parsley-" + name + "-ticks";
+        return "vc-" + name + "-ticks";
     }
 
     /** All topics the stage's source node consumes, the tick topic included when declared. */
@@ -440,9 +440,10 @@ public final class Stage {
             if (!testWired) {
                 Object guarantee = context.appConfigs().get(StreamsConfig.PROCESSING_GUARANTEE_CONFIG);
                 if (!StreamsConfig.EXACTLY_ONCE_V2.equals(guarantee)) {
-                    throw new IllegalStateException("parsley requires processing.guarantee="
+                    throw new IllegalStateException("processing.guarantee must be "
                             + StreamsConfig.EXACTLY_ONCE_V2 + " but the task runs with " + guarantee
-                            + "; start the application through Parsley.streams (fail closed)");
+                            + "; start the application through " + Parsley.class.getSimpleName()
+                            + ".streams (fail closed)");
                 }
             }
 
@@ -519,7 +520,8 @@ public final class Stage {
                 // which necessarily precedes its first record.
                 if (Positions.forCurrentThread().isEmpty()) {
                     throw new IllegalStateException("no captured consumer positions: this"
-                            + " topology is not running under Parsley.streams (fail closed)");
+                            + " topology is not running under " + Parsley.class.getSimpleName()
+                            + ".streams (fail closed)");
                 }
                 positionCaptureChecked = true;
             }
@@ -653,7 +655,8 @@ public final class Stage {
             String sink = emission.topic().name();
             if (!sinks.containsKey(sink)) {
                 throw new IllegalArgumentException("emission to undeclared sink topic: " + sink
-                        + " (declare it with Stage.Builder.into; declared: " + sinks.keySet() + ")");
+                        + " (declare it with " + Stage.class.getSimpleName() + "."
+                        + Builder.class.getSimpleName() + ".into; declared: " + sinks.keySet() + ")");
             }
             Topic<Object, Object> topic = (Topic<Object, Object>) emission.topic();
             byte[] key = emission.key() == null ? null : topic.keyCodec().encode(emission.key());

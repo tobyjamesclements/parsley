@@ -43,7 +43,7 @@ public final class Parsley {
         for (Stage stage : stages) {
             if (byName.put(stage.name(), stage) != null) {
                 throw new IllegalArgumentException("duplicate stage name: " + stage.name()
-                        + " (name each stage with Stage.named)");
+                        + " (name each stage with " + Stage.class.getSimpleName() + ".named)");
             }
             for (String topic : stage.sourceTopics()) {
                 if (!sourceTopics.add(topic)) {
@@ -85,7 +85,7 @@ public final class Parsley {
         p.putAll(props);
         Object guarantee = p.get(StreamsConfig.PROCESSING_GUARANTEE_CONFIG);
         if (guarantee != null && !StreamsConfig.EXACTLY_ONCE_V2.equals(guarantee)) {
-            throw new IllegalArgumentException("parsley requires processing.guarantee=exactly_once_v2");
+            throw new IllegalArgumentException("processing.guarantee must be exactly_once_v2");
         }
         p.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
         p.put(StreamsConfig.consumerPrefix(ConsumerConfig.ISOLATION_LEVEL_CONFIG), "read_committed");
