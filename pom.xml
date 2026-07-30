@@ -80,11 +80,14 @@
             <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
+        <!-- Optional, like kafka-streams: ContractProbes drives TopologyTestDriver, and is
+             meant to run from an application's test suite where test-utils is present.
+             Production classpaths never need it. -->
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-streams-test-utils</artifactId>
             <version>${kafka.version}</version>
-            <scope>test</scope>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>

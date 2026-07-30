@@ -10,7 +10,8 @@ The API is one package with two tiers, and the package overview in the Javadoc c
 them. The functional core is the vocabulary user logic is written in: `Topic`, `Codec`,
 `Message`, `Emission`, `Handler`, `Fold`, and `Step`. The imperative edges run that logic:
 `Stage` wires it to topics, `Parsley` composes stages, `CausalStreams` is the running
-application, and `CausalClock` with `CausalHeaders` serve plain clients at the application's
-borders. Everything else is package-private, because the protocol is only sound under a host
+application, `CausalClock` with `CausalHeaders` serve plain clients at the application's
+borders, and `ContractProbes` checks the application contract from the application's own
+test suite. Everything else is package-private, because the protocol is only sound under a host
 contract no API can enforce, and the one host that upholds that contract ships inside the
 package.

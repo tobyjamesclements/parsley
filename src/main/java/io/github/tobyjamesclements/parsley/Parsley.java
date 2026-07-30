@@ -36,6 +36,11 @@ public final class Parsley {
         this.stages = stages;
     }
 
+    /** The composed stages, in declaration order. */
+    java.util.Collection<Stage> stageSet() {
+        return stages.values();
+    }
+
     public static Parsley of(Stage... stages) {
         if (stages.length == 0) throw new IllegalArgumentException("no stages");
         Map<String, Stage> byName = new LinkedHashMap<>();

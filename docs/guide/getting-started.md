@@ -127,5 +127,7 @@ counters in the `vc-metrics` group, listed in the
   tick per interval, and pure logic folds over it.
 - [The contract](expectations.md) — everything Parsley expects of you and everything it
   promises back, including the operational notes.
+- [Verifying your application](verifying.md) — the contract's checkable clauses as probes
+  in your test suite and deploy pipeline.
 - [Plain clients](clients.md) — stamping from plain producers, observing from plain
   consumers.
