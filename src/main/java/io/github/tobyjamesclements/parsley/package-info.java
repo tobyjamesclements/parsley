@@ -27,7 +27,9 @@
  * {@link io.github.tobyjamesclements.parsley.CausalClock} and
  * {@link io.github.tobyjamesclements.parsley.CausalHeaders}, and
  * {@link io.github.tobyjamesclements.parsley.ContractProbes} checks the application contract
- * from the application's own test suite and deploy pipeline.
+ * from the application's own test suite and deploy pipeline. When records wait at the gate,
+ * {@link io.github.tobyjamesclements.parsley.CausalStreams#explainHolds()} reports why, as
+ * {@link io.github.tobyjamesclements.parsley.HeldRecord} values.
  *
  * <p>Everything else is package-private on purpose. The protocol implementation is only sound
  * under a host contract no API can enforce — per-channel offset order in, atomic commit of

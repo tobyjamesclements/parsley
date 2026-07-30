@@ -46,8 +46,11 @@ sensors exist but do not record.
 `records-held` alone distinguishes nothing: any skew between cause and effect topics holds
 records transiently, and the gauge returns to zero as causes arrive. The stall signal is
 `records-held-age-max-ms` growing without bound, which means a head record is waiting on a
-cause that is not arriving. The per-topic breakdown names the convoyed channel, and the
-head's dependency clock is in the `DEBUG` protocol log. The cure is fixing the lagging
+cause that is not arriving. The per-topic breakdown names the convoyed channel; to name the
+missing cause itself, ask `CausalStreams.explainHolds()`, which reports each gating head's
+unmet claims and the local watermarks that show the gap, and which the same measurement
+feeds — the gauge, the accessor, and the `vc-hold-*` warnings cannot disagree
+([diagnosing held records](../guide/diagnosing-holds.md)). The cure is fixing the lagging
 cause, never skipping the head ([the contract](../guide/expectations.md#operating-it));
 retention on the cause topic bounds how long the wait can succeed.
 

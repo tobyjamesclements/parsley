@@ -35,7 +35,7 @@ by reordering, skipping, or adding a timeout. The delivery invariant is
 - `src/main/java/.../package-info.java` — codifies the public API tier. The public surface
   is the functional core (`Topic`, `Codec`, `Message`, `Emission`, `Handler`, `Fold`,
   `Step`, `Tick`, `TickHandler`, `TickFold`) plus the imperative edges (`Stage`, `Parsley`,
-  `CausalStreams`, `CausalClock`, `CausalHeaders`, `ContractProbes`,
+  `CausalStreams`, `CausalClock`, `CausalHeaders`, `ContractProbes`, `HeldRecord`,
   `CorruptClockException`); everything else is package-private.
 
 ## Verifying anything

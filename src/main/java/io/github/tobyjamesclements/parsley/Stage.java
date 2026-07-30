@@ -18,6 +18,7 @@ import org.apache.kafka.streams.state.StoreBuilder;
 import org.apache.kafka.streams.state.Stores;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -78,15 +79,18 @@ public final class Stage {
     private final StateSpec state;
     private final TickSpec ticks;
     private final Duration truncationInterval;
+    private final Duration holdWarningAfter;
 
     private Stage(String name, Map<String, Source> sources, Map<String, Topic<?, ?>> sinks,
-                  StateSpec state, TickSpec ticks, Duration truncationInterval) {
+                  StateSpec state, TickSpec ticks, Duration truncationInterval,
+                  Duration holdWarningAfter) {
         this.name = name;
         this.sources = Map.copyOf(sources);
         this.sinks = Map.copyOf(sinks);
         this.state = state;
         this.ticks = ticks;
         this.truncationInterval = truncationInterval;
+        this.holdWarningAfter = holdWarningAfter;
     }
 
     public static Builder named(String name) {
@@ -100,6 +104,7 @@ public final class Stage {
         private final Map<String, Topic<?, ?>> sinks = new LinkedHashMap<>();
         private TickSpec ticks;
         private Duration truncationInterval = Duration.ofMinutes(10);
+        private Duration holdWarningAfter = Duration.ofSeconds(30);
 
         private Builder(String name) {
             if (!name.matches("[a-zA-Z0-9-]+")) {
@@ -165,9 +170,22 @@ public final class Stage {
             return this;
         }
 
+        /**
+         * How long a record may gate its channel before the runtime logs a WARN naming the
+         * missing cause. Default thirty seconds; zero or negative disables the warning,
+         * leaving {@link CausalStreams#explainHolds()} and the hold metrics as the interface.
+         * A hold is not an error — the warning says a wait has lasted long enough to be worth
+         * a look, and what to look at.
+         */
+        public Builder holdWarningAfter(Duration threshold) {
+            this.holdWarningAfter = threshold;
+            return this;
+        }
+
         public Stage build() {
             if (sources.isEmpty()) throw new IllegalStateException("no sources declared");
-            return new Stage(name, sources, sinks, null, ticks, truncationInterval);
+            return new Stage(name, sources, sinks, null, ticks, truncationInterval,
+                    holdWarningAfter);
         }
     }
 
@@ -236,10 +254,19 @@ public final class Stage {
             return this;
         }
 
+        /**
+         * How long a record may gate its channel before the runtime logs a WARN naming the
+         * missing cause. Default thirty seconds; zero or negative disables the warning.
+         */
+        public Stateful<S> holdWarningAfter(Duration threshold) {
+            base.holdWarningAfter(threshold);
+            return this;
+        }
+
         public Stage build() {
             if (base.sources.isEmpty()) throw new IllegalStateException("no sources declared");
             return new Stage(base.name, base.sources, base.sinks, state, base.ticks,
-                    base.truncationInterval);
+                    base.truncationInterval, base.holdWarningAfter);
         }
     }
 
@@ -387,6 +414,23 @@ public final class Stage {
     }
 
     /**
+     * Whether a gating head warrants its warning now: the threshold is enabled and elapsed,
+     * and this exact head has not been warned about already. One hold warns once — a warning
+     * per punctuator tick would bury the diagnosis it is trying to surface — and a new head on
+     * the same channel is a new hold, so it warns again.
+     *
+     * @param threshold the stage's configured age, zero or negative to disable warnings
+     * @param heldMs how long the head has gated its channel
+     * @param warnedOffset the head offset already warned about on this channel, or null
+     * @param headOffset the current head's offset
+     */
+    static boolean shouldWarn(Duration threshold, long heldMs, Long warnedOffset, long headOffset) {
+        if (threshold.isZero() || threshold.isNegative()) return false;
+        if (heldMs < threshold.toMillis()) return false;
+        return warnedOffset == null || warnedOffset != headOffset;
+    }
+
+    /**
      * Decodes a tick record's destination partition from its key: the emitting task's own
      * partition as a big-endian int, written at the stamping site so the sink partitioner
      * lands the tick back on the emitting task's channel.
@@ -447,6 +491,10 @@ public final class Stage {
         private final Map<Channel, String> topicByChannel = new HashMap<>();
         /** Highest offset fed through {@code onRecord} per channel, this task incarnation. */
         private final Map<Channel, Long> fedThrough = new HashMap<>();
+        /** Head offset already warned about per channel, so one hold warns once. */
+        private final Map<Channel, Long> warnedHeads = new HashMap<>();
+        private String applicationId;
+        private String taskKey;
         private int taskPartition;
         private boolean positionCaptureChecked;
 
@@ -514,10 +562,15 @@ public final class Stage {
             metrics = new StageMetrics(context.metrics(), name, context.taskId().toString(),
                     topicByChannel, node);
 
+            this.applicationId = context.applicationId();
+            this.taskKey = context.taskId().toString();
             context.schedule(Duration.ofMillis(500), PunctuationType.WALL_CLOCK_TIME,
                     ts -> {
                         sweepPositions();
                         metrics.sample(ts);
+                        // Publishing after sampling reuses the metrics' head-age marks, so the
+                        // gauge, the snapshot, and the warning cannot disagree.
+                        publishHolds();
                     });
             if (ticks != null) {
                 context.schedule(ticks.interval(), PunctuationType.WALL_CLOCK_TIME, this::emitTick);
@@ -564,6 +617,69 @@ public final class Stage {
                     c, meta.offset(), clock, sender, sender == null ? -1 : seq,
                     r.key(), r.value(), r.timestamp())));
             sweepPositions();
+        }
+
+        /**
+         * Snapshots why each gating head is waiting, publishes it for
+         * {@link CausalStreams#explainHolds()}, and warns once per head that outlives the
+         * stage's threshold. Built on the stream thread from the node's read-only observation
+         * surface; the published list is immutable and payload-free.
+         */
+        private void publishHolds() {
+            List<CausalNode.HeadHold> heads = node.explainHeads();
+            List<HeldRecord> snapshot = new ArrayList<>(heads.size());
+            for (CausalNode.HeadHold head : heads) {
+                long heldMs = metrics.heldMs(head.channel());
+                List<HeldRecord.Unmet> unmet = new ArrayList<>(head.unmet().size());
+                for (CausalNode.UnmetClaim claim : head.unmet()) {
+                    unmet.add(describe(claim));
+                }
+                HeldRecord record = new HeldRecord(name, taskKey,
+                        topicByChannel.get(head.channel()), taskPartition, head.offset(),
+                        head.queueDepth(), heldMs, unmet);
+                snapshot.add(record);
+                warnIfOverdue(head.channel(), record);
+            }
+            warnedHeads.keySet().retainAll(
+                    heads.stream().map(CausalNode.HeadHold::channel).collect(java.util.stream.Collectors.toSet()));
+            Holds.publish(applicationId, taskKey, snapshot);
+        }
+
+        /** Classifies one unmet claim and renders it with topic names instead of channel ids. */
+        private HeldRecord.Unmet describe(CausalNode.UnmetClaim claim) {
+            HeldRecord.Diagnosis diagnosis;
+            if (claim.sender() != null) {
+                diagnosis = claim.deliveredSeq() < 0
+                        ? HeldRecord.Diagnosis.SENDER_UNSEEN
+                        : HeldRecord.Diagnosis.SENDER_BEHIND;
+            } else {
+                // The position is the dividing line: everything strictly below it has been
+                // fetched here or consumer-skipped, so a claim below it names a record that
+                // arrived and is itself held, not one still in flight.
+                diagnosis = claim.localPosition() <= claim.claimedOffset()
+                        ? HeldRecord.Diagnosis.NOT_FETCHED
+                        : HeldRecord.Diagnosis.HELD_UPSTREAM;
+            }
+            String topic = topicByChannel.get(claim.channel());
+            return new HeldRecord.Unmet(diagnosis,
+                    topic == null ? claim.channel().toString() : topic,
+                    claim.channel().partition(), claim.claimedOffset(), claim.localFrontier(),
+                    claim.localPosition(), claim.sender() == null ? null : claim.sender().toString(),
+                    claim.claimedSeq(), claim.deliveredSeq());
+        }
+
+        /**
+         * Warns once per head that has gated its channel for longer than the threshold. A
+         * hold is not an error and the gate is not misbehaving, so this is WARN and not ERROR:
+         * it says a wait has lasted long enough to be worth a look, and names what to look at.
+         */
+        private void warnIfOverdue(Channel channel, HeldRecord record) {
+            if (!shouldWarn(holdWarningAfter, record.heldMs(), warnedHeads.get(channel),
+                    record.offset())) {
+                return;
+            }
+            warnedHeads.put(channel, record.offset());
+            LOG.warn("{}: {}", record.unmet().get(0).diagnosis().code(), record.summary());
         }
 
         private void sweepPositions() {
@@ -697,8 +813,10 @@ public final class Stage {
 
         @Override
         public void close() {
-            // Tasks migrate; sensors left behind would accumulate on the instance's registry.
+            // Tasks migrate; sensors and published snapshots left behind would accumulate on
+            // the instance and describe a task this instance no longer runs.
             if (metrics != null) metrics.close();
+            if (applicationId != null) Holds.clear(applicationId, taskKey);
         }
     }
 }

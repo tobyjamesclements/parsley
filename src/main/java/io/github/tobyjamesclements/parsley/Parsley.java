@@ -107,7 +107,8 @@ public final class Parsley {
             KafkaStreams streams = new KafkaStreams(t, p, Positions.capturingClientSupplier());
             LOG.info("assembled application {} with stages {}",
                     p.getProperty(StreamsConfig.APPLICATION_ID_CONFIG), stages.keySet());
-            return new CausalStreams(streams, admin);
+            return new CausalStreams(streams, admin,
+                    p.getProperty(StreamsConfig.APPLICATION_ID_CONFIG));
         } catch (RuntimeException e) {
             admin.close();
             throw e;

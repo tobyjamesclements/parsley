@@ -131,5 +131,7 @@ counters in the `vc-metrics` group, listed in the
   Commander (CQRS) architecture end to end.
 - [Verifying your application](verifying.md) — the contract's checkable clauses as probes
   in your test suite and deploy pipeline.
+- [Diagnosing held records](diagnosing-holds.md) — `explainHolds()`, the hold warnings, and
+  what each diagnosis means when records are waiting at the gate.
 - [Plain clients](clients.md) — stamping from plain producers, observing from plain
   consumers.

@@ -120,6 +120,11 @@ pipeline — see [verifying your application](verifying.md).
   stalled cause channel also shows up as growth of the protocol state store (and its
   changelog) and as consumer lag on the cause topic; retention economics are the real bound
   on how long a record can wait.
+- **Ask the runtime why.** `CausalStreams.explainHolds()` names, for each gating head, the
+  cause it is waiting for and the local watermarks that show the gap, and a hold that
+  outlives its stage's `holdWarningAfter` threshold logs the same summary once at WARN under
+  a stable `vc-hold-*` code. Start there rather than reconstructing the dependency by hand:
+  [diagnosing held records](diagnosing-holds.md).
 - **A blocked head blocks its channel** (head-of-line blocking, by design). A producer whose
   stamps claim records its consumers cannot yet fetch convoys that channel; the cure is
   fixing the lagging cause, not skipping the head.
@@ -142,7 +147,9 @@ pipeline — see [verifying your application](verifying.md).
   names are the class names under `io.github.tobyjamesclements.parsley`. INFO covers
   lifecycle: application assembly, task and node initialisation with the source-topic to
   channel mapping, restored hold queues, scope changes, and truncation on a destroyed
-  topic. WARN covers a skipped truncation sweep. DEBUG traces each record's hold and
+  topic. WARN covers a skipped truncation sweep, and a record that has gated its channel for
+  longer than its stage's `holdWarningAfter` — once per hold, under a stable `vc-hold-*` code
+  ([diagnosing held records](diagnosing-holds.md)). DEBUG traces each record's hold and
   delivery with its coordinate, dependency clock, and sender claim, which is the level to
-  enable when diagnosing why a channel is holding. No level logs payload bytes; every line
-  carries coordinates that point at the durable record instead.
+  enable when a hold needs more than the diagnosis surface reports. No level logs payload
+  bytes; every line carries coordinates that point at the durable record instead.
