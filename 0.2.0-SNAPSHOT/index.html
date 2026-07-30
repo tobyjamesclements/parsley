@@ -1058,6 +1058,8 @@
       
         
       
+        
+      
     
     
     
@@ -1116,6 +1118,34 @@
     
   
     Wire format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="reference/conformance-kit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conformance kit
   
 
     
@@ -1254,7 +1284,10 @@ not broker integration tests. The simulator models EOS transactions, marker and 
 offsets, asynchronous acknowledgements, crashes with transactional rollback, and seeded random
 interleavings; the oracle tracks real happened-before ancestry outside the protocol and checks
 every delivery. <a href="design/verification/">Verification</a> states the obligations and how each is
-enforced, including the self-test that proves the oracle catches a broken protocol.</p>
+enforced, including the self-tests that prove the harness catches a broken protocol and a
+broken host. The whole apparatus ships as the
+<a href="reference/conformance-kit/">conformance kit</a>, so a vendored copy or an alternative host
+can run the same verification.</p>
 <h2 id="reading-order">Reading order</h2>
 <ol>
 <li><a href="foundations/causal-model/">The causal model</a> — what is promised, and against what fault

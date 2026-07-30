@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="../../guide/clients/">
+        <link rel="prev" href="../wire-format/">
       
       
-        <link rel="next" href="../conformance-kit/">
+        <link rel="next" href="../metrics/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Wire format - Parsley</title>
+        <title>Conformance kit - Parsley</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#wire-format" class="md-skip">
+        <a href="#the-conformance-kit" class="md-skip">
           Skip to content
         </a>
       
@@ -110,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Wire format
+              Conformance kit
             
           </span>
         </div>
@@ -310,7 +310,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+        <a href="../wire-format/" class="md-tabs__link">
           
   
   
@@ -1034,6 +1034,34 @@
                 
   
   
+  
+  
+    <li class="md-nav__item">
+      <a href="../wire-format/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wire format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
     
   
   
@@ -1053,7 +1081,7 @@
   <span class="md-ellipsis">
     
   
-    Wire format
+    Conformance kit
   
 
     
@@ -1071,7 +1099,7 @@
   <span class="md-ellipsis">
     
   
-    Wire format
+    Conformance kit
   
 
     
@@ -1097,10 +1125,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#the-clock" class="md-nav__link">
+  <a href="#getting-the-kit" class="md-nav__link">
     <span class="md-ellipsis">
       
-        The clock
+        Getting the kit
       
     </span>
   </a>
@@ -1108,10 +1136,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#record-headers" class="md-nav__link">
+  <a href="#what-is-in-it" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Record headers
+        What is in it
       
     </span>
   </a>
@@ -1119,10 +1147,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#state-store-keys" class="md-nav__link">
+  <a href="#the-host-contract" class="md-nav__link">
     <span class="md-ellipsis">
       
-        State-store keys
+        The host contract
       
     </span>
   </a>
@@ -1130,43 +1158,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#held-record" class="md-nav__link">
+  <a href="#running-it-against-a-copy" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Held record
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#tick-record" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Tick record
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#fold-state-store" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Fold-state store
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#not-persisted" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Not persisted
+        Running it against a copy
       
     </span>
   </a>
@@ -1177,34 +1172,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../conformance-kit/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Conformance kit
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -1293,140 +1260,154 @@
   
 
 
-<h1 id="wire-format">Wire format</h1>
-<p>Byte layouts for everything Parsley writes: the one record header, and the state-store
-entries. All integers are big-endian. Layouts are versioned where they travel between
-processes; pre-1.0, versions change without compatibility aliases.</p>
-<h2 id="the-clock">The clock</h2>
-<p>The serialized form of the internal vector clock, used both in the record header and inside
-state values.
-Both sections are sorted, so equal clocks are byte-identical.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>byte     version        (currently 1)
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>int32    offsetEntryCount
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>entry × offsetEntryCount:
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    int64    topicId, most significant bits
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    int64    topicId, least significant bits
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    int32    partition
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>    int64    offsetWatermark
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>int32    seqEntryCount
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>entry × seqEntryCount:
-<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    int64    topicId, most significant bits
-<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>    int64    topicId, least significant bits
-<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>    int32    partition
-<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a>    int64    senderId, most significant bits
-<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a>    int64    senderId, least significant bits
-<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a>    int64    seqWatermark
+<h1 id="the-conformance-kit">The conformance kit</h1>
+<p>Parsley's guarantees rest on <a href="../../design/verification/">verification</a>, not on trust in the
+one shipped runtime: a deterministic simulator hosts the real protocol under seeded random
+interleavings, and a ground-truth oracle — which never reads a vector clock — judges every
+delivery against real happened-before ancestry. The conformance kit is that machinery,
+packaged so it runs outside this repository. It exists for two consumers:</p>
+<ul>
+<li><strong>A vendored copy.</strong> Copying the source into another codebase is permitted and workable,
+  but a copy without the verification is unverified — vendoring rule 2. The kit travels with
+  the test tree; this page says what must keep passing.</li>
+<li><strong>An alternative host.</strong> The protocol is only sound under a host contract no API can
+  enforce. The shipped Kafka Streams adapter upholds it by construction; any other host can
+  claim conformance only by verification — port the host duties below, run the kit, and the
+  same obligations hold or fail loudly.</li>
+</ul>
+<h2 id="getting-the-kit">Getting the kit</h2>
+<p>The kit is published as the <code>test-jar</code> artifact of the library's own coordinates:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">&lt;dependency&gt;</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="nt">&lt;groupId&gt;</span>io.github.tobyjamesclements<span class="nt">&lt;/groupId&gt;</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="nt">&lt;artifactId&gt;</span>parsley<span class="nt">&lt;/artifactId&gt;</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="nt">&lt;version&gt;</span>0.2.0-SNAPSHOT<span class="nt">&lt;/version&gt;</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">&lt;type&gt;</span>test-jar<span class="nt">&lt;/type&gt;</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">    </span><span class="nt">&lt;scope&gt;</span>test<span class="nt">&lt;/scope&gt;</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="nt">&lt;/dependency&gt;</span>
 </code></pre></div>
-<p>An offset entry claims every offset at or below the watermark on the channel. A sequence
-entry claims every record the sender sent to the channel with per-channel send sequence at or
-below the watermark — the sender-synchronous claim kind that keeps the stamping path
-non-blocking (see <a href="../../design/architecture/#the-stamp">the stamp</a>).</p>
-<p>A malformed clock — unknown version, negative fields, length mismatch — throws
-<code>CorruptClockException</code>. A present but undecodable clock always fails the task; it never reads
-as empty (<a href="../../foundations/delivery-gate/#the-predicate">fail closed</a>).</p>
-<h2 id="record-headers">Record headers</h2>
+<p>The broker smoke tests (<code>*IT</code>) are excluded from the artifact: the kit needs no Docker, no
+Testcontainers, and no broker. Its only test-time dependencies are JUnit 5 and (for the
+Streams adapter's own tests) <code>kafka-streams-test-utils</code>; driving <code>SimWorld</code> alone needs
+neither Kafka Streams nor a test framework beyond your own.</p>
+<p>The kit is deliberately package-private, like the internals it verifies. Tests that drive it
+are declared in the <code>io.github.tobyjamesclements.parsley</code> package (or the renamed package of
+a vendored copy) — the same convention the kit's own suites use.</p>
+<h2 id="what-is-in-it">What is in it</h2>
 <table>
 <thead>
 <tr>
-<th>Header</th>
-<th>Value</th>
+<th>Piece</th>
+<th>Role</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>vc</code></td>
-<td>The record's dependency clock, serialized as above. Absent means the producer claims nothing.</td>
+<td><code>Oracle</code></td>
+<td>Ground truth. Tracks real happened-before ancestry entirely outside the protocol; checks causal order, per-channel FIFO, and duplicates on every delivery, completeness at drain.</td>
 </tr>
 <tr>
-<td><code>vc-sender</code></td>
-<td>The producing node's stable sender identity: 16 bytes, UUID most- then least-significant. Absent on edge-produced records.</td>
+<td><code>SimWorld</code></td>
+<td>The seeded scheduler: interleaves fetches, position advances, producer ops, crashes, and restarts until the world drains or the step budget fails it.</td>
 </tr>
 <tr>
-<td><code>vc-seq</code></td>
-<td>The record's per-channel send sequence at its sender: 8 bytes. Present exactly when <code>vc-sender</code> is.</td>
+<td><code>SimBroker</code></td>
+<td>The broker model: real offset occupancy for business records, transaction markers, and aborted records, as a <code>read_committed</code> consumer observes them.</td>
+</tr>
+<tr>
+<td><code>SimNode</code></td>
+<td>The reference host. Upholds every host duty the way the Streams adapter does; the executable form of the host contract below.</td>
+</tr>
+<tr>
+<td><code>SimBehavior</code>, <code>EdgeProducer</code></td>
+<td>Scripting: stage logic (forward, filter, damped feedback) and plain clients at the topology's edge.</td>
+</tr>
+<tr>
+<td><code>CausalNodeSimTest</code></td>
+<td>The scenario suite discharging obligations V1–V7 of <a href="../../design/verification/#obligations">verification</a>.</td>
+</tr>
+<tr>
+<td><code>OracleSelfTest</code></td>
+<td>V8: a deliberately broken protocol (<code>EagerProtocol</code>) must be flagged. A harness that cannot fail is not a harness.</td>
+</tr>
+<tr>
+<td><code>HostContractSelfTest</code></td>
+<td>V9: a deliberately broken host must be flagged — the host-side analogue of V8.</td>
 </tr>
 </tbody>
 </table>
-<p>These headers, plus the state stores below, are Parsley's entire byte footprint.</p>
-<h2 id="state-store-keys">State-store keys</h2>
-<p>Keys are UTF-8 strings; <code>&lt;channel&gt;</code> is <code>&lt;topicId-uuid&gt;:&lt;partition&gt;</code>. Values:</p>
+<h2 id="the-host-contract">The host contract</h2>
+<p>The protocol surface a host drives is <code>DeliveryProtocol</code>; the duties the host owes it are
+modelled, one for one, by <code>SimNode</code>. A host that upholds all of them inherits the simulator's
+verdict; a host that shirks one is the thing the kit must catch — and <code>HostContractSelfTest</code>
+proves it does for the two duties whose violation is silent in production until data is wrong.</p>
 <table>
 <thead>
 <tr>
-<th>Key</th>
-<th>Value layout</th>
+<th>#</th>
+<th>Duty</th>
+<th>Where <code>SimNode</code> models it</th>
+<th>What catches a violation</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>scope</code></td>
-<td><code>int32 channelCount</code>, then per channel <code>int64 msb, int64 lsb, int32 partition</code>; <code>int32 sinkCount</code>, then per sink <code>int64 msb, int64 lsb</code></td>
+<td>H1</td>
+<td>Hand records to <code>onRecord</code> in strictly increasing per-channel offset order (Kafka's order through a <code>read_committed</code> consumer).</td>
+<td><code>step</code> fetches <code>nextFetchable</code> from the committed position, in order.</td>
+<td>Oracle FIFO and causal checks on delivery.</td>
 </tr>
 <tr>
-<td><code>f/&lt;channel&gt;</code></td>
-<td><code>int64</code> frontier offset</td>
+<td>H2</td>
+<td>Report consumer position advances past offsets that never arrive as records (<code>positionAdvance</code>) — the liveness signal that bridges trailing markers.</td>
+<td><code>stepPositionAdvance</code>, offered whenever the log continues past the position with nothing fetchable.</td>
+<td>Completeness at drain: stranded held records are flagged as never delivered (<a href="../../foundations/liveness/#position-advance-bridging">position-advance bridging</a>).</td>
 </tr>
 <tr>
-<td><code>cc/&lt;channel&gt;</code></td>
-<td>A serialized clock (the channel's advertised view)</td>
+<td>H3</td>
+<td>Commit store mutations, consumer positions, and sends step-atomically; a crash aborts all three together (EOS).</td>
+<td><code>transactionalStep</code>: staged store and positions, appended records aborted on crash, oracle knowledge rolled back in mirror.</td>
+<td>Duplicate, causal, and completeness checks after crash-injecting runs.</td>
 </tr>
 <tr>
-<td><code>ca</code></td>
-<td>A serialized clock (carried ancestry)</td>
+<td>H4</td>
+<td>Partition before stamping, stamp at the single site (<code>prepareSend</code> with the concrete destination channel), and append what was stamped.</td>
+<td><code>sendBusiness</code>, which also asserts every offset claim names a really-appended offset.</td>
+<td>Inline harness assertion; downstream, wedged or violated gates.</td>
 </tr>
 <tr>
-<td><code>q/&lt;channel&gt;/m</code></td>
-<td><code>int64 headIndex</code>, <code>int64 tailIndex</code> (one past the last held entry)</td>
+<td>H5</td>
+<td>Restart from committed state through the full init path — restore, end-offset seed, rescope, <code>resumePositions</code>.</td>
+<td><code>start</code>, which reconstructs the protocol and resolves positions from committed state.</td>
+<td>Crash-recovery scenarios: completeness and causal checks across restarts.</td>
 </tr>
 <tr>
-<td><code>q/&lt;channel&gt;/e/&lt;index&gt;</code></td>
-<td>A held record (below); <code>&lt;index&gt;</code> is 16 lower-case hex digits, zero-padded so lexicographic order is numeric order</td>
-</tr>
-<tr>
-<td><code>sq/&lt;channel&gt;</code></td>
-<td><code>int64</code> — the last send sequence this node issued to the sink channel</td>
-</tr>
-<tr>
-<td><code>ds/&lt;channel&gt;/&lt;senderId&gt;</code></td>
-<td><code>int64 seq</code>, <code>int64 offset</code> — the highest delivered sequence from that sender on the channel, and its offset (sequence-claim resolution state)</td>
+<td>H6</td>
+<td>Respect the log start: a position below it resets to the first surviving offset, and retention never outruns an active subscriber's lag.</td>
+<td><code>start</code> clamps positions to the log start; <code>advanceLogStart</code> refuses to delete unfetched history.</td>
+<td>The guard itself, plus baseline accounting in the oracle.</td>
 </tr>
 </tbody>
 </table>
-<h2 id="held-record">Held record</h2>
-<p>A record held in a channel's queue persists verbatim, so a restart restores exactly what was
-fetched:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>int64    offset
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>int64    timestamp
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>byte     tagged                   (0 = untagged sender)
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>int64    senderId, most significant bits   (zero when untagged)
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>int64    senderId, least significant bits  (zero when untagged)
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>int64    senderSeq                          (meaningful only when tagged)
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>int32    clockLength
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>bytes    clock                    (serialized clock; empty clock when the header was absent)
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>int32    keyLength                (-1 = null key)
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>bytes    key
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>int32    valueLength              (-1 = null value)
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>bytes    value
-</code></pre></div>
-<p>Non-Parsley headers are not yet part of the envelope; a held record is delivered with empty
-headers. This is a known limit of the current cut.</p>
-<h2 id="tick-record">Tick record</h2>
-<p>A stage with declared ticks emits one record per interval per task to its tick topic,
-<code>vc-&lt;stage&gt;-ticks</code>. The key is the emitting task's partition as a big-endian <code>int32</code> —
-the sink partitioner reads it back to land the tick on the emitting task's own channel — the
-value is null, the timestamp is the task's wall clock at emission, and the headers are the
-standard stamp above.</p>
-<h2 id="fold-state-store">Fold-state store</h2>
-<p>A stateful stage keeps its per-key fold state in a second store, <code>vc-&lt;stage&gt;-fold</code>.
-Keys are the message key's encoded bytes with a one-byte presence prefix — <code>0x00</code> alone for
-a null key, <code>0x01</code> followed by the key bytes otherwise — so a null key folds under its own
-state without colliding with an empty key. The tick state occupies the single key <code>0x02</code>,
-its own namespace beside the presence prefixes. Values are whatever the stage's state codec
-produces; Parsley adds no framing.</p>
-<h2 id="not-persisted">Not persisted</h2>
-<p><code>ownOutputs</code> (re-seeded from sink end offsets at every init, which dominate any persisted
-copy) and the position-known watermark (re-reported by the host's position advances). Their
-absence from the store is deliberate; see <a href="../../design/state/">state and recovery</a>.</p>
+<h2 id="running-it-against-a-copy">Running it against a copy</h2>
+<p>For a vendored copy, conformance means: the kit's suites pass in <strong>your</strong> CI, against <strong>your</strong>
+copy, unmodified in substance. Concretely:</p>
+<ul>
+<li>Copy the test tree with the source tree; renaming the package and classes is fine (no
+  runtime string carries the library name), re-synthesizing the logic is not — the sim and
+  oracle encode invariants that fail silently when paraphrased.</li>
+<li><code>OracleSelfTest</code> and <code>HostContractSelfTest</code> must keep failing their broken subjects. If a
+  rename or adaptation makes them pass vacuously, the copy is unverified regardless of how
+  green the rest looks.</li>
+<li>Never change the <a href="../wire-format/">wire format</a>: it is what keeps a copy interoperable with
+  every other Parsley application.</li>
+<li>Record the upstream commit the copy was taken from, so it can be diffed when fixes land
+  upstream.</li>
+</ul>
+<p>For an alternative host, the port target is <code>SimNode</code>: it is small, single-threaded, and each
+duty above names the lines that uphold it. Verify the host's decision logic through the same
+seam the simulator uses (<code>DeliveryProtocol</code> in, <code>Delivery</code> out), and keep the kit's step
+budgets and anti-vacuity assertions — a suite that passes because nothing interesting
+happened proves nothing.</p>
 
 
 
@@ -1462,7 +1443,7 @@ absence from the store is deliberate; see <a href="../../design/state/">state an
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../../guide/clients/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Plain clients">
+          <a href="../wire-format/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Wire format">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1472,20 +1453,20 @@ absence from the store is deliberate; see <a href="../../design/state/">state an
                 Previous
               </span>
               <div class="md-ellipsis">
-                Plain clients
+                Wire format
               </div>
             </div>
           </a>
         
         
           
-          <a href="../conformance-kit/" class="md-footer__link md-footer__link--next" aria-label="Next: Conformance kit">
+          <a href="../metrics/" class="md-footer__link md-footer__link--next" aria-label="Next: Metrics">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Conformance kit
+                Metrics
               </div>
             </div>
             <div class="md-footer__button md-icon">

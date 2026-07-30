@@ -1120,6 +1120,8 @@
       
         
       
+        
+      
     
     
     
@@ -1178,6 +1180,34 @@
     
   
     Wire format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/conformance-kit/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conformance kit
   
 
     
@@ -1279,6 +1309,10 @@
 in the test tree of the <code>parsley</code> package. Broker integration tests exercise plumbing; the
 simulator exercises the protocol, because only a simulator controls interleavings, injects
 crashes at chosen points, and knows the real causal history to judge deliveries against.</p>
+<p>The simulator and oracle also ship, as the
+<a href="../../reference/conformance-kit/">conformance kit</a> — the <code>test-jar</code> artifact of the library's
+coordinates — so a vendored copy or an alternative host can run this same verification
+outside this repository.</p>
 <h2 id="the-simulated-world">The simulated world</h2>
 <p><code>SimBroker</code> models partitions with real offset occupancy: business records, transaction
 markers, and aborted records all consume offsets, and a <code>read_committed</code> fetch returns only
@@ -1361,11 +1395,19 @@ is the wedge and livelock detector.</p>
 <td>The oracle catches a broken protocol</td>
 <td><code>OracleSelfTest</code>: an eager, dependency-ignoring protocol must be flagged</td>
 </tr>
+<tr>
+<td>V9</td>
+<td>The kit catches a broken host</td>
+<td><code>HostContractSelfTest</code>: a host that breaks step-atomicity, or withholds the position-advance signal, must be flagged</td>
+</tr>
 </tbody>
 </table>
 <p>V8 is the keystone: it runs a deliberately broken implementation and requires the oracle to
 flag it. A harness that cannot fail is not a harness; if V8 ever breaks, every green result is
-meaningless.</p>
+meaningless. V9 is its host-side analogue: <code>SimNode</code> can shirk one host duty at a time
+(<code>HostFault</code>), and the suite requires the shirked duty to be caught — which is what makes the
+harness meaningful as a <a href="../../reference/conformance-kit/">conformance kit</a> for hosts other
+than the shipped adapter.</p>
 <h2 id="anti-vacuity">Anti-vacuity</h2>
 <p>Every scenario asserts that the machinery it targets actually fired: records were held at the
 gate, crashes were injected, position advances ran. A race that never occurs proves nothing,
