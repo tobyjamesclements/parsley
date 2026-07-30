@@ -32,6 +32,8 @@
  * store, offsets, and sends, position advances from the real consumer, partitioning before
  * stamping — and the one host that upholds it ships in this package. The deterministic
  * simulator, the protocol's primary verifier, reaches the internals from the test tree of
- * this same package.
+ * this same package, and ships as the conformance kit (the {@code test-jar} artifact of these
+ * coordinates) so a vendored copy or an alternative host can run the same verification — see
+ * {@code docs/reference/conformance-kit.md}.
  */
 package io.github.tobyjamesclements.parsley;

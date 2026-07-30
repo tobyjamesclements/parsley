@@ -64,8 +64,11 @@ four rules:
 
 1. Copy verbatim; do not re-synthesize or restyle the protocol classes. `CausalNode`,
    `VectorClock`, and the wire format encode invariants that fail silently when paraphrased.
-2. Bring the verification with you: `CausalNodeSimTest`, `SimWorld`, `Oracle`, and the
-   protocol tests must run in your CI, or your copy is unverified.
+2. Bring the verification with you: the conformance kit
+   (`docs/reference/conformance-kit.md`) — `CausalNodeSimTest`, `SimWorld`, `Oracle`, the
+   protocol tests, and the self-tests that prove the kit can fail — must run in your CI, or
+   your copy is unverified. The kit also ships as the `test-jar` artifact of the Maven
+   coordinates above.
 3. Never change the wire format (`docs/reference/wire-format.md`); it is what keeps your
    copy interoperable with every other Parsley application.
 4. Record the upstream commit you copied from, so your copy can be diffed against upstream

@@ -58,5 +58,6 @@ nav:
     - Plain clients: guide/clients.md
   - Reference:
     - Wire format: reference/wire-format.md
+    - Conformance kit: reference/conformance-kit.md
     - Metrics: reference/metrics.md
     - API reference: reference/api.md

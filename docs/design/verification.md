@@ -5,6 +5,11 @@ in the test tree of the `parsley` package. Broker integration tests exercise plu
 simulator exercises the protocol, because only a simulator controls interleavings, injects
 crashes at chosen points, and knows the real causal history to judge deliveries against.
 
+The simulator and oracle also ship, as the
+[conformance kit](../reference/conformance-kit.md) — the `test-jar` artifact of the library's
+coordinates — so a vendored copy or an alternative host can run this same verification
+outside this repository.
+
 ## The simulated world
 
 `SimBroker` models partitions with real offset occupancy: business records, transaction
@@ -55,10 +60,14 @@ is the wedge and livelock detector.
 | V6 | Cycles drain; trailing markers resolve | Damped-feedback and filter scenarios |
 | V7 | Truncation below a true stability bound is invisible | Truncate-then-continue scenarios |
 | V8 | The oracle catches a broken protocol | `OracleSelfTest`: an eager, dependency-ignoring protocol must be flagged |
+| V9 | The kit catches a broken host | `HostContractSelfTest`: a host that breaks step-atomicity, or withholds the position-advance signal, must be flagged |
 
 V8 is the keystone: it runs a deliberately broken implementation and requires the oracle to
 flag it. A harness that cannot fail is not a harness; if V8 ever breaks, every green result is
-meaningless.
+meaningless. V9 is its host-side analogue: `SimNode` can shirk one host duty at a time
+(`HostFault`), and the suite requires the shirked duty to be caught — which is what makes the
+harness meaningful as a [conformance kit](../reference/conformance-kit.md) for hosts other
+than the shipped adapter.
 
 ## Anti-vacuity
 
