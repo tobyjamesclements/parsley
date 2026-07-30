@@ -1,0 +1,48 @@
+# Parsley
+
+> Causal delivery order for Kafka stream processing: a record reaches your processor only
+> after every cause your processor consumes has been delivered locally. When A causally
+> precedes B, every processor subscribed to both of their topics processes A before B.
+> Causal safety is inviolable: Parsley blocks or fails, it never reorders, drops, or guesses
+> on a timeout.
+
+Parsley is a Java 21 library (Maven artifact, MIT license) for Kafka Streams applications
+against brokers 3.7.0 or newer. The only required runtime dependency is kafka-clients;
+kafka-streams is optional and needed only by the Streams adapter. The on-wire footprint is
+three record headers (`vc`, `vc-sender`, `vc-seq`) on the application's own records; there
+are no protocol records and plain consumers need no Parsley awareness. The primary
+correctness gate is a deterministic simulator with a ground-truth causal oracle, run by
+`mvn verify`. The full protocol is exercisable without a broker through
+`Parsley.testTopology()` and Kafka Streams' `TopologyTestDriver`.
+
+## Foundations
+
+- [The causal model](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/foundations/causal-model.md): the delivery invariant, its preconditions, and the happened-before relation on Kafka coordinates
+- [The delivery gate](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/foundations/delivery-gate.md): per-channel FIFO hold queues, the delivered frontier, and the release cascade
+- [Liveness](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/foundations/liveness.md): why every wait terminates, including under exactly-once transaction markers
+
+## Design
+
+- [Architecture](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/design/architecture.md): the functional core, the imperative edges, and the Kafka Streams adapter
+- [State and recovery](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/design/state.md): what persists, under which keys, and how crash recovery restores it
+- [Verification](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/design/verification.md): the simulator, the causal oracle, and the obligations the suite enforces
+
+## Guide
+
+- [Getting started](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/getting-started.md): declaring topics, stages, and running an application
+- [Topology shapes](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/topologies.md): pipelines, fan-in, fan-out, and cycles
+- [Codecs and Avro](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/codecs.md): typed topics and schema integration
+- [Error handling](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/error-handling.md): the error model and the recovering decorators
+- [Ticks](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/ticks.md): runtime-emitted time records delivered through the causal gate
+- [The contract](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/expectations.md): what Parsley promises and what it requires of the application
+- [Plain clients](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/clients.md): stamping from plain producers with CausalClock and incremental adoption
+
+## Reference
+
+- [Wire format](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/reference/wire-format.md): the record headers and state-store layouts; the compatibility surface
+- [Metrics](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/reference/metrics.md): the vc-metrics group, gauges, and counters
+- [README](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/README.md): the one-page overview
+
+## Optional
+
+- [Source repository](https://github.com/tobyjamesclements/parsley): single Maven module, one package; the public tier is codified in package-info.java
