@@ -11,10 +11,10 @@
       
       
       
-        <link rel="prev" href="../error-handling/">
+        <link rel="prev" href="../examples/">
       
       
-        <link rel="next" href="../expectations/">
+        <link rel="next" href="../verifying/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>Ticks - Parsley</title>
+        <title>Diagnosing held records - Parsley</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#ticks" class="md-skip">
+        <a href="#diagnosing-held-records" class="md-skip">
           Skip to content
         </a>
       
@@ -110,7 +110,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Ticks
+              Diagnosing held records
             
           </span>
         </div>
@@ -889,37 +889,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Ticks
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../ticks/" class="md-nav__link">
         
   
   
@@ -935,81 +908,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#what-a-tick-means" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        What a tick means
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#stateless-and-stateful-ticks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Stateless and stateful ticks
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#delivery-timing" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Delivery timing
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#the-tick-topic" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        The tick topic
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#testing" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Testing
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1075,10 +973,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../diagnosing-holds/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Diagnosing held records
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -1094,6 +1019,120 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#asking-the-runtime-why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Asking the runtime why
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-warning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The warning
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-diagnoses" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The diagnoses
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="The diagnoses">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#the-cause-has-not-arrived" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The cause has not arrived
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-cause-is-itself-held" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The cause is itself held
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#no-record-from-that-sender" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        No record from that sender
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#the-senders-later-records-are-behind" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The sender's later records are behind
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#what-none-of-them-mean" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What none of them mean
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -1361,78 +1400,114 @@
   
 
 
-<h1 id="ticks">Ticks</h1>
-<p>A stage may declare ticks: at the declared interval, the stage runtime emits one stamped
-record per task to the stage's own tick topic, consumes it back through the causal gate like
-any other record, and delivers it to your logic as a <code>Tick</code>. Wall-clock time reaches pure
-logic only as data on a delivered record, so tick logic stays a pure function, testable with
-plain equality, and the tick itself is durable: a tick whose processing fails is redelivered
-in order by the aborted transaction's retry, never lost.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Stage</span><span class="w"> </span><span class="n">balances</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;balances&quot;</span><span class="p">)</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">        </span><span class="p">.</span><span class="na">state</span><span class="p">(</span><span class="n">balanceCodec</span><span class="p">,</span><span class="w"> </span><span class="n">Balance</span><span class="p">::</span><span class="n">zero</span><span class="p">)</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">orders</span><span class="p">,</span><span class="w"> </span><span class="p">(</span><span class="n">bal</span><span class="p">,</span><span class="w"> </span><span class="n">m</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">bal</span><span class="p">.</span><span class="na">minus</span><span class="p">(</span><span class="n">m</span><span class="p">.</span><span class="na">value</span><span class="p">().</span><span class="na">total</span><span class="p">())))</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">        </span><span class="p">.</span><span class="na">ticks</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofMinutes</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">                </span><span class="n">tick</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">List</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">audits</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cut@&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">tick</span><span class="p">.</span><span class="na">timestamp</span><span class="p">())))</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(</span><span class="n">audits</span><span class="p">)</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
+<h1 id="diagnosing-held-records">Diagnosing held records</h1>
+<p>When records stop coming out of a stage, the gate is usually doing its job: a cause is
+missing, lagging, or unstamped, and Parsley is refusing to deliver an effect before it. The
+rule that overrides everything is that this is never fixed by skipping, reordering, or adding
+a timeout — the fix is to deliver the missing cause. This page is how you find out which cause
+that is.</p>
+<p>Three surfaces answer three different questions:</p>
+<table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>Answers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="../../reference/metrics/">Metrics</a> — <code>records-held</code>, <code>records-held-age-max-ms</code></td>
+<td><em>Is</em> anything held, and for how long? Alert on these.</td>
+</tr>
+<tr>
+<td><code>CausalStreams.explainHolds()</code></td>
+<td><em>Why</em> is it held — which cause, on which channel, how far behind?</td>
+</tr>
+<tr>
+<td>The <code>vc-hold-*</code> WARN lines</td>
+<td>The same answer, pushed, when a hold outlives its threshold.</td>
+</tr>
+</tbody>
+</table>
+<p>The committed consumer position advances past held records, so a stage's own consumer lag
+never shows holding. The metrics are the only signal that something is held at all, which is
+why they are what you alert on.</p>
+<h2 id="asking-the-runtime-why">Asking the runtime why</h2>
+<p><code>explainHolds()</code> returns one entry per gating head across the instance's local tasks,
+longest-held first:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="n">HeldRecord</span><span class="w"> </span><span class="n">held</span><span class="w"> </span><span class="p">:</span><span class="w"> </span><span class="n">app</span><span class="p">.</span><span class="na">explainHolds</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="n">log</span><span class="p">.</span><span class="na">info</span><span class="p">(</span><span class="n">held</span><span class="p">.</span><span class="na">summary</span><span class="p">());</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">}</span>
 </code></pre></div>
-<h2 id="what-a-tick-means">What a tick means</h2>
-<p>A tick's stamp is written at the same stamping site as every emission, so it claims the
-task's consumed history at the moment of emission — a consistent cut of everything the task
-had delivered when the interval fired. Two consequences follow.</p>
-<p>First, any consumer of an emission a tick causes is gated behind that cut: a downstream
-stage sees the tick's effects only after everything the ticking task had seen. A
-channel-scoped policy event needs no enumeration — "everything in this channel so far" is
-exactly what the stamp claims, entry by entry.</p>
-<p>Second, the scope is the channel. A task consumes one partition of each source topic, so the
-history a tick can speak for is its own slice's, the same per-task scope as the delivery
-guarantee itself. A policy that must react per entity at a chosen time is a topology shape,
-not a tick: emit a timer request and let a scheduler produce the keyed reply — the
-<a href="../topologies/#request-and-reply">request and reply</a> shape, with the fire record stamped by
-a <a href="../clients/"><code>CausalClock</code></a> so it is gated behind the request's causes.</p>
-<h2 id="stateless-and-stateful-ticks">Stateless and stateful ticks</h2>
-<p>On a stateless stage, tick logic is a <code>TickHandler</code>: a pure function from the tick to its
-emissions. On a stateful stage, <code>ticks</code> may instead take a <code>TickFold</code>, which steps the
-stage's tick state: one reserved per-partition slot of the stage's declared state type,
-distinct from every per-key slot including the null key's. It is resolved to the stage's
-initial value when unseen, persisted transactionally with the delivery, and deleted by
-returning <code>Step.of(null, ...)</code> — the same discipline as a key fold.</p>
-<p>A tick carries no entity key, so tick logic never sees per-key state. The slot holds
-tick-to-tick memory — the last time a policy fired, counters, rate limits. A stage whose
-state type is <code>Long</code> can, for example, emit a cut marker every fifth tick:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="p">.</span><span class="na">ticks</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofMinutes</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span><span class="w"> </span><span class="p">(</span><span class="n">Long</span><span class="w"> </span><span class="n">quiet</span><span class="p">,</span><span class="w"> </span><span class="n">Tick</span><span class="w"> </span><span class="n">tick</span><span class="p">)</span><span class="w"> </span><span class="o">-&gt;</span><span class="w"> </span><span class="n">quiet</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="o">&gt;=</span><span class="w"> </span><span class="mi">5</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">        </span><span class="o">?</span><span class="w"> </span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="mi">0</span><span class="n">L</span><span class="p">,</span><span class="w"> </span><span class="n">audits</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;cut@&quot;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">tick</span><span class="p">.</span><span class="na">timestamp</span><span class="p">()))</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">        </span><span class="p">:</span><span class="w"> </span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">quiet</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mi">1</span><span class="p">))</span>
+<p>Each entry names the held record's coordinate, how long it has gated its channel, how many
+records wait behind it, and every cause it is still waiting for — with the local watermarks
+that show the gap:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>stage &#39;reconciler&#39; task 0_3 has held views:3@8814 for 47000ms (queue depth 219):
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>vc-hold-not-fetched waiting on commands:3 offset 51204 (local frontier 51199, position 51200)
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>— the cause has not reached this consumer yet; check lag on that topic
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>— see docs/guide/diagnosing-holds.md#the-cause-has-not-arrived
 </code></pre></div>
-<p>A stateful stage may also declare ticks with a plain <code>TickHandler</code>, which leaves the slot
-untouched.</p>
-<h2 id="delivery-timing">Delivery timing</h2>
-<p>Ticks ride the ordinary pipeline, so two delays are inherent. A tick becomes visible to the
-task's consumer only when the transaction that emitted it commits, so tick delivery lags
-emission by up to the commit interval. And a tick's stamp merges the claims advertised by
-records currently held at the task, so a tick emitted while a record is held on an
-unresolved dependency is itself held until that dependency delivers — delay-only, and
-liveness is unaffected: every claim names a really-appended offset. The tick interval is a
-cadence floor, not an exact schedule.</p>
-<h2 id="the-tick-topic">The tick topic</h2>
-<p>The tick topic is named <code>vc-&lt;stage-name&gt;-ticks</code> and is the stage's own: it appears as
-one of the stage's sources, so composition rules prevent any other stage from consuming it.
-Like every declared topic it must exist before the application starts, and assembly fails
-loudly when it is missing or its partition count differs from the stage's widest source
-topic — each task emits ticks to its own partition, so the counts must agree exactly.
-Ticks are transient by design; a short retention on the topic is enough, provided it covers
-consumer lag like any causal topic.</p>
-<h2 id="testing">Testing</h2>
-<p>Tick logic is pure, so the primary tests need no runtime:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">assertEquals</span><span class="p">(</span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="mi">1L</span><span class="p">,</span><span class="w"> </span><span class="n">audits</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;fired&quot;</span><span class="p">)),</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">        </span><span class="n">policy</span><span class="p">.</span><span class="na">apply</span><span class="p">(</span><span class="mi">0</span><span class="n">L</span><span class="p">,</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Tick</span><span class="p">(</span><span class="mi">1000L</span><span class="p">)));</span>
+<p>Only queue heads appear. Holding is head-of-line blocking by design, so the head is the whole
+story: the 219 records behind it wait on it, not on causes of their own.</p>
+<p>Two properties are worth knowing before you build on this. It is <strong>payload-free</strong> — coordinates,
+claims, and watermarks, never key or value bytes — which is what keeps it from becoming a back
+door to state that <a href="../getting-started/#what-the-runtime-wires-for-you">interactive queries are withheld</a>
+to protect. And it reads a snapshot each task publishes from its own stream thread on its
+wall-clock punctuator, so it takes no locks on the processing path, and a reading is at most
+one punctuator interval stale and describes an in-flight view an aborted transaction may roll
+back. Diagnose with it; do not treat it as a source of truth about application state.</p>
+<h2 id="the-warning">The warning</h2>
+<p>A hold that outlives its stage's threshold is logged once, at WARN, with the same summary:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">Stage</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;reconciler&quot;</span><span class="p">)</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">        </span><span class="p">.</span><span class="na">on</span><span class="p">(</span><span class="n">views</span><span class="p">,</span><span class="w"> </span><span class="p">...)</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">        </span><span class="p">.</span><span class="na">holdWarningAfter</span><span class="p">(</span><span class="n">Duration</span><span class="p">.</span><span class="na">ofMinutes</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span><span class="w">   </span><span class="c1">// default: 30 seconds</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">        </span><span class="p">.</span><span class="na">into</span><span class="p">(...)</span>
 </code></pre></div>
-<p>Under <code>TopologyTestDriver</code>, <code>advanceWallClockTime(interval)</code> emits the tick, and the driver
-feeds the tick topic back into the stage; construct the driver with a fixed initial wall
-clock to make tick timestamps deterministic. Each emitted tick counts on the
-<code>ticks-emitted-total</code> metric (<a href="../../reference/metrics/">metrics</a>).</p>
-<p>Runnable: <code>ExampleTickPolicyTest</code> (<a href="../examples/">worked examples</a>) — a policy on its own
-cadence, the tick slot shown distinct from per-key state, and the tick's stamp inspected.</p>
+<p>One hold warns once — a line per punctuator tick would bury the diagnosis it exists to
+surface — and a new head on the same channel is a new hold, so it warns again. Zero or a
+negative duration disables the warning and leaves the accessor and metrics as the interface.</p>
+<p>It is WARN and not ERROR deliberately: nothing has failed. The line says a wait has lasted
+long enough to be worth a look, and names what to look at. Match on the <code>vc-hold-*</code> code if you
+route logs by pattern; the codes are stable.</p>
+<h2 id="the-diagnoses">The diagnoses</h2>
+<h3 id="the-cause-has-not-arrived">The cause has not arrived</h3>
+<p><code>vc-hold-not-fetched</code> — the claimed record has not been fetched by this consumer yet. The
+local position is at or below the claimed offset, so the record is genuinely still in flight.</p>
+<p>This is the ordinary case and it usually resolves itself. Look at the <em>cause</em> topic: consumer
+lag on it, whether its producer is healthy, and whether the producing stage is itself stalled.
+A cause channel that is merely slow makes a hold that clears; a cause channel whose producer
+has stopped makes one that does not.</p>
+<h3 id="the-cause-is-itself-held">The cause is itself held</h3>
+<p><code>vc-hold-held-upstream</code> — the claimed record has been fetched here but not delivered, so it
+is sitting in its own channel's hold queue behind that channel's head.</p>
+<p>Follow the chain: that channel's head appears in the same report, with its own unmet causes.
+Holds compose, and the useful end of the chain is the one record whose cause has not arrived
+at all. Fix that one and the whole chain drains.</p>
+<h3 id="no-record-from-that-sender">No record from that sender</h3>
+<p><code>vc-hold-sender-unseen</code> — a sequence claim naming a sender this task has never delivered on
+that channel. Sequence claims are how a stamp names the sender's own just-issued sends, whose
+offsets the broker has not yet assigned.</p>
+<p>Usually this is transient: the sender's record is on its way. If it persists and the sender
+never writes that partition again, this is the documented
+<a href="../../foundations/liveness/#the-sequence-claim-caveat-late-joiners">late-joiner window</a> — a
+consumer that baselined at the log end cannot deliver a record that sits below its baseline.
+Baseline late joiners at the last stable offset rather than the log end.</p>
+<h3 id="the-senders-later-records-are-behind">The sender's later records are behind</h3>
+<p><code>vc-hold-sender-behind</code> — a sequence claim ahead of what this task has delivered from that
+sender. The sender's later records are in flight, or their transaction has not committed.</p>
+<p>Under <code>read_committed</code>, records of an open transaction are invisible until it commits, so a
+long-running or stuck producer transaction shows up exactly here. Check the sender's commit
+interval and whether it is making progress.</p>
+<h2 id="what-none-of-them-mean">What none of them mean</h2>
+<p>None of these diagnoses is ever resolved by skipping the held record. Every claim names a
+really-appended offset, so every wait terminates once its cause is delivered
+(<a href="../../foundations/liveness/">liveness</a>); a hold that never clears means a cause that never
+arrives, and that is a broken upstream, a retired sender, or retention that outran a consumer
+— all of which are fixed upstream.</p>
+<p>If holding is costing more than the ordering is worth for a particular topic, the answer is to
+stop stamping that producer, not to weaken the gate: an unstamped record claims nothing and
+delivers immediately, which is a per-topic decision made at the producer
+(<a href="../clients/">plain clients</a>).</p>
 
 
 
@@ -1468,7 +1543,7 @@ cadence, the tick slot shown distinct from per-key state, and the tick's stamp i
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../error-handling/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Error handling">
+          <a href="../examples/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Worked examples">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1478,20 +1553,20 @@ cadence, the tick slot shown distinct from per-key state, and the tick's stamp i
                 Previous
               </span>
               <div class="md-ellipsis">
-                Error handling
+                Worked examples
               </div>
             </div>
           </a>
         
         
           
-          <a href="../expectations/" class="md-footer__link md-footer__link--next" aria-label="Next: The contract">
+          <a href="../verifying/" class="md-footer__link md-footer__link--next" aria-label="Next: Verifying your application">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                The contract
+                Verifying your application
               </div>
             </div>
             <div class="md-footer__button md-icon">

@@ -723,6 +723,8 @@
       
         
       
+        
+      
     
     
     
@@ -949,6 +951,34 @@
     
   
     Worked examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/diagnosing-holds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Diagnosing held records
   
 
     
@@ -1408,8 +1438,11 @@ sensors exist but do not record.</p>
 <p><code>records-held</code> alone distinguishes nothing: any skew between cause and effect topics holds
 records transiently, and the gauge returns to zero as causes arrive. The stall signal is
 <code>records-held-age-max-ms</code> growing without bound, which means a head record is waiting on a
-cause that is not arriving. The per-topic breakdown names the convoyed channel, and the
-head's dependency clock is in the <code>DEBUG</code> protocol log. The cure is fixing the lagging
+cause that is not arriving. The per-topic breakdown names the convoyed channel; to name the
+missing cause itself, ask <code>CausalStreams.explainHolds()</code>, which reports each gating head's
+unmet claims and the local watermarks that show the gap, and which the same measurement
+feeds — the gauge, the accessor, and the <code>vc-hold-*</code> warnings cannot disagree
+(<a href="../../guide/diagnosing-holds/">diagnosing held records</a>). The cure is fixing the lagging
 cause, never skipping the head (<a href="../../guide/expectations/#operating-it">the contract</a>);
 retention on the cause topic bounds how long the wait can succeed.</p>
 <p>The width gauges guard the other slow failure. Stamp-side clock entries are freed by the

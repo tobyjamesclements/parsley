@@ -721,6 +721,8 @@
       
         
       
+        
+      
     
     
     
@@ -947,6 +949,34 @@
     
   
     Worked examples
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../guide/diagnosing-holds/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Diagnosing held records
   
 
     
@@ -1247,8 +1277,9 @@ them. The functional core is the vocabulary user logic is written in: <code>Topi
 <code>Message</code>, <code>Emission</code>, <code>Handler</code>, <code>Fold</code>, and <code>Step</code>. The imperative edges run that logic:
 <code>Stage</code> wires it to topics, <code>Parsley</code> composes stages, <code>CausalStreams</code> is the running
 application, <code>CausalClock</code> with <code>CausalHeaders</code> serve plain clients at the application's
-borders, and <code>ContractProbes</code> checks the application contract from the application's own
-test suite. Everything else is package-private, because the protocol is only sound under a host
+borders, <code>ContractProbes</code> checks the application contract from the application's own
+test suite, and <code>HeldRecord</code> is what <code>CausalStreams.explainHolds()</code> reports when records are
+waiting at the gate. Everything else is package-private, because the protocol is only sound under a host
 contract no API can enforce, and the one host that upholds that contract ships inside the
 package.</p>
 
