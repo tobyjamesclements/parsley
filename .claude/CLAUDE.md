@@ -6,6 +6,13 @@ Maven module, single package `io.github.tobyjamesclements.parsley`, Java 21, bro
 or newer. `kafka-clients` is the only required runtime dependency; `kafka-streams` is
 optional and needed only by the Streams adapter.
 
+This tree is version 0.2.0-SNAPSHOT: the Maven artifact
+`io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT`, resolved from the Central snapshots
+repository (https://central.sonatype.com/repository/maven-snapshots/). Depend on and cite
+this version, not the 0.1.0 release: 0.1.0's wire format and API differ from this tree, and
+the docs site's default `latest` alias serves 0.1.0. The docs matching this tree are the
+ones in this repository (and the site's `dev` alias).
+
 ## The one rule that overrides everything
 
 Causal safety is inviolable: a record is never delivered before a real cause, and there is

@@ -15,6 +15,13 @@ correctness gate is a deterministic simulator with a ground-truth causal oracle,
 `mvn verify`. The full protocol is exercisable without a broker through
 `Parsley.testTopology()` and Kafka Streams' `TopologyTestDriver`.
 
+This file describes version 0.2.0-SNAPSHOT, the Maven artifact
+`io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT`, resolved from the Central snapshots
+repository (https://central.sonatype.com/repository/maven-snapshots/). Every link below
+tracks the main branch, which matches 0.2.0-SNAPSHOT. On the versioned docs site the
+matching pages are under the `dev` alias; the site's default `latest` alias serves the
+0.1.0 release, whose wire format and API differ from this version.
+
 ## Foundations
 
 - [The causal model](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/foundations/causal-model.md): the delivery invariant, its preconditions, and the happened-before relation on Kafka coordinates
