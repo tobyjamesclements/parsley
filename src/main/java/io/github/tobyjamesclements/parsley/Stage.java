@@ -247,11 +247,35 @@ public final class Stage {
         return name;
     }
 
+    /** The declared source topics with their typed declarations; the tick topic is not one. */
+    Map<String, Topic<?, ?>> declaredSources() {
+        Map<String, Topic<?, ?>> byName = new LinkedHashMap<>();
+        sources.forEach((topic, source) -> byName.put(topic, source.topic()));
+        return byName;
+    }
+
+    /** The declared sink topics with their typed declarations. */
+    Map<String, Topic<?, ?>> declaredSinks() {
+        return sinks;
+    }
+
+    boolean hasTicks() {
+        return ticks != null;
+    }
+
+    Duration tickInterval() {
+        return ticks.interval();
+    }
+
+    boolean stateful() {
+        return state != null;
+    }
+
     String protocolStoreName() {
         return "vc-" + name + "-state";
     }
 
-    private String foldStoreName() {
+    String foldStoreName() {
         return "vc-" + name + "-fold";
     }
 

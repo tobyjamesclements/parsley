@@ -3,7 +3,9 @@
 This page collects the working agreement in one place: what Parsley expects from you, what
 it promises back, and what it deliberately does not promise. Each expectation restates a
 precondition of [the causal model](../foundations/causal-model.md#preconditions), which
-holds the formal versions; the links under each item lead to the reasoning.
+holds the formal versions; the links under each item lead to the reasoning. The
+mechanically checkable clauses also run as probes in your own test suite and deploy
+pipeline — see [verifying your application](verifying.md).
 
 ## What Parsley expects of you
 

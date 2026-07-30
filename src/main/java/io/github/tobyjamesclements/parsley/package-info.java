@@ -25,7 +25,9 @@
  * over Kafka Streams with no escape hatch). Plain producers and consumers at the
  * application's borders stamp and observe through
  * {@link io.github.tobyjamesclements.parsley.CausalClock} and
- * {@link io.github.tobyjamesclements.parsley.CausalHeaders}.
+ * {@link io.github.tobyjamesclements.parsley.CausalHeaders}, and
+ * {@link io.github.tobyjamesclements.parsley.ContractProbes} checks the application contract
+ * from the application's own test suite and deploy pipeline.
  *
  * <p>Everything else is package-private on purpose. The protocol implementation is only sound
  * under a host contract no API can enforce — per-channel offset order in, atomic commit of
