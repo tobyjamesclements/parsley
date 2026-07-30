@@ -49,6 +49,7 @@ a vendored copy) — the same convention the kit's own suites use.
 | `CausalNodeSimTest` | The scenario suite discharging obligations V1–V7 of [verification](../design/verification.md#obligations). |
 | `OracleSelfTest` | V8: a deliberately broken protocol (`EagerProtocol`) must be flagged. A harness that cannot fail is not a harness. |
 | `HostContractSelfTest` | V9: a deliberately broken host must be flagged — the host-side analogue of V8. |
+| `Example*Test` | The [worked examples](../guide/examples.md): runnable, asserted applications per topology shape, usable as starting points rather than verification. |
 
 ## The host contract
 

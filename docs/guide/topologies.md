@@ -115,6 +115,10 @@ the delivered history is one valid extension of the causal partial order, not a 
 anyone chose. If the outcome must not depend on which concurrent record lands first, make
 the logic commutative for concurrent inputs; causal order fixes everything else.
 
+Runnable: `ExampleConcurrentInputsTest` ([worked examples](examples.md)) makes the
+commutativity point concrete — the same two unrelated records in either order, with a
+commutative fold and a non-commutative one.
+
 Two expectations come with the shape. Related keys must land on the same partition number of
 every source topic — in practice, the same key bytes and the same partition count — because
 the guarantee is per task and a task consumes one partition slice of each source
@@ -152,6 +156,9 @@ the base record it was derived from, so p4 always delivers the base before the d
 whatever the branch's lag. This is the shape that removes the classic race where an
 enrichment, an index entry, or a projection arrives ahead of the record it describes.
 
+Runnable: `ExampleCommanderTest` ([worked examples](examples.md)) is this triangle at full
+size — a CQRS read model held behind the command that produced it, two hops upstream.
+
 ## Request and reply
 
 ```text
@@ -179,6 +186,9 @@ The reply m3 claims the effect m2 (fan-out emission order), so a requester that 
 both c3 and c2 delivers the effect before the reply: by the time p1 processes an
 acknowledgement, everything it acknowledges is already visible locally. Read-your-writes
 across services, expressed as a topology shape.
+
+Runnable: `ExampleRequestReplyTest` ([worked examples](examples.md)), which feeds the
+requester the reply first and shows the gate holding it until the effect arrives.
 
 ## Event flows
 
