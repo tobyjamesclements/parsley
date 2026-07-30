@@ -723,6 +723,8 @@
       
         
       
+        
+      
     
     
     
@@ -1059,6 +1061,34 @@
     
   
     The contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worked examples
   
 
     
@@ -1421,6 +1451,9 @@ cause it consumed. Two records with no causal relation are delivered in arrival 
 the delivered history is one valid extension of the causal partial order, not a total order
 anyone chose. If the outcome must not depend on which concurrent record lands first, make
 the logic commutative for concurrent inputs; causal order fixes everything else.</p>
+<p>Runnable: <code>ExampleConcurrentInputsTest</code> (<a href="../examples/">worked examples</a>) makes the
+commutativity point concrete — the same two unrelated records in either order, with a
+commutative fold and a non-commutative one.</p>
 <p>Two expectations come with the shape. Related keys must land on the same partition number of
 every source topic — in practice, the same key bytes and the same partition count — because
 the guarantee is per task and a task consumes one partition slice of each source
@@ -1449,6 +1482,8 @@ that the join consumes. The sharpest version is the base-and-derived triangle:</
 the base record it was derived from, so p4 always delivers the base before the derivation —
 whatever the branch's lag. This is the shape that removes the classic race where an
 enrichment, an index entry, or a projection arrives ahead of the record it describes.</p>
+<p>Runnable: <code>ExampleCommanderTest</code> (<a href="../examples/">worked examples</a>) is this triangle at full
+size — a CQRS read model held behind the command that produced it, two hops upstream.</p>
 <h2 id="request-and-reply">Request and reply</h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>p1 --&gt; c1 --&gt; p2 --&gt; c2 --&gt; p1
 </code></pre></div>
@@ -1469,6 +1504,8 @@ emit its effects before its reply, in one handler:</p>
 both c3 and c2 delivers the effect before the reply: by the time p1 processes an
 acknowledgement, everything it acknowledges is already visible locally. Read-your-writes
 across services, expressed as a topology shape.</p>
+<p>Runnable: <code>ExampleRequestReplyTest</code> (<a href="../examples/">worked examples</a>), which feeds the
+requester the reply first and shows the gate holding it until the effect arrives.</p>
 <h2 id="event-flows">Event flows</h2>
 <p>An event notification is a record announcing state that lives elsewhere, and its classic
 failure is the dangling notification: the announcement arrives before the data it points

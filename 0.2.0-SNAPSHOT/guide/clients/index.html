@@ -723,6 +723,8 @@
       
         
       
+        
+      
     
     
     
@@ -924,6 +926,34 @@
     
   
     The contract
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../examples/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Worked examples
   
 
     
@@ -1302,6 +1332,9 @@ headers (<code>CausalHeaders.CLOCK</code> and the sender tag, readable via <code
 <p>A plain consumer that wants causal <em>observation</em> — so that records it later produces claim
 what it read — uses <code>observe</code> as above. A plain consumer that wants causal <em>delivery order</em>
 is, by definition, a causal stage: run it as one.</p>
+<p>Runnable: <code>ExamplePlainClientEdgeTest</code> (<a href="../examples/">worked examples</a>) — an observed record
+gating what the client writes next, sequential sends ordered across topics, and stamps read
+by a plain consumer.</p>
 
 
 
