@@ -42,6 +42,7 @@ matching pages are under the `dev` alias; the site's default `latest` alias serv
 - [Error handling](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/error-handling.md): the error model and the recovering decorators
 - [Ticks](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/ticks.md): runtime-emitted time records delivered through the causal gate
 - [The contract](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/expectations.md): what Parsley promises and what it requires of the application
+- [Verifying your application](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/verifying.md): ContractProbes — the contract's checkable clauses as test-time and cluster probes
 - [Plain clients](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/clients.md): stamping from plain producers with CausalClock and incremental adoption
 
 ## Reference
