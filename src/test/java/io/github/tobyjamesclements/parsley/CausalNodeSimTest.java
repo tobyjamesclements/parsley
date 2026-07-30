@@ -23,13 +23,15 @@ class CausalNodeSimTest {
     private static final long BUDGET = 200_000;
 
     private static final class Stats {
-        long deliveries, holds, crashes, positionAdvances;
+        long deliveries, holds, crashes, positionAdvances, ticksEmitted, ticksDelivered;
 
         void add(SimWorld w) {
             deliveries += w.totalDeliveries;
             holds += w.totalHolds;
             crashes += w.totalCrashes;
             positionAdvances += w.totalPositionAdvances;
+            ticksEmitted += w.totalTicksEmitted;
+            ticksDelivered += w.totalTicksDelivered;
         }
     }
 
@@ -441,6 +443,71 @@ class CausalNodeSimTest {
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
         assertTrue(stats.holds > 0, "the carried claims never actually gated anything");
+    }
+
+    /**
+     * Ticks under the oracle: a stage whose tick channel is both consumed and produced. The
+     * tick is stamped at the ordinary door, lands on the node's own partition, and returns
+     * through the gate as a record, so its emissions inherit the node's causal past and must
+     * reach a downstream consumer after every cause that past names. Crash injection covers
+     * the tick emitted inside a transaction that then aborts.
+     */
+    @Test
+    void tickingStageStaysCausalUnderInterleavings() {
+        Stats stats = new Stats();
+        for (long seed = 0; seed < SEEDS; seed++) {
+            SimWorld w = new SimWorld(seed).topic("t1", 1).topic("tk", 1).topic("t2", 1)
+                    .crashBudget(3).tickBudget(6);
+            SimNode a = w.node("A", 0, List.of("t1:0", "tk:0"), List.of("t2", "tk"),
+                    SimBehavior.forwardTo("t2"), real());
+            a.ticksOn(w.broker.channel("tk", 0), SimBehavior.forwardTo("t2"));
+            w.node("C", 0, List.of("t2:0", "t1:0"), List.of(), SimBehavior.consumeOnly(), real());
+            EdgeProducer p = w.producer("edge");
+            for (int i = 0; i < 8; i++) p.produce("t1", 0, "k" + i, "v" + i, 1000 + i);
+            w.run(BUDGET);
+            stats.add(w);
+        }
+        assertTrue(stats.deliveries > 0, "no deliveries at all");
+        assertTrue(stats.ticksDelivered > 0, "no tick ever returned through the gate");
+        assertTrue(stats.holds > 0, "the gate never held a record in a ticking topology");
+        assertTrue(stats.crashes > 0, "no crash was ever injected around a tick");
+    }
+
+    /**
+     * A ticking stage that drops a sink across a restart. The tick self-loop carries this
+     * node's own sequence claims on its other sinks back into its custody, so after the drop a
+     * claim in custody names a channel the init end-offset seed no longer covers — the stamp
+     * must resolve it from the rescope heal rather than fail. The same shape arises without
+     * ticks in any cycle whose intermediate hop cannot normalise the claim.
+     */
+    @Test
+    void tickingStageDropsASinkAcrossARestart() {
+        Stats stats = new Stats();
+        for (long seed = 0; seed < SEEDS; seed++) {
+            SimWorld w = new SimWorld(seed).topic("t1", 1).topic("tk", 1).topic("t2", 1)
+                    .topic("t3", 1).tickBudget(4);
+            SimNode a = w.node("A", 0, List.of("t1:0", "tk:0"), List.of("t2", "t3", "tk"),
+                    SimBehavior.forwardTo("t2", "t3"), real());
+            a.ticksOn(w.broker.channel("tk", 0), SimBehavior.consumeOnly());
+            w.node("C", 0, List.of("t2:0", "t1:0"), List.of(), SimBehavior.consumeOnly(), real());
+            EdgeProducer p = w.producer("edge");
+            for (int i = 0; i < 5; i++) p.produce("t1", 0, "k" + i, "v" + i, 1000 + i);
+            w.run(BUDGET);
+
+            // Drop t3 while the tick channel still holds this node's claims on it.
+            a.crashIdle();
+            a.reconfigure(w.config("A", 0, List.of("t1:0", "tk:0"), List.of("t2", "tk")),
+                    SimBehavior.forwardTo("t2"));
+            a.ticksOn(w.broker.channel("tk", 0), SimBehavior.consumeOnly());
+            a.start();
+
+            EdgeProducer p2 = w.producer("edge2");
+            for (int i = 0; i < 5; i++) p2.produce("t1", 0, "k2" + i, "v2" + i, 3000 + i);
+            w.run(BUDGET);
+            stats.add(w);
+        }
+        assertTrue(stats.deliveries > 0, "no deliveries at all");
+        assertTrue(stats.ticksDelivered > 0, "no tick ever returned through the gate");
     }
 
     /**

@@ -42,8 +42,16 @@ returns no records. A position of `p` is proof that everything below `p` was fet
 consumer-skipped. The host reports it through one method — `positionAdvance(channel, p)` —
 and when the channel's hold queue is empty the frontier rises to `p − 1` and the cascade runs.
 
-That method is the entire liveness mechanism: gates wait only on local frontiers, and skips
-are observable from position.
+A skipped run need not be trailing. When one opens *behind a held head* — the head arrived
+across a marker gap while an earlier record was still gated — the position signal cannot be
+applied, because the head itself is undelivered and the frontier must stay below it. The gap
+folds in on its own account instead: head-of-line order means every business record below the
+head has already been delivered, so the rest of that prefix was skipped, and the frontier rises
+to one below the head. Without it, a claim naming an offset inside the gap would wait on a
+coordinate no record and no position advance could ever cover.
+
+Together these are the whole liveness mechanism: gates wait only on local frontiers, and every
+skip is observable — from the position when the queue is empty, from the head when it is not.
 
 ## Why over-claims cannot deadlock
 

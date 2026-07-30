@@ -20,7 +20,9 @@ Two consequences fall out for free:
 - **Per-channel FIFO delivery** at every consumer, so a record never needs to claim its own
   channel's earlier offsets — same-channel order is structural.
 - **The frontier is contiguous by construction**: it advances only when the head delivers, or
-  when a known-clean prefix folds in (seed, bridge, position advance).
+  when a known-clean prefix folds in (seed, bridge, position advance). A prefix is known-clean
+  whenever every business record below it has been delivered — which includes the run below a
+  *held* head, since head-of-line order means everything under the head has already gone.
 
 ## The predicate
 

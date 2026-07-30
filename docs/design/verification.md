@@ -80,7 +80,11 @@ advances.
 
 ## Scenario coverage
 
-Shared-input races (a stage's output racing its input at a shared consumer), transitive claims
+Ticking stages (the tick channel is both consumed and produced, so a tick is stamped, lands on
+the emitting task's own partition, and returns through the gate carrying the node's causal past
+— including under crash injection, and across a restart that drops one of the stage's other
+sinks while the tick self-loop still holds claims on it),
+shared-input races (a stage's output racing its input at a shared consumer), transitive claims
 through a hop that does not consume the origin, edge-producer cross-topic ordering, observed
 causality from a plain consumer, crash-recovery chains, filter stages with quiet sinks and
 trailing markers, multi-partition sink ordering through sequence claims (including with
@@ -139,3 +143,16 @@ the seam contract and the assembled plumbing on a live cluster; `TopologyTestDri
 tests cover the adapter's plumbing (hold-and-release, stamp content, fail-closed corrupt
 headers, the buffered-batch position guard) without a broker. Rebalance and task-migration behaviour has no automated
 coverage.
+
+Two further boundaries are worth naming, because a scenario list reads as a coverage claim:
+
+- **Ticks are modelled at the protocol level, not the adapter's.** The simulator drives the
+  self-loop that matters — stamp, own-partition append, return through the gate — with the
+  scheduler standing in for the wall clock, which is strictly more adversarial than a real
+  timer. The punctuator scheduling, the partition-encoded key, and the sink partitioner stay
+  `TopologyTestDriver`-only, as plumbing rather than protocol.
+- **Some shapes are pinned by directed tests rather than reached by random schedules.** A
+  skipped run behind a held head needs a claim naming an offset inside that specific gap; the
+  randomized topologies reach it only by coincidence, so `CausalNodeDirectedTest` constructs it
+  deterministically instead. The drain check would catch a regression in any world that happens
+  to build the shape, but the directed test is what guarantees it is built at all.

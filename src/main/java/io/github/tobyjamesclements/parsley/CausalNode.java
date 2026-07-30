@@ -194,6 +194,16 @@ final class CausalNode implements DeliveryProtocol {
                         advanceFrontier(c, known);
                         changed = true;
                     }
+                } else {
+                    // Skipped run between the frontier and a held head: every business record
+                    // below the head has been delivered (FIFO), so the rest of the prefix was
+                    // consumer-skipped and folds in exactly as the empty-queue bridge does.
+                    // Without this, no later record and no position advance can ever cover it.
+                    long belowHead = q.held.peekFirst().offset() - 1;
+                    if (belowHead > frontierOf(c)) {
+                        advanceFrontier(c, belowHead);
+                        changed = true;
+                    }
                 }
             }
         }
@@ -274,8 +284,17 @@ final class CausalNode implements DeliveryProtocol {
                 long baseline = baselineSeq.getOrDefault(key.channel(), VectorClock.NOTHING);
                 if (seq <= baseline) {
                     // A prior incarnation's echoed claim: its record is committed and covered
-                    // by the end-offset seed, so it upgrades to offset space.
-                    upgrades.put(key, ownOutputs.get(key.channel()));
+                    // by the end-offset seed, so it upgrades to offset space. On a channel that
+                    // is no longer a declared sink the seed did not run; the rescope heal put
+                    // the same bound in carried ancestry, and a destroyed topic is unclaimable
+                    // by anyone, so the claim drops.
+                    long covered = ownOutputs.get(key.channel());
+                    if (covered < 0) covered = carriedAncestry.get(key.channel());
+                    if (covered < 0) {
+                        subsumed.add(key);
+                    } else {
+                        upgrades.put(key, covered);
+                    }
                 } else {
                     subsumed.add(key); // the fresh self-claim added afterwards dominates it
                 }

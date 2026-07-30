@@ -34,6 +34,12 @@ final class SimWorld {
     private final Map<UUID, String> topicNames = new HashMap<>();
 
     private int crashBudget;
+    /**
+     * How many more ticks any ticking node may emit. A wall-clock punctuator fires forever, so
+     * the simulation bounds it: the budget is what lets a ticking world drain and be checked.
+     */
+    private int tickBudget;
+    private long tickClock = 5_000;
     private boolean allowTaskFailures;
     private final List<String> taskFailures = new ArrayList<>();
     private long stepsTaken;
@@ -42,6 +48,8 @@ final class SimWorld {
     long totalHolds;
     long totalCrashes;
     long totalPositionAdvances;
+    long totalTicksEmitted;
+    long totalTicksDelivered;
 
     SimWorld(long seed) {
         this.rng = new Random(seed);
@@ -56,6 +64,17 @@ final class SimWorld {
     SimWorld crashBudget(int crashes) {
         this.crashBudget = crashes;
         return this;
+    }
+
+    /** How many ticks the world's ticking nodes may emit in total before the cadence stops. */
+    SimWorld tickBudget(int ticks) {
+        this.tickBudget = ticks;
+        return this;
+    }
+
+    /** A monotonic stand-in for the punctuator's wall clock, one step per tick emitted. */
+    long tickTimestamp() {
+        return tickClock++;
     }
 
     SimWorld allowTaskFailures() {
@@ -147,6 +166,7 @@ final class SimWorld {
         record Restart(SimNode node) implements Action {}
         record CrashIdle(SimNode node) implements Action {}
         record ProducerStep(EdgeProducer producer) implements Action {}
+        record EmitTick(SimNode node, boolean crash) implements Action {}
     }
 
     /** Runs to drain; throws when the budget is exhausted first. */
@@ -164,6 +184,10 @@ final class SimWorld {
                             enabled.add(new Action.PositionAdvance(n, c, false));
                             if (crashBudget > 0) enabled.add(new Action.PositionAdvance(n, c, true));
                         }
+                    }
+                    if (n.ticks() && tickBudget > 0) {
+                        enabled.add(new Action.EmitTick(n, false));
+                        if (crashBudget > 0) enabled.add(new Action.EmitTick(n, true));
                     }
                     if (crashBudget > 0) enabled.add(new Action.CrashIdle(n));
                 } else {
@@ -200,6 +224,15 @@ final class SimWorld {
                     n.crashIdle();
                 }
                 case Action.ProducerStep(EdgeProducer p) -> p.step();
+                case Action.EmitTick(SimNode n, boolean crash) -> {
+                    if (crash) {
+                        crashBudget--;
+                        totalCrashes++;
+                    }
+                    tickBudget--;
+                    totalTicksEmitted++;
+                    n.stepTick(crash);
+                }
             }
         }
         throw new AssertionError("world did not drain within " + maxSteps

@@ -44,6 +44,15 @@ final class SimNode {
     boolean up;
     HostFault fault = HostFault.NONE;
 
+    /**
+     * The stage's own tick channel when it declares ticks: both consumed and produced, so a
+     * tick is stamped at the ordinary door, appended to the node's own partition, and returns
+     * through the gate as a record like any other. Null when the stage declares no ticks.
+     */
+    private Channel tickChannel;
+    /** The logic a delivered tick runs, mirroring the adapter's tick branch. */
+    private SimBehavior tickBehavior = SimBehavior.consumeOnly();
+
     /** Committed consumer positions (next offset to fetch). */
     private final Map<Channel, Long> positions = new HashMap<>();
     private final List<Object[]> appendedCoords = new ArrayList<>(); // {Channel, Long offset}
@@ -57,6 +66,23 @@ final class SimNode {
         this.behavior = behavior;
         this.protocolFactory = protocolFactory;
         this.offsets = new SimBrokerOffsets(world.broker);
+    }
+
+    /**
+     * Declares ticks on the given channel, which the scenario must list both as a consumed
+     * input and as a sink topic — the self-loop the real tick topic forms.
+     */
+    void ticksOn(Channel c, SimBehavior logic) {
+        if (!config.consumed().contains(c) || !config.sinkTopics().contains(c.topicId())) {
+            throw new IllegalArgumentException(
+                    "a tick channel must be both consumed and a declared sink: " + c);
+        }
+        this.tickChannel = c;
+        this.tickBehavior = logic;
+    }
+
+    boolean ticks() {
+        return tickChannel != null;
     }
 
     /** Joins at the current log end on every consumed channel (a `latest` consumer). */
@@ -132,6 +158,21 @@ final class SimNode {
         transactionalStep(c, newPosition, crash, () -> protocol.positionAdvance(c, newPosition));
     }
 
+    /**
+     * Emits one tick, as the adapter's wall-clock punctuator does: stamped at the ordinary
+     * send door with the task's current clock and appended to the node's own tick partition,
+     * inside the step's transaction. It consumes nothing, so no consumer position moves; the
+     * tick returns to this node later as an ordinary fetch.
+     */
+    void stepTick(boolean crash) {
+        if (tickChannel == null) throw new IllegalStateException(name + ": no ticks declared");
+        transactionalStep(null, -1, crash, () -> {
+            byte[] key = java.nio.ByteBuffer.allocate(4).putInt(config.taskPartition()).array();
+            sendTo(tickChannel, key, "0".getBytes(), world.tickTimestamp());
+            return List.of();
+        });
+    }
+
     private void transactionalStep(Channel c, long newPosition, boolean crash,
                                    java.util.function.Supplier<List<Delivery>> action) {
         world.oracle.snapshot(name);
@@ -148,7 +189,14 @@ final class SimNode {
                 }
                 world.oracle.onDelivery(name, config.consumed(), recordId);
                 world.totalDeliveries++;
-                behavior.process(this, d);
+                // A tick returns through the gate like any record and runs the stage's tick
+                // logic, exactly as the adapter's delivery loop branches on the tick channel.
+                if (d.channel().equals(tickChannel)) {
+                    world.totalTicksDelivered++;
+                    tickBehavior.process(this, d);
+                } else {
+                    behavior.process(this, d);
+                }
             }
         } catch (AssertionError ae) {
             throw ae;
@@ -174,14 +222,19 @@ final class SimNode {
         } else {
             world.broker.appendMarkers(touchedThisStep);
             store.commit();
-            positions.put(c, newPosition);
+            // A tick step consumes nothing, so it moves no consumer position.
+            if (c != null) positions.put(c, newPosition);
             world.oracle.commit(name);
         }
     }
 
     /** Called by behaviors: forward one business record, stamped and tagged by the protocol. */
     void sendBusiness(String topic, byte[] key, byte[] value, long timestamp) {
-        Channel dest = world.routeByKey(topic, key);
+        sendTo(world.routeByKey(topic, key), key, value, timestamp);
+    }
+
+    /** Sends to an already-chosen channel: ticks name their own partition rather than route. */
+    void sendTo(Channel dest, byte[] key, byte[] value, long timestamp) {
         var stamp = protocol.prepareSend(dest);
         // Every offset claim must name a really-appended offset — the property the liveness
         // argument rests on (an unappended claim can wedge a gate forever).

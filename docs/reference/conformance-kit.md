@@ -42,11 +42,14 @@ a vendored copy) — the same convention the kit's own suites use.
 | Piece | Role |
 |---|---|
 | `Oracle` | Ground truth. Tracks real happened-before ancestry entirely outside the protocol; checks causal order, per-channel FIFO, and duplicates on every delivery, completeness at drain. |
-| `SimWorld` | The seeded scheduler: interleaves fetches, position advances, producer ops, crashes, and restarts until the world drains or the step budget fails it. |
+| `SimWorld` | The seeded scheduler: interleaves fetches, position advances, producer ops, tick emissions, crashes, and restarts until the world drains or the step budget fails it. Tick and crash budgets bound the otherwise endless cadence so a ticking world still drains. |
 | `SimBroker` | The broker model: real offset occupancy for business records, transaction markers, and aborted records, as a `read_committed` consumer observes them. |
 | `SimNode` | The reference host. Upholds every host duty the way the Streams adapter does; the executable form of the host contract below. |
 | `SimBehavior`, `EdgeProducer` | Scripting: stage logic (forward, filter, damped feedback) and plain clients at the topology's edge. |
 | `CausalNodeSimTest` | The scenario suite discharging obligations V1–V7 of [verification](../design/verification.md#obligations). |
+| `CausalNodeDirectedTest` | Deterministic constructions for shapes random schedules reach only by coincidence: a skipped run behind a held head, and an echoed self sequence claim on a sink that is dropped or destroyed. |
+| `CausalNodePersistenceTest` | Directed restart tests pinning each persisted fact individually — the frontier, hold queues, send and delivered sequences, advertised clocks. |
+| `WireFormatTest` | The cross-application contract pinned to literal bytes and header names, so a coordinated change to both sides of the codec cannot pass silently. |
 | `OracleSelfTest` | V8: a deliberately broken protocol (`EagerProtocol`) must be flagged. A harness that cannot fail is not a harness. |
 | `HostContractSelfTest` | V9: a deliberately broken host must be flagged — the host-side analogue of V8. |
 | `Example*Test` | The [worked examples](../guide/examples.md): runnable, asserted applications per topology shape, usable as starting points rather than verification. |
