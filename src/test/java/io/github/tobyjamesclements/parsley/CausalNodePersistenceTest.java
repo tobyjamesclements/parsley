@@ -148,6 +148,75 @@ class CausalNodePersistenceTest {
                 "the restored record's sender tag must have advanced the delivered sequence");
     }
 
+    /**
+     * The payload of a held record survives the restore path unchanged: key bytes, value
+     * bytes, and timestamp. The oracle cannot see this — it judges deliveries by coordinate,
+     * so a restore that returned the right record with the wrong bytes reads as correct
+     * everywhere in the simulator. This is the assertion that says the bytes handed to user
+     * logic after a restart are the bytes that were fetched.
+     */
+    @Test
+    void heldRecordPayloadSurvivesRestartUnchanged() {
+        MapStore store = new MapStore();
+        byte[] key = "order-42".getBytes();
+        byte[] value = new byte[256];
+        for (int i = 0; i < value.length; i++) value[i] = (byte) i; // every byte value once
+        long timestamp = 1_700_000_000_123L;
+
+        CausalNode first = new CausalNode(config(), store, NO_OFFSETS);
+        assertTrue(first.onRecord(new InboundRecord(C2, 0, VectorClock.of(C1, 0), UPSTREAM, 7,
+                        key, value, timestamp)).isEmpty(),
+                "the record must hold until its C1 cause is delivered");
+
+        CausalNode restarted = new CausalNode(config(), store, NO_OFFSETS);
+        List<Delivery> released = restarted.onRecord(record(C1, 0, null, null, -1, null, null));
+        assertEquals(2, released.size(), "delivering the cause must cascade the restored record");
+        Delivery held = released.get(1);
+        assertArrayEquals(key, held.key(), "the held record's key bytes must survive the store");
+        assertArrayEquals(value, held.value(), "the held record's value bytes must survive the store");
+        assertEquals(timestamp, held.timestamp(),
+                "the held record's timestamp must survive the store: it is the message time"
+                        + " user logic sees, and the default timestamp of its emissions");
+        assertEquals(0, held.offset(), "the held record's own coordinate must survive the store");
+    }
+
+    /**
+     * The envelope's optional fields round-trip in every combination the layout distinguishes:
+     * an untagged sender, a null key beside a non-empty value, an empty key beside a null
+     * value, and an empty dependency clock. Each pairs a presence flag with a length field in
+     * {@code docs/reference/wire-format.md#held-record}, and each is a place where null and
+     * empty can silently swap.
+     */
+    @Test
+    void heldRecordEnvelopeRoundTripsEveryOptionalField() {
+        record Case(String name, byte[] key, byte[] value, UUID sender, long seq, VectorClock clock) {}
+        List<Case> cases = List.of(
+                new Case("untagged sender", "k".getBytes(), "v".getBytes(), null, -1, VectorClock.of(C1, 0)),
+                new Case("null key, real value", null, "v".getBytes(), UPSTREAM, 3, VectorClock.of(C1, 0)),
+                new Case("empty key, null value", new byte[0], null, UPSTREAM, 0, VectorClock.of(C1, 0)),
+                new Case("empty clock held behind a head", "k".getBytes(), "v".getBytes(), UPSTREAM, 1,
+                        new VectorClock()));
+
+        for (Case c : cases) {
+            MapStore store = new MapStore();
+            CausalNode first = new CausalNode(config(), store, NO_OFFSETS);
+            // A blocked head at C2@0 keeps the second record queued whatever its own clock is,
+            // so the empty-clock case exercises the queue rather than delivering on arrival.
+            assertTrue(first.onRecord(record(C2, 0, VectorClock.of(C1, 0), null, -1, null, null)).isEmpty(),
+                    c.name() + ": the head must hold");
+            assertTrue(first.onRecord(new InboundRecord(C2, 1, c.clock(), c.sender(), c.seq(),
+                    c.key(), c.value(), 4242L)).isEmpty(), c.name() + ": the record must queue");
+
+            CausalNode restarted = new CausalNode(config(), store, NO_OFFSETS);
+            List<Delivery> released = restarted.onRecord(record(C1, 0, null, null, -1, null, null));
+            assertEquals(3, released.size(), c.name() + ": the cause must release both records");
+            Delivery back = released.get(2);
+            assertArrayEquals(c.key(), back.key(), c.name() + ": key must round-trip");
+            assertArrayEquals(c.value(), back.value(), c.name() + ": value must round-trip");
+            assertEquals(4242L, back.timestamp(), c.name() + ": timestamp must round-trip");
+        }
+    }
+
     /** The advertised channel clocks must survive a restart: custody lost is claims lost. */
     @Test
     void channelClocksSurviveRestart() {

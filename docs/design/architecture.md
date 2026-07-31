@@ -92,16 +92,23 @@ prior incarnation's committed sends. The same seed heals every restart-shaped ga
 former sinks ([scope changes](state.md#scope-changes)); prior-incarnation sequence claims
 echoed back through custody upgrade to this offset space at the stamping site.
 
-## Hold queues are unbounded, and disk-backed
+## Hold queues are unbounded
 
 There is deliberately no backpressure surface. Per-channel fetch pausing cannot be honoured
 from inside a Kafka Streams task — the poll loop's own pause/resume bookkeeping, the task's
 internal buffers, and lag-aware record scheduling all sit between a processor and the fetch
 layer, and all belong to Streams. Rather than ship a signal the primary host cannot act on,
-the hold queue is unbounded and lives in the state store: a lagging cause channel grows disk
-and changelog, never heap, and the operational response is monitoring hold depth and sizing
-retention — the same economics that already bound the causal history a deployment keeps.
-Records are never dropped, and a wedge is a loud stall, not a silent loss.
+the hold queue is unbounded: records are never dropped, and a wedge is a loud stall, not a
+silent loss. The operational response is monitoring hold depth and sizing retention — the
+same economics that already bound the causal history a deployment keeps.
+
+A held record is resident twice: in the state store (so a restart restores it, and the
+changelog carries it) and in the queue the gate walks, which holds its key and value bytes in
+memory. Hold depth therefore bounds heap as well as disk, and a lagging cause channel costs
+both. `records-held` and the protocol store's size are the two signals, and they move
+together; there is no depth at which one takes over from the other. Paging the tail of a
+queue out of memory would be possible — head-of-line blocking means only the head is ever
+gated — but it is not what this cut does.
 
 ## Truncation: log-start stability
 

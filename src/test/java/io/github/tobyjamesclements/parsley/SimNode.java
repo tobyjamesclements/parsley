@@ -57,6 +57,14 @@ final class SimNode {
     private final Map<Channel, Long> positions = new HashMap<>();
     private final List<Object[]> appendedCoords = new ArrayList<>(); // {Channel, Long offset}
     private final Set<Channel> touchedThisStep = new HashSet<>();
+    /**
+     * Business records fed to the protocol but not yet returned as deliveries — the hold
+     * queues' depth, counted host-side so it holds for any {@link DeliveryProtocol}, not just
+     * the one that keeps queues. Staged like everything else: an aborted step restores the
+     * committed value, which is what a restart would restore from the store.
+     */
+    private int outstandingHolds;
+    private int snapOutstandingHolds;
 
     SimNode(String name, SimWorld world, NodeConfig config, SimBehavior behavior,
             BiFunction<NodeConfig, SimNode, DeliveryProtocol> protocolFactory) {
@@ -92,11 +100,20 @@ final class SimNode {
         }
     }
 
+    /** Records still held: the depth a restart must restore from the store. */
+    int outstandingHolds() {
+        return outstandingHolds;
+    }
+
     /** (Re)constructs the protocol from committed state, as a process start does. */
     void start() {
         protocol = protocolFactory.apply(config, this);
         store.commit(); // init-time writes (scope record, rescope) are idempotent re-runs
         up = true;
+        // Everything still held at the last commit has just come back through the restore
+        // path — the hold-queue deserializer, and the only route a held record's payload
+        // takes through bytes.
+        world.totalHeldRecordsRestored += outstandingHolds;
         Map<Channel, Long> resume = protocol.resumePositions();
         for (Channel c : config.consumed()) {
             long committed = positions.getOrDefault(c, 0L);
@@ -145,8 +162,11 @@ final class SimNode {
         boolean business = e.kind() == SimBroker.Kind.BUSINESS;
         transactionalStep(c, off + 1, crash, () -> {
             List<Delivery> out = protocol.onRecord(inbound);
-            if (business && out.stream().noneMatch(d -> d.channel().equals(c) && d.offset() == off)) {
-                world.totalHolds++;
+            if (business) {
+                outstandingHolds++;
+                if (out.stream().noneMatch(d -> d.channel().equals(c) && d.offset() == off)) {
+                    world.totalHolds++;
+                }
             }
             return out;
         });
@@ -178,10 +198,12 @@ final class SimNode {
         world.oracle.snapshot(name);
         touchedThisStep.clear();
         appendedCoords.clear();
+        snapOutstandingHolds = outstandingHolds;
 
         boolean failed = false;
         try {
             for (Delivery d : action.get()) {
+                outstandingHolds--;
                 Long recordId = world.oracle.recordIdAt(d.channel(), d.offset());
                 if (recordId == null) {
                     throw new AssertionError(name + ": delivered a non-business coordinate "
@@ -218,6 +240,7 @@ final class SimNode {
                 store.discard();
             }
             world.oracle.abort(name);
+            outstandingHolds = snapOutstandingHolds;
             up = false;
         } else {
             world.broker.appendMarkers(touchedThisStep);

@@ -48,8 +48,9 @@ a vendored copy) — the same convention the kit's own suites use.
 | `SimBehavior`, `EdgeProducer` | Scripting: stage logic (forward, filter, damped feedback) and plain clients at the topology's edge. |
 | `CausalNodeSimTest` | The scenario suite discharging obligations V1–V7 of [verification](../design/verification.md#obligations). |
 | `CausalNodeDirectedTest` | Deterministic constructions for shapes random schedules reach only by coincidence: a skipped run behind a held head, and an echoed self sequence claim on a sink that is dropped or destroyed. |
-| `CausalNodePersistenceTest` | Directed restart tests pinning each persisted fact individually — the frontier, hold queues, send and delivered sequences, advertised clocks. |
-| `WireFormatTest` | The cross-application contract pinned to literal bytes and header names, so a coordinated change to both sides of the codec cannot pass silently. |
+| `CausalNodePersistenceTest` | Directed restart tests pinning each persisted fact individually — the frontier, hold queues, send and delivered sequences, advertised clocks — and the payload of a held record, which the oracle cannot see (it judges deliveries by coordinate, so wrong bytes at the right coordinate read as correct). |
+| `CausalNodeFailClosedTest` | The guards that refuse rather than guess: a record on an unconsumed channel, a send to an undeclared sink, an input dropped while records are held on it, a hold queue restoring fewer entries than its indices claim. |
+| `WireFormatTest` | The compatibility surface pinned to literal bytes and literal names: the record headers, which cross applications, and the state-store keys and held-record envelope, which cross versions of one application through its committed state and changelog. A coordinated change to both sides of a codec cannot pass silently. |
 | `OracleSelfTest` | V8: a deliberately broken protocol (`EagerProtocol`) must be flagged. A harness that cannot fail is not a harness. |
 | `HostContractSelfTest` | V9: a deliberately broken host must be flagged — the host-side analogue of V8. |
 | `Example*Test` | The [worked examples](../guide/examples.md): runnable, asserted applications per topology shape, usable as starting points rather than verification. |

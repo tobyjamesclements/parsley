@@ -14,16 +14,34 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * of docs/design/verification.md).
  *
  * <p>Each scenario also asserts anti-vacuity: the machinery under test must actually have
- * fired (records held at the gate, crashes injected, position advances taken). A suite that
- * passes because nothing interesting happened proves nothing.
+ * fired (records held at the gate, crashes injected, position advances taken, a crash landing
+ * while records were held). A suite that passes because nothing interesting happened proves
+ * nothing.
+ *
+ * <p>Those assertions count <em>seeds</em>, not events — see {@link #SEED_FLOOR}. A sum over a
+ * hundred seeds passes when one seed happened to be interesting, which is exactly the vacuity
+ * they exist to refuse.
  */
 class CausalNodeSimTest {
 
     private static final int SEEDS = 100;
     private static final long BUDGET = 200_000;
 
+    /**
+     * How many of the {@link #SEEDS} seeds must exercise the machinery a scenario targets.
+     * A sum over seeds passes when a single seed happened to be interesting, which is the
+     * vacuity these assertions exist to refuse; the floor is per seed instead. It sits well
+     * below the measured rates (the scenarios that gate do so on 40-70 seeds), so honest
+     * scheduling noise cannot flake the build, but a mechanism that stops firing does fail.
+     */
+    private static final int SEED_FLOOR = 20;
+
     private static final class Stats {
         long deliveries, holds, crashes, positionAdvances, ticksEmitted, ticksDelivered;
+        long heldRecordsRestored;
+        /** Per-seed coverage: how many seeds fired the machinery at all, not how often. */
+        int seedsWithHolds, seedsWithCrashes, seedsWithPositionAdvances, seedsWithTicksDelivered;
+        int seedsWithHeldRestore;
 
         void add(SimWorld w) {
             deliveries += w.totalDeliveries;
@@ -32,6 +50,12 @@ class CausalNodeSimTest {
             positionAdvances += w.totalPositionAdvances;
             ticksEmitted += w.totalTicksEmitted;
             ticksDelivered += w.totalTicksDelivered;
+            heldRecordsRestored += w.totalHeldRecordsRestored;
+            if (w.totalHolds > 0) seedsWithHolds++;
+            if (w.totalCrashes > 0) seedsWithCrashes++;
+            if (w.totalPositionAdvances > 0) seedsWithPositionAdvances++;
+            if (w.totalTicksDelivered > 0) seedsWithTicksDelivered++;
+            if (w.totalHeldRecordsRestored > 0) seedsWithHeldRestore++;
         }
     }
 
@@ -53,7 +77,8 @@ class CausalNodeSimTest {
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.holds > 0, "the gate never held a record: the race never occurred");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds: the race barely occurred");
     }
 
     /**
@@ -76,8 +101,10 @@ class CausalNodeSimTest {
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.holds > 0, "the gate never held a record: transitive claims untested");
-        assertTrue(stats.crashes > 0, "no crash was ever injected on the blind hop");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds: transitive claims barely tested");
+        assertTrue(stats.seedsWithCrashes >= SEED_FLOOR, "crashes were injected on only "
+                + stats.seedsWithCrashes + " seeds of the blind hop");
     }
 
     /** V1 at the edge: a sequential plain producer's cross-topic sends stay ordered. */
@@ -95,7 +122,8 @@ class CausalNodeSimTest {
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.holds > 0, "the gate never held a record: edge stamps untested");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds: edge stamps barely tested");
     }
 
     /** V1 via observation: an edge producer that observed a stage's output before producing. */
@@ -117,7 +145,8 @@ class CausalNodeSimTest {
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.holds > 0, "the gate never held a record: observed causality untested");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds: observed causality barely tested");
     }
 
     /** V3: crashes with EOS restore — aborted records, re-inits, end-offset seeds. */
@@ -136,8 +165,13 @@ class CausalNodeSimTest {
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.crashes > 0, "no crash was ever injected");
-        assertTrue(stats.holds > 0, "the gate never held a record under crashes");
+        assertTrue(stats.seedsWithCrashes >= SEED_FLOOR, "crashes were injected on only "
+                + stats.seedsWithCrashes + " seeds");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds under crashes");
+        assertTrue(stats.seedsWithHeldRestore >= SEED_FLOOR, "a crash landed while records"
+                + " were held on only " + stats.seedsWithHeldRestore + " seeds: the hold-queue"
+                + " restore path, and the payload round trip through it, went unexercised");
     }
 
     /** V4/V6: a filter stage leaves quiet sinks; trailing markers must not wedge anything. */
@@ -156,7 +190,8 @@ class CausalNodeSimTest {
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.positionAdvances > 0, "position advances never fired: markers untested");
+        assertTrue(stats.seedsWithPositionAdvances >= SEED_FLOOR, "position advances fired on"
+                + " only " + stats.seedsWithPositionAdvances + " seeds: markers barely tested");
     }
 
     /** Multi-partition sinks: claims across partitions of one topic (the crossing wait). */
@@ -173,10 +208,17 @@ class CausalNodeSimTest {
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.holds > 0, "the gate never held a record: cross-partition order untested");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds: cross-partition order barely tested");
     }
 
-    /** Cycles: a feedback loop with gain below one drains and stays causal. */
+    /**
+     * V6 cycles: a feedback loop with gain below one drains and stays causal. The loop's two
+     * nodes cannot gate each other — A does not consume t2, so the returning t3 records' t2
+     * claims hit the ignore branch, and their t1 claims name records A delivered before
+     * emitting — so C is what puts the cycle's traffic through the gate: it consumes both
+     * sides of the loop, and every t3 record claims the t2 record it came from.
+     */
     @Test
     void cycleWithDampedFeedback() {
         Stats stats = new Stats();
@@ -184,12 +226,15 @@ class CausalNodeSimTest {
             SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 1).topic("t3", 1);
             w.node("A", 0, List.of("t1:0", "t3:0"), List.of("t2"), SimBehavior.ttlForward("t2"), real());
             w.node("B", 0, List.of("t2:0"), List.of("t3"), SimBehavior.ttlForward("t3"), real());
+            w.node("C", 0, List.of("t2:0", "t3:0"), List.of(), SimBehavior.consumeOnly(), real());
             EdgeProducer p = w.producer("edge");
             for (int i = 0; i < 6; i++) p.produce("t1", 0, "k" + i, String.valueOf(4 + i % 3), 1000 + i);
             w.run(BUDGET);
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds: the cycle's traffic never went through it");
     }
 
     /** V7: truncation below a true stability bound must not disturb later traffic. */
@@ -220,7 +265,8 @@ class CausalNodeSimTest {
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.holds > 0, "the gate never held a record after truncation");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds after truncation");
     }
 
     /**
@@ -247,9 +293,15 @@ class CausalNodeSimTest {
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.holds > 0, "the gate never held a record in the soak");
-        assertTrue(stats.crashes > 0, "no crash was ever injected in the soak");
-        assertTrue(stats.positionAdvances > 0, "position advances never fired in the soak");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds of the soak");
+        assertTrue(stats.seedsWithCrashes >= SEED_FLOOR, "crashes were injected on only "
+                + stats.seedsWithCrashes + " seeds of the soak");
+        assertTrue(stats.seedsWithPositionAdvances >= SEED_FLOOR, "position advances fired on"
+                + " only " + stats.seedsWithPositionAdvances + " seeds of the soak");
+        assertTrue(stats.seedsWithHeldRestore >= SEED_FLOOR, "a crash landed while records"
+                + " were held on only " + stats.seedsWithHeldRestore + " seeds of the soak:"
+                + " the hold-queue restore path went unexercised");
     }
 
     /**
@@ -367,6 +419,7 @@ class CausalNodeSimTest {
      */
     @Test
     void fromEarliestJoinerAfterTruncationStaysCausal() {
+        Stats stats = new Stats();
         for (long seed = 0; seed < SEEDS; seed++) {
             SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 1).topic("t3", 1);
             SimNode a = w.node("A", 0, List.of("t1:0"), List.of("t2"), SimBehavior.forwardTo("t2"), real());
@@ -386,7 +439,52 @@ class CausalNodeSimTest {
             EdgeProducer p2 = w.producer("edge2");
             for (int i = 0; i < 6; i++) p2.produce("t1", 0, "k2" + i, "v2" + i, 3000 + i);
             w.run(BUDGET);
+            stats.add(w);
         }
+        assertTrue(stats.deliveries > 0, "no deliveries at all");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds: the joiner never had to order anything");
+    }
+
+    /**
+     * The own-outputs end-offset seed, made load-bearing: a node's sends are ordered against
+     * each other across a restart even though nothing else claims them. A sinks to t2 before
+     * the restart and to t3 after it, so C — which consumes both — must deliver the earlier
+     * send first. The frontier cannot claim it (A consumes neither sink), carried ancestry
+     * cannot (both are still declared sinks), and the restored send counter is this
+     * incarnation's baseline, so prior-incarnation sends are claimed in offset space or not
+     * at all. The init end-offset seed is the only term that covers them.
+     */
+    @Test
+    void restartClaimsPriorIncarnationSends() {
+        Stats stats = new Stats();
+        for (long seed = 0; seed < SEEDS; seed++) {
+            SimWorld w = new SimWorld(seed).topic("t1", 1).topic("t2", 1).topic("t3", 1);
+            SimNode a = w.node("A", 0, List.of("t1:0"), List.of("t2", "t3"),
+                    SimBehavior.forwardTo("t2"), real());
+            EdgeProducer p = w.producer("edge");
+            for (int i = 0; i < 6; i++) p.produce("t1", 0, "k" + i, "v" + i, 1000 + i);
+            w.run(BUDGET);
+
+            // Same scope, same sinks: only the sink A writes changes across the restart.
+            a.crashIdle();
+            a.reconfigure(w.config("A", 0, List.of("t1:0"), List.of("t2", "t3")),
+                    SimBehavior.forwardTo("t3"));
+            a.start();
+
+            // C joins after the restart, so it races the two sinks against each other. A
+            // consumer present from the start would have drained t2 during the first run,
+            // satisfying every later claim on it before the second run began.
+            w.node("C", 0, List.of("t2:0", "t3:0"), List.of(), SimBehavior.consumeOnly(), real());
+
+            EdgeProducer p2 = w.producer("edge2");
+            for (int i = 0; i < 6; i++) p2.produce("t1", 0, "k2" + i, "v2" + i, 3000 + i);
+            w.run(BUDGET);
+            stats.add(w);
+        }
+        assertTrue(stats.deliveries > 0, "no deliveries at all");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds: the prior incarnation's sends never gated");
     }
 
     /** Runs the coordination-free truncation driver: log starts in, truncation out. */
@@ -403,6 +501,13 @@ class CausalNodeSimTest {
      * the shrink: it must order A's post-shrink outputs after their t1b causes, which only
      * the carried entries still claim. Afterwards, retention truncates the carried ancestry
      * itself (the one stamp-side clock the plain truncation scenarios leave empty).
+     *
+     * <p>Retention deletes t2's pre-shrink history before that consumer joins, which is what
+     * makes the carried claims the <em>only</em> thing ordering it. Left in place, those
+     * records — which claim the t1b past through the ordinary frontier — sit below every
+     * post-shrink record on the same channel, and per-channel FIFO alone would deliver the
+     * t1b causes first: the scenario would pass with the carried entries deleted from the
+     * stamp entirely.
      */
     @Test
     void rescopeShrinkCarriesAncestry() {
@@ -423,8 +528,13 @@ class CausalNodeSimTest {
                     SimBehavior.forwardTo("t2"));
             a.start();
 
-            // A fresh consumer of t2 and t1b: A's post-shrink outputs reach it claiming the
-            // t1b past through carried ancestry alone.
+            // Retention takes t2's pre-shrink history: nothing consumes t2 yet, and the
+            // records are drained, so this is deletion of stable history, not loss.
+            w.advanceLogStart("t2", 0, w.broker.endOffset(w.broker.channel("t2", 0)));
+
+            // A fresh consumer of t2 and t1b, baselined above t2's surviving log start but at
+            // the start of t1b: A's post-shrink outputs reach it claiming the t1b past through
+            // carried ancestry alone.
             w.node("C2", 0, List.of("t2:0", "t1b:0"), List.of(), SimBehavior.consumeOnly(), real());
 
             EdgeProducer p2 = w.producer("edge2");
@@ -442,7 +552,8 @@ class CausalNodeSimTest {
                     "carried ancestry survived a full-retention truncation");
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.holds > 0, "the carried claims never actually gated anything");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR,
+                "the carried claims gated something on only " + stats.seedsWithHolds + " seeds");
     }
 
     /**
@@ -468,9 +579,12 @@ class CausalNodeSimTest {
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.ticksDelivered > 0, "no tick ever returned through the gate");
-        assertTrue(stats.holds > 0, "the gate never held a record in a ticking topology");
-        assertTrue(stats.crashes > 0, "no crash was ever injected around a tick");
+        assertTrue(stats.seedsWithTicksDelivered >= SEED_FLOOR, "ticks returned through the"
+                + " gate on only " + stats.seedsWithTicksDelivered + " seeds");
+        assertTrue(stats.seedsWithHolds >= SEED_FLOOR, "the gate held a record on only "
+                + stats.seedsWithHolds + " seeds of the ticking topology");
+        assertTrue(stats.seedsWithCrashes >= SEED_FLOOR, "crashes were injected on only "
+                + stats.seedsWithCrashes + " seeds around a tick");
     }
 
     /**
@@ -507,7 +621,8 @@ class CausalNodeSimTest {
             stats.add(w);
         }
         assertTrue(stats.deliveries > 0, "no deliveries at all");
-        assertTrue(stats.ticksDelivered > 0, "no tick ever returned through the gate");
+        assertTrue(stats.seedsWithTicksDelivered >= SEED_FLOOR, "ticks returned through the"
+                + " gate on only " + stats.seedsWithTicksDelivered + " seeds");
     }
 
     /**

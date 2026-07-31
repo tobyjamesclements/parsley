@@ -90,6 +90,24 @@ class KafkaStateStoreTest {
                 assertEquals(null, k, "no key outside the prefix may be visited"));
     }
 
+    /**
+     * A one-character prefix is scanned like any other. Its exclusive upper bound is its single
+     * byte incremented, which exists; only the empty prefix has no bound at all, and rejecting
+     * anything shorter than two bytes would refuse a legal scan.
+     */
+    @Test
+    void singleCharacterPrefixIsScanned() {
+        store.put("h", new byte[] {1});
+        store.put("ha", new byte[] {2});
+        store.put("i", new byte[] {3});
+
+        List<String> keys = new ArrayList<>();
+        store.forEachPrefix("h", (k, v) -> keys.add(k));
+
+        assertEquals(List.of("h", "ha"), keys,
+                "exactly the one-byte-prefixed keys must be visited");
+    }
+
     /** A prefix with no byte-wise upper bound is rejected rather than scanned unbounded. */
     @Test
     void prefixWithoutUpperBoundIsRejected() {

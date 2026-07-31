@@ -25,6 +25,12 @@ import java.util.function.BiFunction;
  */
 final class SimWorld {
 
+    /**
+     * How much of a world's crash budget only a node holding records may spend. See the draw
+     * in {@link #run}: without a reserve the budget is gone before any queue has depth.
+     */
+    private static final int HELD_CRASH_RESERVE = 1;
+
     final SimBroker broker = new SimBroker();
     final Oracle oracle = new Oracle();
     private final Random rng;
@@ -50,6 +56,8 @@ final class SimWorld {
     long totalPositionAdvances;
     long totalTicksEmitted;
     long totalTicksDelivered;
+    /** Held records that came back through the restore path — the hold-queue deserializer. */
+    long totalHeldRecordsRestored;
 
     SimWorld(long seed) {
         this.rng = new Random(seed);
@@ -175,21 +183,37 @@ final class SimWorld {
             List<Action> enabled = new ArrayList<>();
             for (SimNode n : nodes) {
                 if (n.up) {
+                    // A crash landing while records are held is the only route to the
+                    // hold-queue restore path, and it is the interleaving an unreserved budget
+                    // never buys: crashes are drawn uniformly from the whole run, so they are
+                    // spent early, while every queue is still empty. The last crash of the
+                    // budget is therefore reserved for a node that is actually holding, and a
+                    // holding node's crash actions are offered at double weight. Every
+                    // interleaving an unweighted draw could produce stays reachable.
+                    boolean holding = n.outstandingHolds() > 0;
+                    int crashes = holding ? crashBudget : crashBudget - HELD_CRASH_RESERVE;
+                    int crashWeight = holding ? 2 : 1;
                     for (Channel c : n.config.consumed()) {
                         if (n.hasFetchWork(c)) {
                             enabled.add(new Action.Process(n, c, false));
-                            if (crashBudget > 0) enabled.add(new Action.Process(n, c, true));
+                            for (int i = 0; crashes > 0 && i < crashWeight; i++) {
+                                enabled.add(new Action.Process(n, c, true));
+                            }
                         }
                         if (n.hasPositionAdvance(c)) {
                             enabled.add(new Action.PositionAdvance(n, c, false));
-                            if (crashBudget > 0) enabled.add(new Action.PositionAdvance(n, c, true));
+                            for (int i = 0; crashes > 0 && i < crashWeight; i++) {
+                                enabled.add(new Action.PositionAdvance(n, c, true));
+                            }
                         }
                     }
                     if (n.ticks() && tickBudget > 0) {
                         enabled.add(new Action.EmitTick(n, false));
-                        if (crashBudget > 0) enabled.add(new Action.EmitTick(n, true));
+                        if (crashes > 0) enabled.add(new Action.EmitTick(n, true));
                     }
-                    if (crashBudget > 0) enabled.add(new Action.CrashIdle(n));
+                    for (int i = 0; crashes > 0 && i < crashWeight; i++) {
+                        enabled.add(new Action.CrashIdle(n));
+                    }
                 } else {
                     enabled.add(new Action.Restart(n));
                 }

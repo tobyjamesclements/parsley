@@ -460,6 +460,35 @@ class StageTest {
         }
     }
 
+    /**
+     * The broker-less test wiring's truncation sweep is a working no-op, not a failing one. Its
+     * offset queries answer empty because there is no broker and so nothing to truncate; if they
+     * answered with anything the sweep cannot read, every application's own
+     * {@code testTopology()} tests would silently log a warning and count a skipped sweep on
+     * every cycle.
+     */
+    @Test
+    void testWiringTruncationSweepIsAWorkingNoOp() {
+        Stage stage = Stage.named("stage")
+                .on(T1, m -> List.of(T3.send(m.key(), "out:" + m.value())))
+                .into(T3)
+                .truncationInterval(Duration.ofSeconds(1))
+                .build();
+        try (TopologyTestDriver driver = new TopologyTestDriver(
+                Parsley.of(stage).testTopology(), props("parsley-ttd-testwiring-sweep"))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            var headers = new RecordHeaders();
+            CausalHeaders.write(headers, VectorClock.of(Stage.testChannel("up", 0), 4));
+            t1.pipeInput(new TestRecord<>("k", "a", headers, 1000L));
+
+            driver.advanceWallClockTime(Duration.ofSeconds(1));
+
+            assertEquals(0.0, parsleyMetric(driver, "truncation-sweeps-skipped-total", null),
+                    "the test wiring's sweep must complete, not throw and count a skip");
+        }
+    }
+
     /** A failing truncation sweep skips its cycle and counts on the skip total. */
     @Test
     void truncationSweepFailureCounts() {
@@ -625,6 +654,42 @@ class StageTest {
             assertEquals("out:c", out.get(0), "the cause must deliver first");
             assertEquals(Set.of("out:b", "tick@1000"), Set.copyOf(out.subList(1, 3)),
                     "the held record and the gated tick must both release after their cause");
+        }
+    }
+
+    /**
+     * A stateful stage takes stateless tick logic and a hold-warning threshold in the same
+     * fluent chain. Both overloads exist so a stage that keeps per-key state is not forced into
+     * a tick fold it has no use for: a tick handler leaves the reserved tick slot untouched, and
+     * every per-key slot with it.
+     */
+    @Test
+    void aStatefulStageTakesStatelessTickLogicAndAHoldWarningThreshold() {
+        Stage stage = Stage.named("statefultick")
+                .state(Codec.int64(), () -> 0L)
+                .on(T1, (Long n, Message<String, String> m) ->
+                        Step.of(n + 1, T3.send(m.key(), "n=" + (n + 1))))
+                .ticks(Duration.ofSeconds(1), tick -> List.of(T3.send("tick", "fired")))
+                .holdWarningAfter(Duration.ofSeconds(5))
+                .into(T3)
+                .build();
+
+        try (TopologyTestDriver driver = new TopologyTestDriver(
+                Parsley.of(stage).testTopology(), props("parsley-statefultick-ttd"),
+                Instant.ofEpochMilli(0L))) {
+            TestInputTopic<String, String> t1 =
+                    driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
+            TestOutputTopic<String, String> t3 =
+                    driver.createOutputTopic("t3", new StringDeserializer(), new StringDeserializer());
+
+            t1.pipeInput("k", "x", 1000L);
+            driver.advanceWallClockTime(Duration.ofSeconds(1));
+            t1.pipeInput("k", "y", 1001L);
+
+            assertEquals(List.of("n=1", "fired", "n=2"),
+                    t3.readRecordsToList().stream().map(TestRecord::value).toList(),
+                    "the stateless tick handler must run, and must leave the key's fold state"
+                            + " exactly where the fold left it");
         }
     }
 
