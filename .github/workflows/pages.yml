@@ -50,28 +50,44 @@ jobs:
       - name: Determine version and aliases
         id: ver
         run: |
+          # Who owns `latest` depends on the major version. Pre-1.0, main is the authoritative
+          # tree — releases trail it and can differ incompatibly — so main carries `latest` and
+          # tags deploy as pinned versions with no alias. From 1.0.0 that inverts: `latest`
+          # follows the newest stable release and main is `dev` only. Prereleases (any tag with
+          # a `-suffix`) never take `latest`.
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-            echo "aliases=latest" >> $GITHUB_OUTPUT
-            echo "snapshot=false" >> $GITHUB_OUTPUT
+            VERSION="${GITHUB_REF#refs/tags/v}"
+            SNAPSHOT=false
+            if [[ "${VERSION%%.*}" -ge 1 && "$VERSION" != *-* ]]; then
+              ALIASES=latest
+            else
+              ALIASES=
+            fi
           else
-            POM_VER=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)
-            echo "version=$POM_VER" >> $GITHUB_OUTPUT
-            # main is the authoritative tree, so its docs carry `latest` — and with it the site
-            # default — as well as `dev`. Released versions stay addressable by version number.
-            echo "aliases=dev latest" >> $GITHUB_OUTPUT
-            echo "snapshot=true" >> $GITHUB_OUTPUT
+            VERSION=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)
+            SNAPSHOT=true
+            if [[ "${VERSION%%.*}" -ge 1 ]]; then
+              ALIASES=dev
+            else
+              ALIASES="dev latest"
+            fi
           fi
+          echo "version=$VERSION"   >> $GITHUB_OUTPUT
+          echo "aliases=$ALIASES"   >> $GITHUB_OUTPUT
+          echo "snapshot=$SNAPSHOT" >> $GITHUB_OUTPUT
 
       - name: Deploy versioned docs
         run: |
           mike deploy --push --update-aliases \
               ${{ steps.ver.outputs.version }} ${{ steps.ver.outputs.aliases }}
-          # Every deploy places `latest`, so the site default can always point at it.
-          mike set-default --push latest
+          # Point the site default at `latest` whenever this build is the one placing it; a
+          # deploy that takes no alias leaves the previous default alone.
+          if [[ "${{ steps.ver.outputs.aliases }}" == *latest* ]]; then
+            mike set-default --push latest
+          fi
           if [[ "${{ steps.ver.outputs.snapshot }}" == "true" ]]; then
             # Garbage-collect superseded snapshot doc versions: keep only this build's snapshot
-            # (which now holds `dev` and `latest`) plus real releases. Dev docs are deployed under
+            # (which now holds the aliases decided above) plus real releases. Dev docs are under
             # the literal X.Y.Z-SNAPSHOT version, so without this every version bump leaves a stale
             # entry behind in the selector. Runs after the deploy above, so the current snapshot is
             # never the one removed.

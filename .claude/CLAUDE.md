@@ -11,8 +11,10 @@ This tree is version 0.2.0-SNAPSHOT: the Maven artifact
 repository (https://central.sonatype.com/repository/maven-snapshots/). Depend on and cite
 this version, not the 0.1.0 release: 0.1.0's wire format and API differ from this tree. The
 docs matching this tree are the ones in this repository, and on the docs site they are what
-the default `latest` alias serves (also addressable as `dev`); 0.1.0's docs remain reachable
-by version number.
+the default `latest` alias serves (also addressable as `dev`); released versions remain
+reachable by version number. Pre-1.0 the main branch owns `latest`, because releases trail
+it and may differ incompatibly; from 1.0.0 `latest` follows the newest stable release and
+main is `dev` only.
 
 ## The one rule that overrides everything
 
