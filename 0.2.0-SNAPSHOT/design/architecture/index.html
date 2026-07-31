@@ -710,10 +710,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#hold-queues-are-unbounded-and-disk-backed" class="md-nav__link">
+  <a href="#hold-queues-are-unbounded" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Hold queues are unbounded, and disk-backed
+        Hold queues are unbounded
       
     </span>
   </a>
@@ -1503,15 +1503,21 @@ offset, an over-claim on real appended offsets (delay-only, therefore sound) tha
 prior incarnation's committed sends. The same seed heals every restart-shaped gap, including
 former sinks (<a href="../state/#scope-changes">scope changes</a>); prior-incarnation sequence claims
 echoed back through custody upgrade to this offset space at the stamping site.</p>
-<h2 id="hold-queues-are-unbounded-and-disk-backed">Hold queues are unbounded, and disk-backed</h2>
+<h2 id="hold-queues-are-unbounded">Hold queues are unbounded</h2>
 <p>There is deliberately no backpressure surface. Per-channel fetch pausing cannot be honoured
 from inside a Kafka Streams task — the poll loop's own pause/resume bookkeeping, the task's
 internal buffers, and lag-aware record scheduling all sit between a processor and the fetch
 layer, and all belong to Streams. Rather than ship a signal the primary host cannot act on,
-the hold queue is unbounded and lives in the state store: a lagging cause channel grows disk
-and changelog, never heap, and the operational response is monitoring hold depth and sizing
-retention — the same economics that already bound the causal history a deployment keeps.
-Records are never dropped, and a wedge is a loud stall, not a silent loss.</p>
+the hold queue is unbounded: records are never dropped, and a wedge is a loud stall, not a
+silent loss. The operational response is monitoring hold depth and sizing retention — the
+same economics that already bound the causal history a deployment keeps.</p>
+<p>A held record is resident twice: in the state store (so a restart restores it, and the
+changelog carries it) and in the queue the gate walks, which holds its key and value bytes in
+memory. Hold depth therefore bounds heap as well as disk, and a lagging cause channel costs
+both. <code>records-held</code> and the protocol store's size are the two signals, and they move
+together; there is no depth at which one takes over from the other. Paging the tail of a
+queue out of memory would be possible — head-of-line blocking means only the head is ever
+gated — but it is not what this cut does.</p>
 <h2 id="truncation-log-start-stability">Truncation: log-start stability</h2>
 <p>Stamp-side clocks (carried ancestry and the advertised channel clocks) are the two whose
 width grows with the node's transitive upstream, and truncation is what bounds them. The

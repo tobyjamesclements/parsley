@@ -1397,7 +1397,7 @@ a vendored copy) — the same convention the kit's own suites use.</p>
 </tr>
 <tr>
 <td><code>SimWorld</code></td>
-<td>The seeded scheduler: interleaves fetches, position advances, producer ops, crashes, and restarts until the world drains or the step budget fails it.</td>
+<td>The seeded scheduler: interleaves fetches, position advances, producer ops, tick emissions, crashes, and restarts until the world drains or the step budget fails it. Tick and crash budgets bound the otherwise endless cadence so a ticking world still drains.</td>
 </tr>
 <tr>
 <td><code>SimBroker</code></td>
@@ -1414,6 +1414,22 @@ a vendored copy) — the same convention the kit's own suites use.</p>
 <tr>
 <td><code>CausalNodeSimTest</code></td>
 <td>The scenario suite discharging obligations V1–V7 of <a href="../../design/verification/#obligations">verification</a>.</td>
+</tr>
+<tr>
+<td><code>CausalNodeDirectedTest</code></td>
+<td>Deterministic constructions for shapes random schedules reach only by coincidence: a skipped run behind a held head, and an echoed self sequence claim on a sink that is dropped or destroyed.</td>
+</tr>
+<tr>
+<td><code>CausalNodePersistenceTest</code></td>
+<td>Directed restart tests pinning each persisted fact individually — the frontier, hold queues, send and delivered sequences, advertised clocks — and the payload of a held record, which the oracle cannot see (it judges deliveries by coordinate, so wrong bytes at the right coordinate read as correct).</td>
+</tr>
+<tr>
+<td><code>CausalNodeFailClosedTest</code></td>
+<td>The guards that refuse rather than guess: a record on an unconsumed channel, a send to an undeclared sink, an input dropped while records are held on it, a hold queue restoring fewer entries than its indices claim.</td>
+</tr>
+<tr>
+<td><code>WireFormatTest</code></td>
+<td>The compatibility surface pinned to literal bytes and literal names: the record headers, which cross applications, and the state-store keys and held-record envelope, which cross versions of one application through its committed state and changelog. A coordinated change to both sides of a codec cannot pass silently.</td>
 </tr>
 <tr>
 <td><code>OracleSelfTest</code></td>

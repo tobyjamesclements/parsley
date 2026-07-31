@@ -1367,7 +1367,9 @@ and a gate that only ever looks at heads. Convoying within a channel is the acce
 <li><strong>Per-channel FIFO delivery</strong> at every consumer, so a record never needs to claim its own
   channel's earlier offsets — same-channel order is structural.</li>
 <li><strong>The frontier is contiguous by construction</strong>: it advances only when the head delivers, or
-  when a known-clean prefix folds in (seed, bridge, position advance).</li>
+  when a known-clean prefix folds in (seed, bridge, position advance). A prefix is known-clean
+  whenever every business record below it has been delivered — which includes the run below a
+  <em>held</em> head, since head-of-line order means everything under the head has already gone.</li>
 </ul>
 <h2 id="the-predicate">The predicate</h2>
 <p>A record <code>m</code> arrives on consumed channel <code>c</code> carrying dependency clock <code>D</code> (absent header

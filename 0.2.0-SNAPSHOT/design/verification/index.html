@@ -1411,16 +1411,26 @@ Transactions are step-atomic: one simulation step is one fetch-process-commit cy
 the step's records and markers together, which models EOS faithfully at the granularity that
 matters (consumers see marker/abort holes; no transaction spans an observation point).</p>
 <p><code>SimNode</code> hosts the real <code>CausalNode</code> exactly as the Streams adapter does: staged store
-mutations, staged consumer positions, sends stamped at the single site, acknowledgements
-delivered asynchronously by the scheduler, and a commit-or-abort at step end. A crash aborts
+mutations, staged consumer positions, sends stamped at the single site, and a commit-or-abort
+at step end. Nothing hands a send's offset back to the node that made it, because the adapter
+does not fold producer acknowledgements either. A crash aborts
 the in-flight step — appended records become aborted records at their offsets, staged state
 discards, and the node later restarts from committed state through the full init path
 (restore, end-offset seed, rescope). <code>EdgeProducer</code> scripts plain clients: sequential
 producers whose sends claim their previous acknowledgements, and observers that fold consumed
 records before producing.</p>
-<p>The scheduler draws from every enabled action — fetch, position advance, acknowledgement
-delivery, producer op, crash, restart — with a seeded generator, so every run is a
-reproducible interleaving and every seed a different one.</p>
+<p>The scheduler draws from every enabled action — fetch, position advance, tick emission,
+producer op, crash, restart — with a seeded generator, so every run is a reproducible
+interleaving and every seed a different one.</p>
+<p>Reproducibility is a property the protocol has to cooperate with, not one the scheduler can
+supply alone. <code>NodeConfig</code> normalises its channel sets with <code>Set.copyOf</code>, and the JDK's
+immutable sets randomise iteration order per JVM; iterating one directly would make the
+cascade's cross-channel delivery order vary between runs, and the host runs user logic per
+delivery in list order, so that order reaches the broker as send order and from there into
+every offset downstream. <code>CausalNode</code> therefore iterates a sorted copy wherever set order can
+escape — the cascade, <code>rescope</code>, and the scope record — and <code>CausalNodeDirectedTest</code> pins
+both. Without it a seed does not determine its run, and PIT verdicts drift between runs of an
+unchanged tree.</p>
 <h2 id="the-oracle">The oracle</h2>
 <p>The oracle never reads a vector clock. It tracks <strong>real</strong> happened-before ancestry: each
 business emission records the emitting actor's causal past (everything delivered there plus
@@ -1435,6 +1445,11 @@ transaction so an aborted step teaches the oracle nothing. On every delivery it 
 <p>At drain it checks <strong>completeness</strong>: every business record above baseline on a consumed
 channel was delivered. A world that cannot drain within its step budget fails outright — that
 is the wedge and livelock detector.</p>
+<p>The oracle judges deliveries by <strong>coordinate</strong>, never by content: a delivery is the record at
+<code>(channel, offset)</code>, and what the protocol hands the user processor at that coordinate is
+outside its verdict. Nothing the simulator does can catch a restore that returns the right
+record with the wrong bytes, which is why the payload of a held record is pinned by directed
+assertions instead (V10).</p>
 <h2 id="obligations">Obligations</h2>
 <table>
 <thead>
@@ -1490,6 +1505,16 @@ is the wedge and livelock detector.</p>
 <td>The kit catches a broken host</td>
 <td><code>HostContractSelfTest</code>: a host that breaks step-atomicity, or withholds the position-advance signal, must be flagged</td>
 </tr>
+<tr>
+<td>V10</td>
+<td>A restored record is the record that was fetched</td>
+<td><code>CausalNodePersistenceTest</code>: key bytes, value bytes, and timestamp survive the hold-queue round trip — the one fact about a delivery the oracle does not judge</td>
+</tr>
+<tr>
+<td>V11</td>
+<td>The guards fail closed rather than guess</td>
+<td><code>CausalNodeFailClosedTest</code>, one construction per guard</td>
+</tr>
 </tbody>
 </table>
 <p>V8 is the keystone: it runs a deliberately broken implementation and requires the oracle to
@@ -1500,38 +1525,103 @@ harness meaningful as a <a href="../../reference/conformance-kit/">conformance k
 than the shipped adapter.</p>
 <h2 id="anti-vacuity">Anti-vacuity</h2>
 <p>Every scenario asserts that the machinery it targets actually fired: records were held at the
-gate, crashes were injected, position advances ran. A race that never occurs proves nothing,
-so the suite refuses to pass on quiet schedules. Indicatively, the widest scenario across its
-hundred seeds drives on the order of ten thousand scheduler steps, five thousand
-oracle-checked deliveries, hundreds of crash injections, and a thousand-plus position
-advances.</p>
+gate, crashes were injected, position advances ran, a crash landed while records were held. A
+race that never occurs proves nothing, so the suite refuses to pass on quiet schedules.
+Indicatively, the widest scenario across its hundred seeds drives on the order of ten thousand
+scheduler steps, five thousand oracle-checked deliveries, hundreds of crash injections, and a
+thousand-plus position advances.</p>
+<p>These assertions count <strong>seeds, not events</strong>. A sum over a hundred seeds passes when one seed
+happened to be interesting, which is the vacuity they exist to refuse; the floor is a minimum
+number of seeds that reached the state (<code>SEED_FLOOR</code>, currently twenty against measured rates
+of forty to seventy). The distinction is not academic — the sums were what hid the fact that
+the hold-queue restore path ran on five node incarnations out of nearly seven thousand.</p>
+<p>Two interleavings the scheduler will not reach on its own are bought explicitly, because an
+unweighted draw spends its budget before the interesting state exists:</p>
+<ul>
+<li><strong>A crash while records are held</strong>, the only route into the hold-queue restore path. The
+  last crash of a world's budget is reserved for a node that is actually holding, and a
+  holding node's crash actions are drawn at double weight. Every interleaving an unweighted
+  draw could produce stays reachable.</li>
+<li><strong>A consumer whose baseline sits above a channel's earlier history</strong>, which is what makes a
+  stamp's claims load-bearing rather than redundant with per-channel FIFO. Scenarios that
+  target a particular stamp term retire the earlier history with retention, or join the
+  consumer after it, so the term under test is the only thing that can order the delivery.</li>
+</ul>
 <h2 id="scenario-coverage">Scenario coverage</h2>
-<p>Shared-input races (a stage's output racing its input at a shared consumer), transitive claims
+<p>Ticking stages (the tick channel is both consumed and produced, so a tick is stamped, lands on
+the emitting task's own partition, and returns through the gate carrying the node's causal past
+— including under crash injection, and across a restart that drops one of the stage's other
+sinks while the tick self-loop still holds claims on it),
+shared-input races (a stage's output racing its input at a shared consumer), transitive claims
 through a hop that does not consume the origin, edge-producer cross-topic ordering, observed
 causality from a plain consumer, crash-recovery chains, filter stages with quiet sinks and
-trailing markers, multi-partition sink ordering through sequence claims (including with
-acknowledgements never delivered), the late-joiner sequence-claim wedge probe, damped feedback
-cycles, truncation mid-history, log-start stability (full-retention truncation emptying the
+trailing markers, multi-partition sink ordering through sequence claims, which a node's own
+sends are always claimed in until a restart's end-offset seed converts them to offsets — the
+simulator never delivers a producer acknowledgement, because neither the protocol nor the
+Streams adapter folds one. The late-joiner sequence-claim wedge probe, damped feedback
+cycles (with a consumer of both sides of the loop, since the loop's own nodes cannot gate each
+other), truncation mid-history, log-start stability (full-retention truncation emptying the
 stamp-side clocks, and a from-earliest joiner arriving after truncation), scope shrink across
-a restart, and the wide soak combining most of the above.</p>
+a restart, a restart's own prior-incarnation sends ordered against each other at a consumer of
+both sinks, and the wide soak combining most of the above.</p>
+<p>The scenarios covering the stamp's four terms are each built so that the term is what orders
+the delivery: the shrink scenario retires the dropped input's channel history from t2 before
+its consumer joins (leaving carried ancestry as the only claim on the t1b past), and the
+restart scenario joins its consumer after the restart (so the two sinks race, and only the
+end-offset seed relates them). Both were rebuilt after the terms were found to be removable
+with the suite green — the earlier shapes let per-channel FIFO supply the ordering for free.</p>
 <h2 id="mutation-testing">Mutation testing</h2>
-<p>PIT runs over the whole package inside <code>mvn verify</code>, at four threads with a 75% mutation
-floor and an 80% line-coverage floor, both a few points below the standing scores so
-refactoring noise does not flake the build. Four
-threads is measured verdict-identical to a serial run on this suite; the hazard being checked
-is that a timeout under CPU contention counts as a kill, so the comparison is repeated
-(one <code>-Dpitest.threads=1</code> run, diff <code>mutations.xml</code>) whenever the suite slows appreciably.
-The delivery gate itself has no surviving mutants; the
-survivors that remain cluster where randomized schedules structurally under-discriminate —
-persistence (killed instead by the directed <code>CausalNodePersistenceTest</code>), redundancy-masked
-paths (removing acknowledgement folding survives because sequence claims soundly cover it),
-and operational transitions like rescope, which dedicated scenarios now drive. One survivor
-class is accepted by design: mutants whose only effect is degrading an optimisation the
-protocol does not rely on for safety. The remaining uncovered mutants sit in the
-Admin-backed seam (<code>AdminBrokerOffsets</code>, the admin resolver in <code>TopicIds</code>), which runs only
-against a real cluster and so falls outside PIT's measurement; the seam stays thin, the
-logic behind it is driven through <code>BrokerOffsets</code> by the simulator, and the broker smoke
-suite exercises it against a live broker.</p>
+<p>PIT runs over the whole package inside <code>mvn verify</code>, serially, with a 75% mutation floor and
+an 80% line-coverage floor — both well below the standing scores (<strong>681 of 738 mutations
+killed, 92%; line coverage 1345/1465, 92%; test strength 95%</strong>) so refactoring noise does not
+flake the build.</p>
+<p>The gate runs on one thread deliberately. The only timing-sensitive verdict PIT produces is
+<code>TIMED_OUT</code>, which scores as a kill, so a threaded run under CPU contention can inflate the
+score. One thread removes that hazard rather than periodically re-checking for it, and costs
+little: 506s serial against 402s at four threads. Verdicts are reproducible — five
+consecutive runs (four threaded, one serial) returned identical verdicts for all 738 mutants,
+compared as a multiset. That reproducibility depends on the iteration-order guarantee
+described under <a href="#the-simulated-world">the simulated world</a>; before it, runs of an unchanged
+tree disagreed.</p>
+<p><strong>The delivery gate itself has no surviving mutants.</strong> All eight mutants of <code>deliverable</code>,
+the predicate every guarantee rests on, are killed.</p>
+<p>The eight <code>TIMED_OUT</code> mutants are all structural non-termination rather than slow tests: six
+in the cascade's fixpoint, plus one each in <code>advanceFrontier</code> and <code>frontierOf</code>. Each stops the
+frontier advancing while leaving the loop's <code>changed</code> flag set, so the fixpoint never settles.
+They are the same eight on every run.</p>
+<p>Of the 33 survivors, 20 sit in <code>CausalNode</code>, and every one carries a written equivalence
+argument rather than an assumption:</p>
+<ul>
+<li><strong>Redundancy-masked paths</strong>, the largest group. The density adaptation reaches the same
+  frontier fold from two sites — a receive-time bridge and the cascade's own trailing-run
+  fold, both fed by the same recorded position — so removing either alone is invisible while
+  the other stands. These are not gaps in the scenarios; they are places where the protocol is
+  deliberately belt-and-braces, and a mutation that removes one brace changes nothing.</li>
+<li><strong>Stamp normalisation of a node's own echoed claims</strong>, provably equivalent: <code>prepareSend</code>
+  merges both <code>ownOutputs</code> and carried ancestry into the stamp <em>before</em> <code>normalize</code> runs, and
+  the upgrade target is drawn from exactly those two clocks, so upgrading a self-claim to
+  offset space can never add anything the stamp does not already carry. Normalisation of
+  <em>another</em> sender's claim is not equivalent, and is killed.</li>
+<li><strong>Equivalent mutants</strong>, accepted: the length guards in the held-record envelope
+  (<code>if (keyLen &gt; 0) put(key)</code> versus <code>&gt;= 0</code> — writing a zero-length array is a no-op), the
+  half-open bound of the hold-queue restore window (the store never holds an entry at
+  <code>tailIndex</code>), and mutants whose only effect is degrading an optimisation the protocol does
+  not rely on for safety.</li>
+</ul>
+<p>The remaining 13 survivors sit outside the protocol, in the adapter and the probes, and need a
+seam that does not exist: a started runtime, a log appender, a multi-partition sink
+<code>TopologyTestDriver</code> cannot provide, or a task migration.</p>
+<p>Uncovered mutants (24) are led by the Admin-backed seam (<code>AdminBrokerOffsets</code> and the admin
+resolver in <code>TopicIds</code>, 18 between them), which runs only against a real cluster and so falls
+outside PIT's measurement: the seam stays thin, the logic behind it is driven through
+<code>BrokerOffsets</code> by the simulator, and the broker smoke suite exercises it against a live
+broker. The remaining six are <code>CausalStreams</code> and <code>Parsley</code> members reachable only from a
+started runtime, and one branch each in <code>Stage$Adapter</code>, <code>ContractProbes</code>, and
+<code>KafkaStateStore</code>. None is in the protocol core.</p>
+<p>Two of the surviving mutants are findings about <code>src/main</code> rather than about the tests, and
+are recorded as such: the tick-topic branch of <code>ContractProbes.runTopology</code> cannot produce a
+finding under any input, and the <code>0xFF</code> carry loop in <code>KafkaStateStore.forEachPrefix</code> is
+unreachable because store keys are UTF-8 strings and UTF-8 never emits that byte.</p>
 <h2 id="the-broker-smoke-suite">The broker smoke suite</h2>
 <p>The <code>broker-it</code> Maven profile runs the <code>*IT</code> test classes under failsafe against a real
 single-node broker in a Docker container (Testcontainers), pinned to the minimum supported
@@ -1559,6 +1649,19 @@ the seam contract and the assembled plumbing on a live cluster; <code>TopologyTe
 tests cover the adapter's plumbing (hold-and-release, stamp content, fail-closed corrupt
 headers, the buffered-batch position guard) without a broker. Rebalance and task-migration behaviour has no automated
 coverage.</p>
+<p>Two further boundaries are worth naming, because a scenario list reads as a coverage claim:</p>
+<ul>
+<li><strong>Ticks are modelled at the protocol level, not the adapter's.</strong> The simulator drives the
+  self-loop that matters — stamp, own-partition append, return through the gate — with the
+  scheduler standing in for the wall clock, which is strictly more adversarial than a real
+  timer. The punctuator scheduling, the partition-encoded key, and the sink partitioner stay
+  <code>TopologyTestDriver</code>-only, as plumbing rather than protocol.</li>
+<li><strong>Some shapes are pinned by directed tests rather than reached by random schedules.</strong> A
+  skipped run behind a held head needs a claim naming an offset inside that specific gap; the
+  randomized topologies reach it only by coincidence, so <code>CausalNodeDirectedTest</code> constructs it
+  deterministically instead. The drain check would catch a regression in any world that happens
+  to build the shape, but the directed test is what guarantees it is built at all.</li>
+</ul>
 
 
 

@@ -1394,8 +1394,15 @@ consumer's <strong>position</strong> advances past trailing markers and aborted 
 returns no records. A position of <code>p</code> is proof that everything below <code>p</code> was fetched or
 consumer-skipped. The host reports it through one method — <code>positionAdvance(channel, p)</code> —
 and when the channel's hold queue is empty the frontier rises to <code>p − 1</code> and the cascade runs.</p>
-<p>That method is the entire liveness mechanism: gates wait only on local frontiers, and skips
-are observable from position.</p>
+<p>A skipped run need not be trailing. When one opens <em>behind a held head</em> — the head arrived
+across a marker gap while an earlier record was still gated — the position signal cannot be
+applied, because the head itself is undelivered and the frontier must stay below it. The gap
+folds in on its own account instead: head-of-line order means every business record below the
+head has already been delivered, so the rest of that prefix was skipped, and the frontier rises
+to one below the head. Without it, a claim naming an offset inside the gap would wait on a
+coordinate no record and no position advance could ever cover.</p>
+<p>Together these are the whole liveness mechanism: gates wait only on local frontiers, and every
+skip is observable — from the position when the queue is empty, from the head when it is not.</p>
 <h2 id="why-over-claims-cannot-deadlock">Why over-claims cannot deadlock</h2>
 <p>Claims can exceed real causality: the init-time end-offset seed claims every offset appended
 to a sink before the node started, including sibling producers' records, and folded clocks

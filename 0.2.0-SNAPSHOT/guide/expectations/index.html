@@ -1437,10 +1437,10 @@ pipeline — see <a href="../verifying/">verifying your application</a>.</p>
   outside <code>Parsley.streams</code>. A failed send aborts with its transaction, taking every claim
   on it along, and the retry refetches. What a failure in your own logic does, and how to
   model domain failures instead, is <a href="../error-handling/">error handling</a>.</li>
-<li><strong>Held records cost disk, not heap.</strong> Hold queues are unbounded and live in the state
-  store and its changelog, so a lagging cause channel grows state rather than exhausting
-  memory, and a wedge is a loud stall, never a silent loss
-  (<a href="../../design/architecture/#hold-queues-are-unbounded-and-disk-backed">hold queues</a>).</li>
+<li><strong>Held records are never dropped.</strong> Hold queues are unbounded, so a wedge is a loud stall,
+  never a silent loss. They are not free: a held record occupies the state store and its
+  changelog <em>and</em> stays resident in memory, so hold depth bounds heap as well as disk
+  (<a href="../../design/architecture/#hold-queues-are-unbounded">hold queues</a>).</li>
 </ul>
 <h2 id="what-parsley-does-not-promise">What Parsley does not promise</h2>
 <ul>
