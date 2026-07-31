@@ -65,3 +65,8 @@ can run the same verification.
 4. [Architecture](design/architecture.md) and [state](design/state.md) — the classes, the
    store layout, crash recovery, scope changes, truncation.
 5. [Verification](design/verification.md) — the simulator, the oracle, and the obligations.
+
+That is a path through the docs, not all of them. [`llms.txt`](llms.txt) indexes every page
+with a one-line description of what it settles, and [`llms-full.txt`](llms-full.txt) is the
+full text of all of them in a single file — both written for agents reading this site, and
+both also served unversioned at the site root.
