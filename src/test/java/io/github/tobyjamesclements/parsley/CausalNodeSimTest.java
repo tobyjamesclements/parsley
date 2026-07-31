@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 import java.util.function.BiFunction;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -496,6 +497,22 @@ class CausalNodeSimTest {
     }
 
     /**
+     * The offset {@code n}'s next stamp would claim on {@code claimed}, read off a real send to
+     * a declared sink and committed like any other.
+     *
+     * <p>A truncation assertion wants this rather than {@link
+     * DeliveryProtocol#stampChannels()} alone. The driver above queries log starts for exactly
+     * the channels that set reports, so an assertion reading the same set measures truncation
+     * through its own input. The stamp is the observable a downstream consumer's gate actually
+     * sees, and it does not depend on the reported footprint.
+     */
+    private static long stampClaim(SimNode n, Channel destination, Channel claimed) {
+        long offset = n.protocol.prepareSend(destination).clock().get(claimed);
+        n.store.commit();
+        return offset;
+    }
+
+    /**
      * Scope shrink: a dropped input's causal past must survive in later stamps (carried
      * ancestry). The consumer that makes the carried claims load-bearing joins fresh after
      * the shrink: it must order A's post-shrink outputs after their t1b causes, which only
@@ -542,12 +559,16 @@ class CausalNodeSimTest {
             w.run(BUDGET);
             stats.add(w);
 
-            assertTrue(!a.protocol.stampChannels().isEmpty(),
+            Channel droppedInput = w.broker.channel("t1b", 0);
+            Channel sink = w.broker.channel("t2", 0);
+            assertTrue(stampClaim(a, sink, droppedInput) >= 0,
                     "carried ancestry never populated: the shrink carried nothing");
             for (String t : List.of("t1a", "t1b", "t2")) {
                 w.advanceLogStart(t, 0, w.broker.endOffset(w.broker.channel(t, 0)));
             }
             truncateFromLogStarts(a);
+            assertEquals(VectorClock.NOTHING, stampClaim(a, sink, droppedInput),
+                    "the carried t1b claim survived a full-retention truncation");
             assertTrue(a.protocol.stampChannels().isEmpty(),
                     "carried ancestry survived a full-retention truncation");
         }
