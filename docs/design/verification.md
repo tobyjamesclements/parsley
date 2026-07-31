@@ -205,7 +205,7 @@ unreachable because store keys are UTF-8 strings and UTF-8 never emits that byte
 
 The `broker-it` Maven profile runs the `*IT` test classes under failsafe against a real
 single-node broker in a Docker container (Testcontainers), pinned to the minimum supported
-broker version so the stated floor is the one actually tested. It carries the two
+broker version so the stated floor is the one actually tested. It carries the three
 obligations only a live cluster can discharge:
 
 - **The broker side of the seam contract.** `AdminBrokerOffsetsIT` asserts that a real
@@ -216,6 +216,15 @@ obligations only a live cluster can discharge:
   end to end under exactly-once: records flow from source to sink carrying parseable clock,
   sender, and sequence headers on the wire, and a restart of the same application on the
   same state directory resumes without loss or duplication.
+- **A task migrating between two live instances.** `ParsleyStreamsIT` runs two instances of
+  one application over a two-partition source and drives a task across two rebalances — one
+  when the second instance joins, one when the first stops cleanly. Each partition's records
+  arrive exactly once in produced order, and each task's stamps carry the same sender
+  identity on its new host as on its old, since identity is derived from the application id,
+  the stage name, and the partition rather than from the incarnation. The rebalances are
+  asserted rather than assumed: each phase waits on the instances' reported active-task
+  counts, so a run that silently never migrated fails at the wait instead of passing as a
+  single-instance run.
 
 The suite is a smoke test of plumbing, not a correctness gate: a real broker offers no
 control over interleavings, so every causal-order obligation stays with the simulator. It
@@ -225,12 +234,17 @@ publish.
 
 ## What the simulator does not cover
 
-Real broker behaviour outside the model: rebalances and task migration, consumer-group
-protocol edge cases, and timing that depends on actual I/O. The broker smoke suite covers
-the seam contract and the assembled plumbing on a live cluster; `TopologyTestDriver` smoke
+Real broker behaviour outside the model: rebalances, consumer-group protocol edge cases, and
+timing that depends on actual I/O. The broker smoke suite covers the seam contract, the
+assembled plumbing, and a clean task migration on a live cluster; `TopologyTestDriver` smoke
 tests cover the adapter's plumbing (hold-and-release, stamp content, fail-closed corrupt
-headers, the buffered-batch position guard) without a broker. Rebalance and task-migration behaviour has no automated
-coverage.
+headers, the buffered-batch position guard) without a broker.
+
+Task migration is covered only in its benign shape: a task moving between two live instances
+across a clean join and a clean stop, with state small enough that the joining instance is
+inside `acceptable.recovery.lag` and takes the task on the first rebalance. Migration away
+from an instance that dies mid-transaction, standby warm-up and the probing rebalances that
+move a task with large state, and migration under sustained load all remain uncovered.
 
 Two further boundaries are worth naming, because a scenario list reads as a coverage claim:
 
