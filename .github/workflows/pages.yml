@@ -47,30 +47,32 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Determine version and alias
+      - name: Determine version and aliases
         id: ver
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
-            echo "alias=latest" >> $GITHUB_OUTPUT
+            echo "aliases=latest" >> $GITHUB_OUTPUT
+            echo "snapshot=false" >> $GITHUB_OUTPUT
           else
             POM_VER=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)
             echo "version=$POM_VER" >> $GITHUB_OUTPUT
-            echo "alias=dev" >> $GITHUB_OUTPUT
+            # main is the authoritative tree, so its docs carry `latest` — and with it the site
+            # default — as well as `dev`. Released versions stay addressable by version number.
+            echo "aliases=dev latest" >> $GITHUB_OUTPUT
+            echo "snapshot=true" >> $GITHUB_OUTPUT
           fi
 
       - name: Deploy versioned docs
         run: |
           mike deploy --push --update-aliases \
-              ${{ steps.ver.outputs.version }} ${{ steps.ver.outputs.alias }}
-          if [[ "${{ steps.ver.outputs.alias }}" == "latest" ]]; then
-            mike set-default --push latest
-          else
-            # Set dev as default only when no stable release exists yet
-            mike list | grep -q "latest" || mike set-default --push dev
+              ${{ steps.ver.outputs.version }} ${{ steps.ver.outputs.aliases }}
+          # Every deploy places `latest`, so the site default can always point at it.
+          mike set-default --push latest
+          if [[ "${{ steps.ver.outputs.snapshot }}" == "true" ]]; then
             # Garbage-collect superseded snapshot doc versions: keep only this build's snapshot
-            # (which now holds the `dev` alias) plus real releases. Dev docs are deployed under the
-            # literal X.Y.Z-SNAPSHOT version, so without this every version bump leaves a stale
+            # (which now holds `dev` and `latest`) plus real releases. Dev docs are deployed under
+            # the literal X.Y.Z-SNAPSHOT version, so without this every version bump leaves a stale
             # entry behind in the selector. Runs after the deploy above, so the current snapshot is
             # never the one removed.
             keep="${{ steps.ver.outputs.version }}"

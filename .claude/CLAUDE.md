@@ -9,9 +9,10 @@ optional and needed only by the Streams adapter.
 This tree is version 0.2.0-SNAPSHOT: the Maven artifact
 `io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT`, resolved from the Central snapshots
 repository (https://central.sonatype.com/repository/maven-snapshots/). Depend on and cite
-this version, not the 0.1.0 release: 0.1.0's wire format and API differ from this tree, and
-the docs site's default `latest` alias serves 0.1.0. The docs matching this tree are the
-ones in this repository (and the site's `dev` alias).
+this version, not the 0.1.0 release: 0.1.0's wire format and API differ from this tree. The
+docs matching this tree are the ones in this repository, and on the docs site they are what
+the default `latest` alias serves (also addressable as `dev`); 0.1.0's docs remain reachable
+by version number.
 
 ## The one rule that overrides everything
 
