@@ -57,4 +57,5 @@ version number.
 
 ## Optional
 
+- [Every document above, concatenated](https://tobyjamesclements.github.io/parsley/llms-full.txt): the full text in one fetch, if you would rather not follow the links individually
 - [Source repository](https://github.com/tobyjamesclements/parsley): single Maven module, one package; the public tier is codified in package-info.java

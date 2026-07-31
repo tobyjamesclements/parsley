@@ -39,6 +39,9 @@ jobs:
           mkdir -p docs/api
           cp -r target/reports/apidocs/. docs/api/
 
+      - name: Generate llms-full.txt
+        run: python3 scripts/build-llms-full.py .
+
       - name: Install MkDocs + mike
         run: pip install mkdocs-material mike
 
@@ -94,4 +97,22 @@ jobs:
             keep="${{ steps.ver.outputs.version }}"
             mike list | awk '{print $1}' | grep -- '-SNAPSHOT$' | grep -vx "$keep" \
                 | xargs -r mike delete --push || true
+          fi
+
+      # mike serves every page under a version prefix, but agents look for /llms.txt and
+      # /llms-full.txt at the site root. Publish unversioned copies there, from whichever build
+      # owns `latest`, so the root entry points always describe the version the site defaults to.
+      - name: Publish root-level agent entry points
+        if: contains(steps.ver.outputs.aliases, 'latest')
+        run: |
+          git fetch origin gh-pages
+          git worktree add --force -B gh-pages ../gh-pages-root origin/gh-pages
+          cp docs/llms.txt docs/llms-full.txt ../gh-pages-root/
+          git -C ../gh-pages-root add llms.txt llms-full.txt
+          if git -C ../gh-pages-root diff --cached --quiet; then
+            echo "Root entry points already current; nothing to push."
+          else
+            git -C ../gh-pages-root commit \
+                -m "Publish root llms.txt and llms-full.txt for ${{ steps.ver.outputs.version }}"
+            git -C ../gh-pages-root push origin gh-pages
           fi
