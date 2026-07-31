@@ -118,6 +118,12 @@ The docs site under `docs/` (mkdocs) covers the model and the design:
 The verification obligations the test suite enforces are catalogued in
 [verification](docs/design/verification.md).
 
+The bullets above are a reading path, not the whole set. [`docs/llms.txt`](docs/llms.txt)
+indexes every document with a one-line description of what it settles; the docs site serves
+that index at [`/llms.txt`](https://tobyjamesclements.github.io/parsley/llms.txt) and the full
+text of all of them, in one file, at
+[`/llms-full.txt`](https://tobyjamesclements.github.io/parsley/llms-full.txt).
+
 ## Current limitations
 
 - Non-Parsley headers on held records are not carried through delivery.

@@ -13,6 +13,9 @@ site/
 # Generated Javadoc staged into docs source for versioned builds
 docs/api/
 
+# Concatenated docs generated from docs/llms.txt by scripts/build-llms-full.py
+docs/llms-full.txt
+
 # Compiled class file
 *.class
 
