@@ -64,6 +64,18 @@ final class CausalNode implements DeliveryProtocol {
     private final StateStore store;
     private final BrokerOffsets broker;
 
+    /**
+     * The consumed channels and declared sink topics in a stable total order. {@link NodeConfig}
+     * normalises both with {@code Set.copyOf}, and the JDK's immutable sets randomise iteration
+     * order per JVM (a salt seeded at class-init). Iterating them directly would make the
+     * cascade's cross-channel delivery order and the scope record's bytes vary between runs of
+     * the same tree, which would in turn make a seeded simulator run depend on the JVM as well
+     * as its seed. Ordering is arbitrary but fixed; nothing depends on which order, only that it
+     * is the same one every time.
+     */
+    private final List<Channel> consumedInOrder;
+    private final List<UUID> sinkTopicsInOrder;
+
     private final Map<Channel, Long> frontier = new HashMap<>();
     private final Map<Channel, VectorClock> channelClocks = new HashMap<>();
     private final VectorClock carriedAncestry;
@@ -90,6 +102,8 @@ final class CausalNode implements DeliveryProtocol {
         this.config = config;
         this.store = store;
         this.broker = broker;
+        this.consumedInOrder = config.consumed().stream().sorted().toList();
+        this.sinkTopicsInOrder = config.sinkTopics().stream().sorted().toList();
 
         Scope recorded = readScope();
         restoreState(recorded);
@@ -172,7 +186,7 @@ final class CausalNode implements DeliveryProtocol {
         boolean changed = true;
         while (changed) {
             changed = false;
-            for (Channel c : config.consumed()) {
+            for (Channel c : consumedInOrder) {
                 Queue q = queue(c);
                 while (!q.held.isEmpty() && deliverable(c, q.held.peekFirst())) {
                     Held h = q.held.pollFirst();
@@ -620,7 +634,7 @@ final class CausalNode implements DeliveryProtocol {
 
         // Grown inputs: seed at the node's carried knowledge — skip what was already ignored,
         // never restart at log-start. The host starts fetching one past the seed.
-        for (Channel grown : config.consumed()) {
+        for (Channel grown : consumedInOrder) {
             if (recorded.consumed().contains(grown)) continue;
             VectorClock vt = vectorTime();
             long seed = vt.get(grown);
@@ -662,13 +676,13 @@ final class CausalNode implements DeliveryProtocol {
     private void writeScope() {
         ByteBuffer buf = ByteBuffer.allocate(8 + config.consumed().size() * 20 + config.sinkTopics().size() * 16);
         buf.putInt(config.consumed().size());
-        for (Channel c : config.consumed()) {
+        for (Channel c : consumedInOrder) {
             buf.putLong(c.topicId().getMostSignificantBits());
             buf.putLong(c.topicId().getLeastSignificantBits());
             buf.putInt(c.partition());
         }
         buf.putInt(config.sinkTopics().size());
-        for (UUID s : config.sinkTopics()) {
+        for (UUID s : sinkTopicsInOrder) {
             buf.putLong(s.getMostSignificantBits());
             buf.putLong(s.getLeastSignificantBits());
         }

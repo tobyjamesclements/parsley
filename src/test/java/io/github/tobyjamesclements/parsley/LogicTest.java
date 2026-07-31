@@ -1,12 +1,16 @@
 package io.github.tobyjamesclements.parsley;
 
+import org.apache.kafka.common.serialization.Serdes;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Objects;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
@@ -184,6 +188,38 @@ class LogicTest {
         TickFold<Long> policy = (n, tick) -> Step.of(n + 1, OUT.send("cut", "at=" + tick.timestamp()));
         assertEquals(Step.of(1L, OUT.send("cut", "at=5")), policy.apply(0L, new Tick(5L)),
                 "a tick fold must step the tick state and emissions as plain values");
+    }
+
+    /**
+     * The raw-bytes codec is the identity on both sides. It exists so an application that
+     * already holds bytes pays nothing to declare a topic, so a copy or a transformation here
+     * would be a silent cost on the hottest path in the library.
+     */
+    @Test
+    void bytesCodecPassesItsArgumentThroughUnchanged() {
+        byte[] payload = {0, 1, 2, (byte) 0xFF};
+        Codec<byte[]> codec = Codec.bytes();
+
+        assertSame(payload, codec.encode(payload),
+                "encoding raw bytes must hand back the same array, not a copy");
+        assertSame(payload, codec.decode(payload),
+                "and decoding must do the same");
+    }
+
+    /**
+     * A Kafka serde bridges into the core as a codec bound to one topic. The topic name is
+     * fixed at bridge time because serdes take it per call, and it is what a schema-registry
+     * serde derives its subject from — so the bridge must pass the declared name through to
+     * both halves of the serde.
+     */
+    @Test
+    void serdeBridgesIntoACodec() {
+        Codec<String> codec = Codec.fromSerde(Serdes.String(), "bridged");
+
+        assertArrayEquals("v".getBytes(StandardCharsets.UTF_8), codec.encode("v"),
+                "the bridged codec must encode through the serde's serializer");
+        assertEquals("v", codec.decode("v".getBytes(StandardCharsets.UTF_8)),
+                "and decode through its deserializer");
     }
 
     /** A message for a unit test carries a zero coordinate and the given payload. */

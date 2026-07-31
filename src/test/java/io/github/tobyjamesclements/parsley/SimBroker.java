@@ -20,8 +20,10 @@ import java.util.UUID;
  *       consumers do observe — real offsets occupied by markers and aborted records that a fetch
  *       silently skips — is modeled faithfully, because that is what the density adaptation
  *       (seed/bridge) must survive.</li>
- *   <li>Offsets are assigned at append, exactly like the broker; acknowledgements carrying them
- *       reach producers asynchronously via the scheduler.</li>
+ *   <li>Offsets are assigned at append, exactly like the broker. Nothing carries them back to
+ *       the sender: neither the protocol nor the Streams adapter folds a producer
+ *       acknowledgement, so a node's own sends stay claimed in sequence space until a
+ *       restart's end-offset seed converts them to offsets.</li>
  * </ul>
  */
 final class SimBroker {

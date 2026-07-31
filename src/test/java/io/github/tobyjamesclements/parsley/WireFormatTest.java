@@ -4,9 +4,15 @@ import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.junit.jupiter.api.Test;
 
 import java.util.HexFormat;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
 import java.util.UUID;
+import java.util.function.BiConsumer;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The compatibility surface, pinned to literal bytes and literal names.
@@ -106,5 +112,172 @@ class WireFormatTest {
         assertEquals("0000000000000009",
                 HEX.formatHex(headers.lastHeader("vc-seq").value()).toUpperCase(),
                 "vc-seq is 8 bytes, big-endian");
+    }
+
+    // ---------------------------------------------------------------- state-store layout
+    //
+    // The store is the other half of what this library writes, and it travels between
+    // processes the same way the headers do: a running application's committed state, and its
+    // changelog, are read back by the next version of the same application. A renamed key
+    // prefix or a reordered envelope field is silently incompatible with everything already
+    // on disk — the frontier reads as absent and every record above it is delivered twice.
+    // Every other test of these layouts writes and reads through one implementation, so a
+    // coordinated change passes them all; these assertions are what make the change a
+    // decision. They mirror docs/reference/wire-format.md#state-store-keys.
+
+    /** A second consumed channel, so a record can be gated by an unmet claim on it. */
+    private static final UUID CAUSE_TOPIC = new UUID(0x2122232425262728L, 0x292A2B2C2D2E2F30L);
+    private static final Channel CAUSE = new Channel(CAUSE_TOPIC, 1);
+    private static final UUID SINK_TOPIC = new UUID(0x3132333435363738L, 0x393A3B3C3D3E3F40L);
+    private static final Channel SINK = new Channel(SINK_TOPIC, 0);
+    private static final Channel FOREIGN =
+            new Channel(new UUID(0x4142434445464748L, 0x494A4B4C4D4E4F50L), 3);
+
+    /** The documented text form of a channel in a store key: {@code <uuid>:<partition>}. */
+    private static final String CHANNEL_KEY = "01020304-0506-0708-090a-0b0c0d0e0f10:7";
+
+    /**
+     * One held record: offset 1, sender-tagged, a one-entry dependency clock, a two-byte key
+     * and a one-byte value — every field of docs/reference/wire-format.md#held-record.
+     */
+    private static final String HELD_HEX =
+            "0000000000000001"                      // offset 1
+            + "1122334455667788"                    // timestamp
+            + "01"                                  // tagged sender
+            + "1112131415161718" + "191A1B1C1D1E1F20"  // sender id, msb then lsb
+            + "000000000000000A"                    // sender sequence 10
+            + "00000025"                            // clock length, 37 bytes
+            + "01"                                  // clock: version
+            + "00000001"                            //        one offset entry
+            + "2122232425262728" + "292A2B2C2D2E2F30"  //        cause topic id
+            + "00000001"                            //        cause partition
+            + "0000000000000005"                    //        watermark 5
+            + "00000000"                            //        no sequence entries
+            + "00000002" + "0A0B"                   // key length, key
+            + "00000001" + "0C";                    // value length, value
+
+    /** Plain in-memory store: no staging, and it keeps the raw bytes the protocol wrote. */
+    private static final class RecordingStore implements StateStore {
+        final TreeMap<String, byte[]> map = new TreeMap<>();
+
+        @Override
+        public void put(String key, byte[] value) {
+            map.put(key, value.clone());
+        }
+
+        @Override
+        public byte[] get(String key) {
+            byte[] v = map.get(key);
+            return v == null ? null : v.clone();
+        }
+
+        @Override
+        public void delete(String key) {
+            map.remove(key);
+        }
+
+        @Override
+        public void forEachPrefix(String prefix, BiConsumer<String, byte[]> consumer) {
+            map.subMap(prefix, prefix + Character.MAX_VALUE)
+                    .forEach((k, v) -> consumer.accept(k, v.clone()));
+        }
+    }
+
+    private static final BrokerOffsets NO_OFFSETS = new BrokerOffsets() {
+        @Override
+        public Map<Channel, Long> endOffsets(Set<UUID> sinkTopics) {
+            return Map.of();
+        }
+
+        @Override
+        public EarliestOffsets earliestOffsets(Set<Channel> channels) {
+            return new EarliestOffsets(Map.of(), Set.of());
+        }
+    };
+
+    /**
+     * Drives a node through one of every persisted fact: a delivery (frontier, advertised
+     * clock, delivered sequence), a record left held (queue meta and entry), a send (send
+     * sequence), and a truncation sweep (carried ancestry).
+     */
+    private static RecordingStore storeAfterOneOfEverything() {
+        RecordingStore store = new RecordingStore();
+        CausalNode node = new CausalNode(
+                new NodeConfig("wire", SENDER, Set.of(CHANNEL, CAUSE), Set.of(SINK_TOPIC), 7),
+                store, NO_OFFSETS);
+        // Delivers: its only claim names a channel this node does not consume.
+        node.onRecord(new InboundRecord(CHANNEL, 0, VectorClock.of(FOREIGN, 4), SENDER, 9,
+                new byte[] {1}, new byte[] {2}, 100L));
+        // Holds: claims CAUSE@5, which has not arrived.
+        node.onRecord(new InboundRecord(CHANNEL, 1, VectorClock.of(CAUSE, 5), SENDER, 10,
+                new byte[] {0x0A, 0x0B}, new byte[] {0x0C}, 0x1122334455667788L));
+        node.prepareSend(SINK);
+        node.truncate(new VectorClock());
+        return store;
+    }
+
+    /** Every state-store key is exactly the documented literal, and there are no others. */
+    @Test
+    void stateStoreKeysAreTheDocumentedLiterals() {
+        assertEquals(Set.of(
+                        "scope",
+                        "ca",
+                        "f/" + CHANNEL_KEY,
+                        "cc/" + CHANNEL_KEY,
+                        "q/" + CHANNEL_KEY + "/m",
+                        "q/" + CHANNEL_KEY + "/e/0000000000000001",
+                        "sq/31323334-3536-3738-393a-3b3c3d3e3f40:0",
+                        "ds/" + CHANNEL_KEY + "/11121314-1516-1718-191a-1b1c1d1e1f20"),
+                storeAfterOneOfEverything().map.keySet(),
+                "the state-store key layout is what lets the next version of an application"
+                        + " read the state this one committed; see"
+                        + " docs/reference/wire-format.md#state-store-keys");
+    }
+
+    /** A channel's text form in a key is the topic UUID, a colon, and the partition. */
+    @Test
+    void channelKeyIsUuidColonPartition() {
+        assertEquals(CHANNEL_KEY, CHANNEL.key(), "the channel key format is part of every"
+                + " per-channel store key");
+        assertEquals(CHANNEL, Channel.fromKey(CHANNEL.key()), "the key must parse back");
+    }
+
+    /**
+     * The queue index is sixteen lower-case hex digits, zero-padded, so the prefix scan that
+     * restores a queue walks entries in numeric order.
+     */
+    @Test
+    void queueEntryIndexIsZeroPaddedHex() {
+        String key = storeAfterOneOfEverything().map.keySet().stream()
+                .filter(k -> k.contains("/e/")).findFirst().orElseThrow();
+        String index = key.substring(key.lastIndexOf('/') + 1);
+        assertEquals(16, index.length(), "the index is sixteen digits so lexicographic order"
+                + " is numeric order");
+        assertEquals(index, index.toLowerCase(java.util.Locale.ROOT), "the index is lower case");
+        assertEquals(1L, Long.parseLong(index, 16), "the second enqueue takes index 1");
+    }
+
+    /** A held record persists in exactly the documented envelope, byte for byte. */
+    @Test
+    void heldRecordSerializesToTheDocumentedBytes() {
+        byte[] held = storeAfterOneOfEverything().map.get("q/" + CHANNEL_KEY + "/e/0000000000000001");
+        assertEquals(HELD_HEX, HEX.formatHex(held).toUpperCase(),
+                "the held-record envelope is what a restart reads back; see"
+                        + " docs/reference/wire-format.md#held-record");
+    }
+
+    /**
+     * A delivered record's queue entry is removed from the store. Held records are bounded by
+     * what is actually waiting, not by everything the node has ever received: left behind,
+     * every entry would accumulate in the store and its changelog forever.
+     */
+    @Test
+    void deliveredQueueEntriesLeaveTheStore() {
+        var keys = storeAfterOneOfEverything().map.keySet();
+        assertFalse(keys.contains("q/" + CHANNEL_KEY + "/e/0000000000000000"),
+                "the delivered record's queue entry must be deleted, not merely skipped on"
+                        + " restore: it is the only thing bounding the store's growth");
+        assertTrue(keys.contains("q/" + CHANNEL_KEY + "/e/0000000000000001"),
+                "the record still held must remain");
     }
 }

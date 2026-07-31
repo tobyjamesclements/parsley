@@ -41,6 +41,20 @@ class ParsleyStreamsTest {
         return props;
     }
 
+    /**
+     * Live admin-client threads. A {@code KafkaAdminClient} starts one in its constructor and
+     * joins it in {@code close()}, so this counts open admin clients — the only handle a test
+     * has on a client the runtime deliberately does not expose. An assembled runtime accounts
+     * for two: the one Parsley opens to resolve topic identity and owns, and the one Kafka
+     * Streams builds for itself through the client supplier.
+     */
+    private static long adminClientThreads() {
+        return Thread.getAllStackTraces().keySet().stream()
+                .filter(Thread::isAlive)
+                .filter(t -> t.getName().startsWith("kafka-admin-client-thread"))
+                .count();
+    }
+
     /** Assembly yields an unstarted runtime in CREATED state with live client metrics. */
     @Test
     void assemblesUnstartedRuntime() {
@@ -77,6 +91,56 @@ class ParsleyStreamsTest {
                 "closing an unstarted runtime must complete within the bound");
         assertEquals(KafkaStreams.State.NOT_RUNNING, streams.state(),
                 "a closed runtime must report NOT_RUNNING");
+    }
+
+    /**
+     * The runtime owns the admin client assembly opened for it, and closing the runtime closes
+     * it. The surface is an allowlist with no accessor for it, so nothing else ever can: left
+     * open it holds a broker connection and a thread for the life of the JVM, and an
+     * application that creates a runtime per test or per tenant leaks one of each every time.
+     */
+    @Test
+    void closingTheRuntimeClosesTheAdminClientItOwns() {
+        long before = adminClientThreads();
+        CausalStreams streams = parsley().streams(props());
+        assertTrue(adminClientThreads() > before,
+                "assembly must open the admin client the runtime will own");
+
+        streams.close();
+
+        assertEquals(before, adminClientThreads(),
+                "closing the runtime must close it too; nothing else holds a reference");
+    }
+
+    /** The bounded close carries the same duty, whichever way its timeout goes. */
+    @Test
+    void theBoundedCloseAlsoClosesTheAdminClient() {
+        long before = adminClientThreads();
+        CausalStreams streams = parsley().streams(props());
+
+        assertTrue(streams.close(Duration.ofSeconds(30)),
+                "closing an unstarted runtime must complete within the bound");
+
+        assertEquals(before, adminClientThreads(),
+                "the admin client must be closed even on the bounded path, which can return"
+                        + " before the runtime has fully stopped");
+    }
+
+    /**
+     * An assembly that fails after opening its admin client closes it on the way out. The
+     * caller never receives a handle, so there is nobody left who could.
+     */
+    @Test
+    void aFailedAssemblyClosesTheAdminClientItOpened() {
+        Properties missingApplicationId = props();
+        missingApplicationId.remove(StreamsConfig.APPLICATION_ID_CONFIG);
+        long before = adminClientThreads();
+
+        assertThrows(RuntimeException.class, () -> parsley().streams(missingApplicationId),
+                "an application id is required, and the failure must surface to the caller");
+
+        assertEquals(before, adminClientThreads(),
+                "the admin client opened before the failure must not be left behind");
     }
 
     /** Listener registration is delegated for real: after close it must fail like Streams. */

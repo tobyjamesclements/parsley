@@ -45,7 +45,7 @@
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <kafka.version>4.3.1</kafka.version>
-        <pitest.threads>4</pitest.threads>
+        <pitest.threads>1</pitest.threads>
         <junit.version>5.11.4</junit.version>
         <slf4j.version>2.0.18</slf4j.version>
         <testcontainers.version>1.21.3</testcontainers.version>
@@ -159,10 +159,14 @@
                     <excludedTestClasses>
                         <param>*IT</param>
                     </excludedTestClasses>
-                    <!-- Four threads is measured as verdict-identical to a serial run on this
-                         suite (a timeout under CPU contention would count as a kill, so this
-                         is re-checked when the suite slows: run once with -Dpitest.threads=1
-                         and diff mutations.xml). Overridable per run. -->
+                    <!-- Serial. The only timing-sensitive verdict PIT produces is TIMED_OUT:
+                         a mutant slowed by CPU contention times out and is scored as a kill,
+                         so a threaded run can inflate the score under load. One thread removes
+                         that hazard outright instead of periodically re-checking for it, and
+                         costs little: measured on this suite at 506s serial against 402s at
+                         four threads, with all 738 verdicts identical between the two and
+                         across repeated runs of each. Raise it with -Dpitest.threads=N for
+                         local iteration; the gate stays at one. -->
                     <threads>${pitest.threads}</threads>
                     <!-- Both floors guard against regression; the scores stand a few points
                          above them so honest refactoring noise does not flake the build. -->
