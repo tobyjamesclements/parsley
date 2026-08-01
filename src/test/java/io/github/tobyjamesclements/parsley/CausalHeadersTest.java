@@ -38,7 +38,7 @@ class CausalHeadersTest {
         assertEquals(-1, CausalHeaders.readSeq(headers), "no seq header means untagged");
     }
 
-    /** A sender or sequence header of the wrong length throws — never reads as untagged. */
+    /** A sender or sequence header of the wrong length throws, and never reads as untagged. */
     @Test
     void malformedTagsFailClosed() {
         var badSender = new RecordHeaders();

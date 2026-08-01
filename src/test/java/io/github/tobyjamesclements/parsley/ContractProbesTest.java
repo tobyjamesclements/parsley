@@ -51,7 +51,7 @@ class ContractProbesTest {
     }
 
     /**
-     * A clean two-stage pipeline passes every probe; the unsampled source — and only it —
+     * A clean two-stage pipeline passes every probe, and the unsampled source, and only it,
      * surfaces as a coverage note. A note on every source, or on the sampled one instead, would
      * make the coverage report worthless as the blind-spot list it is meant to be.
      */
@@ -74,7 +74,7 @@ class ContractProbesTest {
     /**
      * The names note pins exactly the stores a stage actually keeps. A stateful stage keys a
      * fold store as well as its protocol store, and the note is what tells the deployment which
-     * names must stay stable; naming a store a stage does not keep — or omitting one it does —
+     * names must stay stable. Naming a store a stage does not keep, or omitting one it does,
      * misdirects the one decision the note exists to inform.
      */
     @Test
@@ -171,7 +171,7 @@ class ContractProbesTest {
 
     /**
      * A sample with a null value is not a contract violation. Null keys and values pass through
-     * the runtime untouched, so a codec is never asked to encode one — probing as though it
+     * the runtime untouched, so a codec is never asked to encode one. Probing as though it
      * were would fail a perfectly legal application on its own probe.
      */
     @Test
@@ -189,7 +189,7 @@ class ContractProbesTest {
 
     /**
      * An emission with a null key is not undecodable either. The key is absent, so no key codec
-     * runs on either side of the hop; treating absence as a decode failure would flag every
+     * runs on either side of the hop. Treating absence as a decode failure would flag every
      * application that emits null-keyed records.
      */
     @Test
@@ -228,7 +228,7 @@ class ContractProbesTest {
 
     /**
      * A sink only a tick reaches is still probed as covered. The probe advances the driver's
-     * wall clock past the widest declared interval precisely so tick logic runs; without that
+     * wall clock past the widest declared interval precisely so tick logic runs. Without that
      * advance a perfectly reachable sink reads as one no sample can reach, and the coverage note
      * points at a blind spot that is the probe's own.
      */
@@ -362,7 +362,7 @@ class ContractProbesTest {
         assertTrue(conforming.ok(), "a correctly partitioned tick topic must pass: " + conforming);
     }
 
-    /** Findings render probe, detail, and clause — the anchor a debugging session lands on. */
+    /** Findings render probe, detail, and clause, the anchor a debugging session lands on. */
     @Test
     void findingsCarryTheContractClause() {
         var report = ContractProbes.probeCluster(pipeline(), fixed(Map.of()));
@@ -370,12 +370,12 @@ class ContractProbesTest {
         // sink, second's source), each finding naming the stage it fails.
         assertEquals(4, report.failures().size(), "every topic role must be flagged: " + report);
         for (var finding : report.failures()) {
-            assertTrue(finding.toString().contains("docs/guide/expectations.md"),
+            assertTrue(finding.toString().contains("see Parsley"),
                     "each finding must name its contract clause: " + finding);
         }
     }
 
-    /** A resolver over a fixed name-to-partition-count map; absent names are unresolvable. */
+    /** A resolver over a fixed name-to-partition-count map. Absent names are unresolvable. */
     private static TopicIds fixed(Map<String, Integer> partitions) {
         return topic -> {
             Integer count = partitions.get(topic);

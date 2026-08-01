@@ -11,9 +11,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * The host-side analogue of {@link OracleSelfTest}: the conformance kit must be able to catch a
  * broken <em>host</em>, not only a broken protocol. Each test runs the real {@link CausalNode}
  * under a {@link SimNode.HostFault} that shirks one duty of the host contract
- * (docs/reference/conformance-kit.md) and requires the kit to flag some seed. Any loud failure
- * counts as a flag — which oracle or world check fires first depends on the schedule; what the
- * kit must never do is stay green.
+ * and requires the kit to flag some seed. Any loud failure counts as a flag, since which
+ * oracle or world check fires first depends on the schedule. What the kit must never do is
+ * stay green.
  */
 class HostContractSelfTest {
 
@@ -27,8 +27,8 @@ class HostContractSelfTest {
     /**
      * H3, step-atomicity: a host that commits its store while the transaction aborts leaves
      * protocol state ahead of the world it claims to describe. Across the crash-chain topology
-     * the kit must flag it — as a duplicate delivery, a causal violation, a completeness
-     * failure, or a loud protocol failure at restore — on at least one seed.
+     * the kit must flag it on at least one seed, as a duplicate delivery, a causal violation,
+     * a completeness failure, or a loud protocol failure at restore.
      */
     @Test
     void storeCommittedOnCrashIsCaughtByTheKit() {
@@ -40,12 +40,11 @@ class HostContractSelfTest {
 
     /**
      * H2, the liveness signal: a host that never reports consumer position advances withholds
-     * the one skip no later-fetched record reveals — a trailing marker under an
-     * end-offset-seed claim (docs/foundations/liveness.md#position-advance-bridging). The
-     * scenario builds that wedge structurally: D declares sink t2 but never writes it, so
+     * the one skip no later-fetched record reveals, a trailing marker under an end-offset-seed
+     * claim. The scenario builds that wedge structurally: D declares sink t2 but never writes it, so
      * restarting D after t2 has gone quiet under a trailing marker mints a seed claim naming
      * that marker's offset, and D's later sends carry the claim to C on t4. An honest host's
-     * position advance on t2 releases C — the control run must drain clean — while the faulty
+     * position advance on t2 releases C, so the control run must drain clean, while the faulty
      * host strands the t4 records, and the kit must flag them at drain on at least one seed.
      */
     @Test

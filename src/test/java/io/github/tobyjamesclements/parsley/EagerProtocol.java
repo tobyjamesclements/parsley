@@ -8,7 +8,7 @@ import java.util.UUID;
 /**
  * A deliberately broken protocol: delivers every business record the moment it arrives,
  * ignoring dependency clocks entirely (its own stamps honestly claim what it delivered). Exists
- * to prove the oracle catches causal violations — verification obligation V8.
+ * to prove the oracle catches causal violations, verification obligation V8.
  */
 final class EagerProtocol implements DeliveryProtocol {
 

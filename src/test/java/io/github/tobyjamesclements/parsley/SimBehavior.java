@@ -17,7 +17,7 @@ interface SimBehavior {
         };
     }
 
-    /** Forwards only records whose value hash is divisible by {@code mod}; drops the rest. */
+    /** Forwards only records whose value hash is divisible by {@code mod}, dropping the rest. */
     static SimBehavior filter(int mod, String... topics) {
         return (host, d) -> {
             int h = d.value() == null ? 0 : Math.floorMod(java.util.Arrays.hashCode(d.value()), mod);

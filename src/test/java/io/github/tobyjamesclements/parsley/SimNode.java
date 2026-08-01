@@ -22,9 +22,9 @@ import java.util.function.BiFunction;
  */
 final class SimNode {
 
-    /** A deliberately broken host duty; see {@link HostContractSelfTest}. */
+    /** A deliberately broken host duty. See {@link HostContractSelfTest}. */
     enum HostFault {
-        /** All duties upheld — every run outside the host self-test. */
+        /** All duties upheld, which is every run outside the host self-test. */
         NONE,
         /** Breaks step-atomicity: a crash aborts the transaction but the store commits anyway. */
         COMMIT_STORE_ON_CRASH,
@@ -58,10 +58,10 @@ final class SimNode {
     private final List<Object[]> appendedCoords = new ArrayList<>(); // {Channel, Long offset}
     private final Set<Channel> touchedThisStep = new HashSet<>();
     /**
-     * Business records fed to the protocol but not yet returned as deliveries — the hold
-     * queues' depth, counted host-side so it holds for any {@link DeliveryProtocol}, not just
-     * the one that keeps queues. Staged like everything else: an aborted step restores the
-     * committed value, which is what a restart would restore from the store.
+     * Business records fed to the protocol but not yet returned as deliveries, which is the
+     * hold queues' depth, counted host-side so it holds for any {@link DeliveryProtocol} and
+     * not just the one that keeps queues. Staged like everything else, so an aborted step
+     * restores the committed value, which is what a restart would restore from the store.
      */
     private int outstandingHolds;
     private int snapOutstandingHolds;
@@ -78,7 +78,7 @@ final class SimNode {
 
     /**
      * Declares ticks on the given channel, which the scenario must list both as a consumed
-     * input and as a sink topic — the self-loop the real tick topic forms.
+     * input and as a sink topic, the self-loop the real tick topic forms.
      */
     void ticksOn(Channel c, SimBehavior logic) {
         if (!config.consumed().contains(c) || !config.sinkTopics().contains(c.topicId())) {
@@ -151,7 +151,7 @@ final class SimNode {
         return world.broker.nextFetchable(c, pos) < 0 && world.broker.endOffset(c) > pos;
     }
 
-    /** Runs one fetch-process-commit step; {@code crash} aborts it mid-flight instead. */
+    /** Runs one fetch-process-commit step. {@code crash} aborts it mid-flight instead. */
     void step(Channel c, boolean crash) {
         long off = world.broker.nextFetchable(c, positions.get(c));
         if (off < 0) throw new IllegalStateException(name + ": no fetchable record on " + c);
@@ -172,7 +172,7 @@ final class SimNode {
         });
     }
 
-    /** Consumer position advances past trailing markers; may release held records. */
+    /** Consumer position advances past trailing markers, and may release held records. */
     void stepPositionAdvance(Channel c, boolean crash) {
         long newPosition = world.broker.endOffset(c);
         transactionalStep(c, newPosition, crash, () -> protocol.positionAdvance(c, newPosition));
@@ -181,7 +181,7 @@ final class SimNode {
     /**
      * Emits one tick, as the adapter's wall-clock punctuator does: stamped at the ordinary
      * send door with the task's current clock and appended to the node's own tick partition,
-     * inside the step's transaction. It consumes nothing, so no consumer position moves; the
+     * inside the step's transaction. It consumes nothing, so no consumer position moves. The
      * tick returns to this node later as an ordinary fetch.
      */
     void stepTick(boolean crash) {

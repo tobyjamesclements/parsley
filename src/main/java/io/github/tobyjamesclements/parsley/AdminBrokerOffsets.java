@@ -15,7 +15,10 @@ import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
 /**
- * Production {@link BrokerOffsets}: both queries answered by an admin client.
+ * The production {@link BrokerOffsets}, answering both queries through an admin client.
+ *
+ * <p>Both queries read at {@link IsolationLevel#READ_COMMITTED}, so an end offset never counts
+ * an open transaction's records.
  */
 final class AdminBrokerOffsets implements BrokerOffsets {
 
@@ -23,6 +26,15 @@ final class AdminBrokerOffsets implements BrokerOffsets {
     private final Admin admin;
     private final Map<String, UUID> sinkIdsByName = new HashMap<>();
 
+    /**
+     * Resolves every sink topic's identity up front, so a later query cannot start with one
+     * unresolved.
+     *
+     * @param topicIds resolves topic names to their stable identities
+     * @param admin the admin client to query through, owned by the caller
+     * @param sinkTopics the stage's declared sink topics, by name
+     * @throws IllegalStateException if any sink topic cannot be resolved
+     */
     AdminBrokerOffsets(TopicIds topicIds, Admin admin, Set<String> sinkTopics) {
         this.topicIds = topicIds;
         this.admin = admin;
@@ -31,6 +43,11 @@ final class AdminBrokerOffsets implements BrokerOffsets {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * @throws IllegalStateException if the listing fails or the thread is interrupted
+     */
     @Override
     public Map<Channel, Long> endOffsets(Set<UUID> sinkTopics) {
         Map<TopicPartition, OffsetSpec> query = new HashMap<>();
@@ -59,6 +76,15 @@ final class AdminBrokerOffsets implements BrokerOffsets {
         }
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>A topic id the broker reports unknown is definitive absence. Every other resolution
+     * failure throws, so the sweep fails closed rather than truncating on a transient error.
+     *
+     * @throws IllegalStateException if a topic or offset lookup fails for any other reason, or
+     *         the thread is interrupted
+     */
     @Override
     public EarliestOffsets earliestOffsets(Set<Channel> channels) {
         Map<UUID, List<Channel>> byTopic = new HashMap<>();

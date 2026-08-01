@@ -8,20 +8,20 @@ import java.util.Set;
 
 /**
  * Ground-truth causality, computed entirely outside the protocol. The oracle never reads a
- * vector clock: it tracks real happened-before ancestry (program order, delivery order,
- * transitivity) and checks every delivery against it.
+ * vector clock. It tracks real happened-before ancestry, meaning program order, delivery
+ * order and transitivity, and checks every delivery against it.
  *
  * <p>Actor state is transactional like everything else in the simulation: a node's knowledge
  * gained while processing an input is staged and rolls back if the step aborts, mirroring EOS.
  *
  * <p>Checks:
  * <ul>
- *   <li><b>V1 causal delivery</b> — when record {@code m} is delivered at node {@code n}, every
+ *   <li><b>V1 causal delivery</b>, when record {@code m} is delivered at node {@code n}, every
  *       ancestor of {@code m} on a channel {@code n} consumes, at or above {@code n}'s baseline
  *       on that channel, has already been delivered at {@code n}.</li>
- *   <li><b>V2 channel FIFO</b> — delivered offsets per (node, channel) strictly increase.</li>
- *   <li><b>Duplicate suppression</b> — no record is delivered twice at one node (committed).</li>
- *   <li><b>Completeness</b> (end of run) — every fetchable business record at or above a node's
+ *   <li><b>V2 channel FIFO</b>, delivered offsets per node and channel strictly increase.</li>
+ *   <li><b>Duplicate suppression</b>, no record is delivered twice at one committed node.</li>
+ *   <li><b>Completeness</b>, at end of run, every fetchable business record at or above a node's
  *       baseline on a consumed channel was delivered there.</li>
  * </ul>
  */
@@ -35,7 +35,7 @@ final class Oracle {
         Set<Long> knowledge = new HashSet<>();
         Set<Long> delivered = new HashSet<>();
         final Map<Channel, Long> lastDelivered = new HashMap<>();
-        /** First consumer position per channel; ancestors strictly below it are out of scope. */
+        /** First consumer position per channel. Ancestors strictly below it are out of scope. */
         final Map<Channel, Long> baseline = new HashMap<>();
 
         private Set<Long> snapKnowledge;
@@ -62,7 +62,7 @@ final class Oracle {
         actor(actor).baseline.putIfAbsent(c, firstPosition);
     }
 
-    /** Registers a business emission by {@code actor}; ancestors are its causal past now. */
+    /** Registers a business emission by {@code actor}. Ancestors are its causal past now. */
     long emitted(String actorName, Channel target, long offset) {
         Actor a = actor(actorName);
         long id = nextId++;

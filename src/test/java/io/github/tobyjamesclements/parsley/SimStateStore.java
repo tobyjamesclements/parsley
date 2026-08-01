@@ -9,10 +9,10 @@ import java.util.TreeMap;
 import java.util.function.BiConsumer;
 
 /**
- * In-memory {@link StateStore} with crash semantics: mutations stage in an overlay and become
- * durable only at {@link #commit()}; {@link #discard()} models a crash losing the in-flight
- * transaction. The committed map survives node restarts (the simulator keeps it and hands it to
- * the reconstructed node).
+ * In-memory {@link StateStore} with crash semantics. Mutations stage in an overlay and become
+ * durable only at {@link #commit()}, and {@link #discard()} models a crash losing the in-flight
+ * transaction. The committed map survives node restarts, since the simulator keeps it and hands
+ * it to the reconstructed node.
  */
 final class SimStateStore implements StateStore {
 

@@ -14,10 +14,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The protocol's fail-closed guards. Each one refuses a situation whose alternative is silent
- * loss or a silent under-claim, and each is stated as a promise in the docs — "blocks or
- * fails, never guesses" (docs/guide/expectations.md#what-parsley-promises). A guard nothing
- * exercises is a guard nobody knows still fires: the simulator only ever drives hosts that
- * behave, so these constructions are deterministic and directed.
+ * loss or a silent under-claim, and each is a stated promise: blocks or fails, never guesses.
+ * A guard nothing exercises is a guard nobody knows still fires. The simulator only ever
+ * drives hosts that behave, so these constructions are deterministic and directed.
  *
  * <p>Every assertion checks the message as well as the type. These failures surface to an
  * operator mid-incident, and the remedy they name is the whole value of failing loudly.
@@ -34,7 +33,7 @@ class CausalNodeFailClosedTest {
     private static final Channel UNDECLARED = new Channel(TOPIC_OTHER, 0);
     private static final UUID SELF = UUID.nameUUIDFromBytes("fc-self".getBytes());
 
-    /** Plain in-memory store: no staging — every write is immediately durable. */
+    /** Plain in-memory store, with no staging. Every write is immediately durable. */
     private static final class MapStore implements StateStore {
         final TreeMap<String, byte[]> map = new TreeMap<>();
 
@@ -83,7 +82,7 @@ class CausalNodeFailClosedTest {
 
     /**
      * A record from a channel the node does not consume has no frontier to advance and no
-     * queue to join; delivering it would order nothing and claim nothing. The host has
+     * queue to join, and delivering it would order nothing and claim nothing. The host has
      * mis-wired its sources, which is a fault, not an input.
      */
     @Test
@@ -106,7 +105,7 @@ class CausalNodeFailClosedTest {
     /**
      * A send to a topic that was never declared a sink is refused at the stamping door. The
      * init end-offset seed only covers declared sinks, so a restart would not claim what this
-     * incarnation sent there — the node's own outputs would silently lose their order.
+     * incarnation sent there. The node's own outputs would silently lose their order.
      */
     @Test
     void aSendToAnUndeclaredSinkFailsClosed() {
@@ -137,10 +136,10 @@ class CausalNodeFailClosedTest {
     }
 
     /**
-     * An input dropped from a stage's declaration while records are still held on it: the
-     * held records can be neither delivered (nothing will ever feed that channel again) nor
-     * discarded (they are committed, and a cause already claims them). Init refuses, naming
-     * both ways out — docs/design/state.md#scope-changes.
+     * An input dropped from a stage's declaration while records are still held on it. The
+     * held records can be neither delivered, since nothing will ever feed that channel again,
+     * nor discarded, since they are committed and a cause already claims them. Init refuses,
+     * naming both ways out.
      */
     @Test
     void aHeldRecordOnARemovedInputFailsInit() {
@@ -165,7 +164,7 @@ class CausalNodeFailClosedTest {
 
     /**
      * A hold queue whose entries do not match its own indices is a corrupt restore, not an
-     * empty one. Continuing would drop the missing records silently — they are committed,
+     * empty one. Continuing would drop the missing records silently. They are committed,
      * their offsets are past, and nothing would ever fetch them again.
      */
     @Test

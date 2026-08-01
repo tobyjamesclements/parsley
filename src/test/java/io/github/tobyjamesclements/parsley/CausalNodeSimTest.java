@@ -10,16 +10,16 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The main verification suite: {@link CausalNode} under the oracle across seeded random
- * interleavings. Every scenario runs many seeds; the oracle checks causal order, FIFO, and
- * duplicates on every delivery, and completeness plus drain on every run (obligations V1-V7
- * of docs/design/verification.md).
+ * interleavings. Every scenario runs many seeds. The oracle checks causal order, FIFO, and
+ * duplicates on every delivery, and completeness plus drain on every run. Those are
+ * verification obligations V1 to V7.
  *
  * <p>Each scenario also asserts anti-vacuity: the machinery under test must actually have
  * fired (records held at the gate, crashes injected, position advances taken, a crash landing
  * while records were held). A suite that passes because nothing interesting happened proves
  * nothing.
  *
- * <p>Those assertions count <em>seeds</em>, not events — see {@link #SEED_FLOOR}. A sum over a
+ * <p>Those assertions count <em>seeds</em>, not events. See {@link #SEED_FLOOR}. A sum over a
  * hundred seeds passes when one seed happened to be interesting, which is exactly the vacuity
  * they exist to refuse.
  */
@@ -31,7 +31,7 @@ class CausalNodeSimTest {
     /**
      * How many of the {@link #SEEDS} seeds must exercise the machinery a scenario targets.
      * A sum over seeds passes when a single seed happened to be interesting, which is the
-     * vacuity these assertions exist to refuse; the floor is per seed instead. It sits well
+     * vacuity these assertions exist to refuse, so the floor is per seed instead. It sits well
      * below the measured rates (the scenarios that gate do so on 40-70 seeds), so honest
      * scheduling noise cannot flake the build, but a mechanism that stops firing does fail.
      */
@@ -64,7 +64,7 @@ class CausalNodeSimTest {
         return (config, host) -> new CausalNode(config, host.store, host.offsets);
     }
 
-    /** V1: the fundamental race — a stage's output must never overtake its input at a shared consumer. */
+    /** V1, the fundamental race. A stage's output must never overtake its input at a shared consumer. */
     @Test
     void sharedInputDiamond() {
         Stats stats = new Stats();
@@ -83,9 +83,9 @@ class CausalNodeSimTest {
     }
 
     /**
-     * V1 transitively: claims must survive a hop through a node that does not consume t1 —
+     * V1 transitively: claims must survive a hop through a node that does not consume t1,
      * including across that hop's crashes, which exercise the restore of the advertised
-     * clocks (custody lost at restore would silently under-claim every later stamp).
+     * clocks. Custody lost at restore would silently under-claim every later stamp.
      */
     @Test
     void transitiveClaimsThroughBlindHop() {
@@ -150,7 +150,7 @@ class CausalNodeSimTest {
                 + stats.seedsWithHolds + " seeds: observed causality barely tested");
     }
 
-    /** V3: crashes with EOS restore — aborted records, re-inits, end-offset seeds. */
+    /** V3: crashes with EOS restore, over aborted records, re-inits and end-offset seeds. */
     @Test
     void crashRecoveryUnderChain() {
         Stats stats = new Stats();
@@ -175,7 +175,7 @@ class CausalNodeSimTest {
                 + " restore path, and the payload round trip through it, went unexercised");
     }
 
-    /** V4/V6: a filter stage leaves quiet sinks; trailing markers must not wedge anything. */
+    /** V4/V6: a filter stage leaves quiet sinks, and trailing markers must not wedge anything. */
     @Test
     void filterStageAndTrailingMarkers() {
         Stats stats = new Stats();
@@ -215,9 +215,9 @@ class CausalNodeSimTest {
 
     /**
      * V6 cycles: a feedback loop with gain below one drains and stays causal. The loop's two
-     * nodes cannot gate each other — A does not consume t2, so the returning t3 records' t2
-     * claims hit the ignore branch, and their t1 claims name records A delivered before
-     * emitting — so C is what puts the cycle's traffic through the gate: it consumes both
+     * nodes cannot gate each other, since A does not consume t2, so the returning t3 records'
+     * t2 claims hit the ignore branch, and their t1 claims name records A delivered before
+     * emitting. C is what puts the cycle's traffic through the gate: it consumes both
      * sides of the loop, and every t3 record claims the t2 record it came from.
      */
     @Test
@@ -271,8 +271,8 @@ class CausalNodeSimTest {
     }
 
     /**
-     * Soak: a wider topology — multi-partition topics, a filter, a damped feedback loop, a
-     * blind hop, and crash injection — under many seeds. The kitchen sink obligation.
+     * Soak: a wider topology under many seeds, with multi-partition topics, a filter, a damped
+     * feedback loop, a blind hop, and crash injection. The kitchen sink obligation.
      */
     @Test
     void soakWideTopologyWithCrashes() {
@@ -308,11 +308,11 @@ class CausalNodeSimTest {
     /**
      * The documented caveat of sequence claims, demonstrated both ways: a sequence-form claim
      * frozen in a non-consumer's custody clock wedges a late joiner whose baseline sits above
-     * the claimed record (the sender never acknowledged, so the claim never normalised, and
-     * the sender never writes that partition again). The same topology with a from-the-start
-     * joiner resolves and drains. An offset-claims design has no such window; late joiners
-     * under sequence claims must either baseline at the stable offset (LSO) before any live
-     * claim, or accept this wedge class.
+     * the claimed record, since the sender never acknowledged, so the claim never normalised,
+     * and the sender never writes that partition again. The same topology with a from-the-start
+     * joiner resolves and drains. An offset-claims design has no such window. Late joiners
+     * under sequence claims must either baseline at the stable offset before any live claim,
+     * or accept this wedge class.
      */
     @Test
     void lateJoinerStaleSequenceClaimWedges() {
@@ -415,7 +415,7 @@ class CausalNodeSimTest {
      * The soundness-critical joiner case a membership-based stability protocol gets wrong: a
      * consumer joining from earliest after truncation. Its baseline is the log start
      * (retention already deleted everything below), so the truncated claims are out of its
-     * scope by the same rule that exempts seeds — the oracle confirms causal order for
+     * scope by the same rule that exempts seeds, and the oracle confirms causal order for
      * everything it can see.
      */
     @Test
@@ -450,7 +450,7 @@ class CausalNodeSimTest {
     /**
      * The own-outputs end-offset seed, made load-bearing: a node's sends are ordered against
      * each other across a restart even though nothing else claims them. A sinks to t2 before
-     * the restart and to t3 after it, so C — which consumes both — must deliver the earlier
+     * the restart and to t3 after it, so C, which consumes both, must deliver the earlier
      * send first. The frontier cannot claim it (A consumes neither sink), carried ancestry
      * cannot (both are still declared sinks), and the restored send counter is this
      * incarnation's baseline, so prior-incarnation sends are claimed in offset space or not
@@ -521,9 +521,9 @@ class CausalNodeSimTest {
      *
      * <p>Retention deletes t2's pre-shrink history before that consumer joins, which is what
      * makes the carried claims the <em>only</em> thing ordering it. Left in place, those
-     * records — which claim the t1b past through the ordinary frontier — sit below every
+     * records, which claim the t1b past through the ordinary frontier, sit below every
      * post-shrink record on the same channel, and per-channel FIFO alone would deliver the
-     * t1b causes first: the scenario would pass with the carried entries deleted from the
+     * t1b causes first. The scenario would pass with the carried entries deleted from the
      * stamp entirely.
      */
     @Test
@@ -611,7 +611,7 @@ class CausalNodeSimTest {
     /**
      * A ticking stage that drops a sink across a restart. The tick self-loop carries this
      * node's own sequence claims on its other sinks back into its custody, so after the drop a
-     * claim in custody names a channel the init end-offset seed no longer covers — the stamp
+     * claim in custody names a channel the init end-offset seed no longer covers, so the stamp
      * must resolve it from the rescope heal rather than fail. The same shape arises without
      * ticks in any cycle whose intermediate hop cannot normalise the claim.
      */
@@ -649,7 +649,7 @@ class CausalNodeSimTest {
     /**
      * Scope growth seeded at carried knowledge: a former sink becomes an input. The heal
      * folds the sink's end offsets into carried ancestry, the growth seed starts the frontier
-     * there, and the resume position skips the node's own outputs — it must not re-deliver
+     * there, and the resume position skips the node's own outputs, so it must not re-deliver
      * what its stamps already claimed.
      */
     @Test

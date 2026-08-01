@@ -13,27 +13,16 @@ import java.util.Properties;
 import java.util.Set;
 
 /**
- * The front door: a composition of {@link Stage}s, and the two ways to run it — a broker-less
- * topology for {@code TopologyTestDriver}, or a {@link CausalStreams} runtime against a real
- * cluster.
+ * Composes {@link Stage}s into a runnable application.
  *
- * <p>Stages connect through ordinary topics: one stage's sink is another's source, and the
- * connecting topic is a causal channel like any other — stamped on write, gated on read, and
- * required to exist before the application starts. Stamping is synchronous at every hop
- * (sequence claims), so a pipeline of stages costs only the broker round trip per hop.
+ * <p>Run broker-less against {@code TopologyTestDriver} with {@link #testTopology()}, or on a
+ * cluster with {@link #streams(Properties)}.
  *
- * <p>Constraints checked at composition: stage names must be distinct (each names its state
- * stores), and source topics must be disjoint across stages — Kafka Streams allows a topic to
- * feed only one source node per topology. A topic may be a sink of several stages.
+ * <p>Stages connect through ordinary topics. One stage's sink is another's source, and the
+ * connecting topic is a causal channel like any other, stamped on write and gated on read. It
+ * must exist before the application starts.
  *
- * <p>The application id belongs to the composition rather than to the runtime properties alone,
- * because it names things. Kafka Streams prefixes every topic it creates with the application
- * id, and Parsley follows that convention for the one topic it asks you to create — a stage's
- * tick topic is {@code <application.id>-<stage>-ticks}, alongside the
- * {@code <application.id>-<stage>-state-changelog} that Streams creates for the same stage. An
- * operator listing the cluster's topics in name order sees an application's topics together,
- * Parsley's and Streams' alike, rather than in two unrelated places. Fixing the id at
- * composition is also what lets {@link ContractProbes} report those names without a cluster.
+ * <p>A topic may be a sink of several stages, but a source of only one.
  */
 public final class Parsley {
 
@@ -47,20 +36,37 @@ public final class Parsley {
         this.stages = stages;
     }
 
-    /** The application id every topic and store name the application owns is qualified by. */
+    /**
+     * Returns the application id, which qualifies every topic and store name it owns.
+     *
+     * @return the application id
+     */
     public String applicationId() {
         return applicationId;
     }
 
-    /** The composed stages, in declaration order. */
+    /**
+     * Returns the composed stages, in declaration order.
+     *
+     * @return the stages, in the order they were given to {@link #named}
+     */
     java.util.Collection<Stage> stageSet() {
         return stages.values();
     }
 
     /**
-     * Composes stages into an application. The application id is the one Kafka Streams will run
-     * under — {@link #streams} pins it — and must stay stable across deployments, because the
-     * state stores, their changelog topics and the tick topics are all named from it.
+     * Composes stages into an application under the given id.
+     *
+     * <p>Keep the id stable across deployments. It names the state stores, their changelog
+     * topics and the tick topics, and {@link #streams(Properties)} pins
+     * {@code application.id} to it.
+     *
+     * @param applicationId the application id, matching {@code [a-zA-Z0-9._-]+}
+     * @param stages the stages, in declaration order
+     * @return the composed application
+     * @throws IllegalArgumentException if the application id is null or does not match, if no
+     *         stages are given, if two stages share a name, or if a topic is a source of more
+     *         than one stage
      */
     public static Parsley named(String applicationId, Stage... stages) {
         if (applicationId == null || !applicationId.matches("[a-zA-Z0-9._-]+")) {
@@ -86,12 +92,17 @@ public final class Parsley {
     }
 
     /**
-     * A fresh broker-less topology for {@code TopologyTestDriver}: topic identity synthesized,
-     * one partition per topic, nothing to seed against or truncate. Every call assembles a new
-     * {@code Topology}, because Kafka Streams consumes a topology on construction. The
-     * returned topology is for the test driver only — under a real cluster it neither
-     * captures consumer positions nor resolves real topic identity, and the adapter fails
-     * closed at the first delivered record.
+     * Builds a broker-less topology for {@code TopologyTestDriver}.
+     *
+     * <p>Topic identity is synthesized, each topic has one partition, and there is nothing to
+     * seed against or truncate. Every call assembles a new {@link Topology}, because Kafka
+     * Streams consumes one on construction.
+     *
+     * <p>Use it with the test driver only. Against a real cluster it captures no consumer
+     * positions and resolves no real topic identity, and fails closed at the first delivered
+     * record.
+     *
+     * @return a fresh topology
      */
     public Topology testTopology() {
         Topology t = new Topology();
@@ -102,14 +113,20 @@ public final class Parsley {
     }
 
     /**
-     * Assembles the production runtime, not yet started: forces
-     * {@code processing.guarantee=exactly_once_v2} and {@code isolation.level=read_committed}
-     * (the protocol's transactional state and liveness are defined against them), installs
-     * the position-capturing client supplier — the consumer's position advance past
-     * transaction markers is the protocol's liveness signal — and resolves topic identity
-     * through an admin client built from the same properties. Sets {@code application.id} to the
-     * composition's, rejecting properties that name a different one. Set listeners on the
-     * returned handle, then {@link CausalStreams#start()} it.
+     * Assembles the cluster runtime, not yet started.
+     *
+     * <p>Forces {@code processing.guarantee=exactly_once_v2} and
+     * {@code isolation.level=read_committed}, and sets {@code application.id} to the
+     * composition's. Resolves topic identity through an {@link Admin} client built from the
+     * same properties, which the returned handle closes with itself.
+     *
+     * <p>Set listeners on the returned handle, then {@link CausalStreams#start()} it.
+     *
+     * @param props the Kafka Streams configuration
+     * @return the runtime handle, not yet started
+     * @throws IllegalArgumentException if the properties name a {@code processing.guarantee}
+     *         other than {@code exactly_once_v2}, or an {@code application.id} other than the
+     *         composition's
      */
     public CausalStreams streams(Properties props) {
         Properties p = new Properties();

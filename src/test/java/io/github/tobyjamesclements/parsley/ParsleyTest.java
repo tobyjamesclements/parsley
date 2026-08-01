@@ -21,7 +21,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Composition through the {@link Parsley} front door under TopologyTestDriver: two stages in
  * one topology connected by a shared {@link Topic}, records flowing end to end with custody
- * carried transitively — the final output's stamp must still claim the original input's
+ * carried transitively. The final output's stamp must still claim the original input's
  * coordinate, two hops upstream.
  */
 class ParsleyTest {
@@ -41,7 +41,7 @@ class ParsleyTest {
         return props;
     }
 
-    /** Records traverse both stages; the final stamp claims the original t1 coordinate. */
+    /** Records traverse both stages, and the final stamp claims the original t1 coordinate. */
     @Test
     void pipelineCarriesCustodyAcrossStages() {
         Stage first = Stage.named("first")
@@ -151,7 +151,7 @@ class ParsleyTest {
         }
     }
 
-    /** Each testTopology() call assembles a fresh topology; drivers do not share state. */
+    /** Each testTopology() call assembles a fresh topology, and drivers do not share state. */
     @Test
     void testTopologyIsFreshPerCall() {
         Stage stage = Stage.named("stage")

@@ -8,15 +8,23 @@ import java.nio.charset.StandardCharsets;
 import java.util.function.BiConsumer;
 
 /**
- * {@link StateStore} over a Streams {@link KeyValueStore}. Under EOS the store's mutations
- * commit with the task's transaction, which is exactly the contract the protocol requires. Keys are
- * UTF-8; prefix iteration uses byte-wise range semantics, which match UTF-8 lexicographic
- * ordering.
+ * A {@link StateStore} over a Streams {@link KeyValueStore}.
+ *
+ * <p>Under EOS the store's mutations commit with the task's transaction, which is exactly the
+ * contract the protocol requires.
+ *
+ * <p>Keys are UTF-8. Prefix iteration uses byte-wise range semantics, which match UTF-8
+ * lexicographic ordering.
  */
 final class KafkaStateStore implements StateStore {
 
     private final KeyValueStore<Bytes, byte[]> store;
 
+    /**
+     * Wraps a Streams key-value store.
+     *
+     * @param store the store to write through, opened by the host's processor
+     */
     KafkaStateStore(KeyValueStore<Bytes, byte[]> store) {
         this.store = store;
     }
@@ -40,6 +48,14 @@ final class KafkaStateStore implements StateStore {
         store.delete(k(key));
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Iterates a byte-wise range bounded above by the prefix with its last non-{@code 0xFF}
+     * byte incremented, so a prefix of all {@code 0xFF} bytes has no such bound.
+     *
+     * @throws IllegalArgumentException if every byte of {@code prefix} is {@code 0xFF}
+     */
     @Override
     public void forEachPrefix(String prefix, BiConsumer<String, byte[]> consumer) {
         byte[] from = prefix.getBytes(StandardCharsets.UTF_8);

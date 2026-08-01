@@ -56,7 +56,7 @@ final class SimWorld {
     long totalPositionAdvances;
     long totalTicksEmitted;
     long totalTicksDelivered;
-    /** Held records that came back through the restore path — the hold-queue deserializer. */
+    /** Held records that came back through the restore path, the hold-queue deserializer. */
     long totalHeldRecordsRestored;
 
     SimWorld(long seed) {
@@ -177,7 +177,7 @@ final class SimWorld {
         record EmitTick(SimNode node, boolean crash) implements Action {}
     }
 
-    /** Runs to drain; throws when the budget is exhausted first. */
+    /** Runs to drain. Throws when the budget is exhausted first. */
     void run(long maxSteps) {
         for (stepsTaken = 0; stepsTaken < maxSteps; stepsTaken++) {
             List<Action> enabled = new ArrayList<>();

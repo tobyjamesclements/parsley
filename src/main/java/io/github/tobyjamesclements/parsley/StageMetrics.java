@@ -14,23 +14,33 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The stage adapter's metric surface: sensors in group {@code parsley-metrics} on the host's
- * Kafka Streams metrics registry, so they reach JMX, configured reporters, and
+ * Registers the stage adapter's metrics on the host's Kafka Streams registry.
+ *
+ * <p>Sensors go in group {@value #GROUP}, so they reach JMX, configured reporters, and
  * {@link CausalStreams#metrics()} alongside the built-ins. The committed consumer position
- * advances past held records (holding is protocol state, not consumer lag), so hold depth and
- * hold age are observable only through these metrics.
+ * advances past held records, because holding is protocol state rather than consumer lag, so
+ * hold depth and hold age are observable only through these metrics.
  *
  * <p>Gauges are sampled by the host's wall-clock punctuator from the node's observation
- * surface; event counters are recorded at their event sites. Per-topic breakdowns record at
- * the {@code DEBUG} recording level, everything else at {@code INFO}, mirroring the log-level
- * split. Time enters only through {@link #sample}, so the class holds no clock and samples
+ * surface. Event counters are recorded at their event sites.
+ *
+ * <p>Per-topic breakdowns record at the {@code DEBUG} recording level, everything else at
+ * {@code INFO}, mirroring the log-level split.
+ *
+ * <p>Time enters only through {@link #sample}, so the class holds no clock and samples
  * deterministically under a mocked driver.
  */
 final class StageMetrics {
 
+    /** The metrics group every sensor registers in. */
     static final String GROUP = "vc-metrics";
 
-    /** The head a channel's hold age is measured against: its offset and when it became head. */
+    /**
+     * The head a channel's hold age is measured against.
+     *
+     * @param offset the head record's offset
+     * @param sinceMs when it became the head, on the host's wall clock
+     */
     private record HeadMark(long offset, long sinceMs) {}
 
     private final StreamsMetrics registry;
@@ -47,11 +57,20 @@ final class StageMetrics {
     private final Map<Channel, Sensor> heldByChannel = new HashMap<>();
     private final Map<Channel, Sensor> heldAgeByChannel = new HashMap<>();
     private final Map<Channel, HeadMark> headMarks = new HashMap<>();
-    /** The replay count already drained into the sensor; {@link #sample} records the delta. */
+    /** The replay count already drained into the sensor. {@link #sample} records the delta. */
     private long replaysRecorded;
     /** The wall clock of the most recent {@link #sample}, which {@link #heldMs} ages against. */
     private long lastSampleMs;
 
+    /**
+     * Registers every sensor for one stage task.
+     *
+     * @param registry the host's Kafka Streams metrics registry
+     * @param stage the stage name, used as a tag and in each sensor's name
+     * @param taskId the task, as Kafka Streams names it
+     * @param topicByChannel the source topic of each consumed channel, for per-topic breakdowns
+     * @param node the node the gauges sample from
+     */
     StageMetrics(StreamsMetrics registry, String stage, String taskId,
                  Map<Channel, String> topicByChannel, CausalNode node) {
         this.registry = registry;
@@ -123,7 +142,11 @@ final class StageMetrics {
         return s;
     }
 
-    /** Records one batch of records released through the gate. */
+    /**
+     * Records one batch of records released through the gate.
+     *
+     * @param count how many records the batch released
+     */
     void recordDelivered(int count) {
         recordsDelivered.record(count);
     }
@@ -140,8 +163,11 @@ final class StageMetrics {
 
     /**
      * Samples every gauge from the node's observation surface and drains the replay counter.
-     * {@code nowMs} is the host's wall clock; a head first observed held is aged from that
-     * observation, so restored holds age from the first sample after init.
+     *
+     * <p>A head first observed held is aged from that observation, so restored holds age from
+     * the first sample after init.
+     *
+     * @param nowMs the host's wall clock
      */
     void sample(long nowMs) {
         lastSampleMs = nowMs;
@@ -183,10 +209,13 @@ final class StageMetrics {
     }
 
     /**
-     * How long this channel's current head has been held, as of the last {@link #sample} —
-     * the same measurement the {@code records-held-age-max-ms} gauge reports, reused so the
+     * Returns how long this channel's current head has been held, as of the last
+     * {@link #sample}.
+     *
+     * <p>The same measurement the {@code records-held-age-max-ms} gauge reports, reused so the
      * gauge, the diagnosis surface, and the hold warning cannot disagree.
      *
+     * @param c the channel to age
      * @return the age in milliseconds, or {@code 0} when the channel has no head marked
      */
     long heldMs(Channel c) {
@@ -194,7 +223,7 @@ final class StageMetrics {
         return mark == null ? 0 : lastSampleMs - mark.sinceMs();
     }
 
-    /** Removes every registered sensor; called when the task's processor closes. */
+    /** Removes every registered sensor. Called when the task's processor closes. */
     void close() {
         sensors.forEach(registry::removeSensor);
     }

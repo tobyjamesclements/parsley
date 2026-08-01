@@ -31,7 +31,7 @@ class CausalNodeDirectedTest {
     private static final Channel C = new Channel(T_C, 0);
     private static final Channel D = new Channel(T_D, 0);
     private static final Channel E = new Channel(T_E, 0);
-    /** A declared sink, so a stamp can be taken; never consumed. */
+    /** A declared sink, so a stamp can be taken. Never consumed. */
     private static final Channel SINK = new Channel(T_S, 0);
     /** Neither consumed nor a sink: only ever reached as carried custody. */
     private static final Channel FOREIGN = new Channel(T_F, 0);
@@ -39,7 +39,7 @@ class CausalNodeDirectedTest {
     private static final UUID UPSTREAM = UUID.nameUUIDFromBytes("dupstream".getBytes());
     private static final UUID STRANGER = UUID.nameUUIDFromBytes("dstranger".getBytes());
 
-    /** Plain in-memory store: no staging — every write is immediately durable. */
+    /** Plain in-memory store, with no staging. Every write is immediately durable. */
     private static final class MapStore implements StateStore {
         final TreeMap<String, byte[]> map = new TreeMap<>();
 
@@ -108,7 +108,7 @@ class CausalNodeDirectedTest {
     /**
      * A run of consumer-skipped offsets (transaction markers, aborted records) that opens
      * behind a held head must still fold into the frontier. Every business record below the
-     * head has been delivered, so the rest of the prefix was skipped — the same known-clean
+     * head has been delivered, so the rest of the prefix was skipped, by the same known-clean
      * argument the empty-queue bridge rests on. Left unbridged, a claim naming an offset inside
      * the gap wedges permanently: nothing else can ever advance the frontier through it,
      * because a position advance is refused while the queue is non-empty.
@@ -142,7 +142,7 @@ class CausalNodeDirectedTest {
 
     /**
      * A record in custody can carry a sequence claim this node itself minted, on a channel that
-     * is no longer one of its declared sinks — a stage's own tick record echoes its claims
+     * is no longer one of its declared sinks. A stage's own tick record echoes its claims
      * back, and so does any cycle whose intermediate hop does not consume the claimed sink and
      * therefore cannot normalise the claim. The init end-offset seed does not cover a dropped
      * sink, so the upgrade target must come from the carried ancestry the rescope heal wrote.
@@ -205,7 +205,7 @@ class CausalNodeDirectedTest {
      * The frontier must never be folded past a record still held. A record arriving behind a
      * held head says nothing about the head: the offsets below the arriving record include the
      * head's own, which is by definition undelivered. Folded in, the frontier would report the
-     * head as delivered and release whatever waits on it — an effect ahead of its cause, which
+     * head as delivered and release whatever waits on it, an effect ahead of its cause, which
      * is the one thing the gate exists to prevent.
      */
     @Test
@@ -225,9 +225,9 @@ class CausalNodeDirectedTest {
 
     /**
      * A consumer position advance taken while records are held is remembered, and folds the
-     * moment the queue drains. The queue is non-empty, so nothing can fold now — every offset
-     * below the head is either delivered or the head itself. But the host reports each advance
-     * once, and a trailing run of markers has no other witness: dropped, that run is never
+     * moment the queue drains. The queue is non-empty, so nothing can fold now, since every
+     * offset below the head is either delivered or the head itself. But the host reports each advance
+     * once, and a trailing run of markers has no other witness. Dropped, that run is never
      * bridged, and a claim naming an offset inside it waits forever.
      */
     @Test
@@ -272,7 +272,7 @@ class CausalNodeDirectedTest {
      * A sequence claim at exactly the sequence this node has delivered is resolved, not carried
      * on: the delivered record is the claimed one. Left in sequence space it travels to every
      * downstream consumer, each of which must then resolve it against a sender it may never
-     * have seen — the late-joiner window the offset form closes.
+     * have seen, which is the late-joiner window the offset form closes.
      */
     @Test
     void normalizationResolvesAClaimAtExactlyTheDeliveredSequence() {
@@ -293,8 +293,8 @@ class CausalNodeDirectedTest {
     /**
      * A sequence claim this node cannot vouch for is carried on exactly as it stands. Rewriting
      * it to the offset of some earlier record from the same sender would claim strictly less
-     * than the stamp was handed — the claimed record sits at a higher offset — and a sender
-     * this node has never delivered offers no offset to rewrite to at all.
+     * than the stamp was handed, since the claimed record sits at a higher offset, and a
+     * sender this node has never delivered offers no offset to rewrite to at all.
      */
     @Test
     void normalizationNeverUnderClaimsAnUnresolvedSequenceClaim() {
@@ -340,8 +340,8 @@ class CausalNodeDirectedTest {
     /**
      * A topic confirmed destroyed has its claims truncated entirely. A recreated topic is a
      * different channel, so no consumer anywhere can ever deliver the records those claims
-     * name; carried forever they would only grow the clock, and no gate would ever be satisfied
-     * by them.
+     * name. Carried forever they would only grow the clock, and no gate would ever be
+     * satisfied by them.
      */
     @Test
     void aDestroyedTopicsClaimsTruncateEntirely() {
@@ -379,7 +379,7 @@ class CausalNodeDirectedTest {
     /**
      * The truncation driver is told about channels only carried ancestry names. It queries log
      * starts for exactly the channels {@code stampChannels()} reports, so a channel left out of
-     * that set carries a claim that can never be truncated — and carried ancestry, which the
+     * that set carries a claim that can never be truncated. Carried ancestry, which the
      * frontier and the advertised clocks no longer cover, is precisely where a dropped input's
      * past lives.
      */
@@ -400,10 +400,10 @@ class CausalNodeDirectedTest {
 
     /**
      * A dropped input's delivered past is carried, and stays carried. Frontier offset zero is a
-     * real claim — the first record of a channel — and the advertised clock the dropped input
+     * real claim, the first record of a channel, and the advertised clock the dropped input
      * contributed names causes on channels nothing else claims. Both must survive the restart
-     * that drops the input and every restart after it, because the rescope that heals them sees
-     * the input exactly once: the next start's recorded scope no longer mentions it.
+     * that drops the input and every restart after it, because the rescope that heals them
+     * sees the input exactly once. The next start's recorded scope no longer mentions it.
      */
     @Test
     void aDroppedInputsPastIsCarriedAndStaysCarried() {
@@ -433,10 +433,10 @@ class CausalNodeDirectedTest {
 
     /**
      * A former sink's healed claim is written down. Dropping a sink leaves the node's own past
-     * outputs there claimed by nothing else — no frontier, since the node never consumed it,
-     * and no end-offset seed, since it is no longer declared — so the rescope heal folds its end
-     * offsets into carried ancestry. That heal sees the sink exactly once: by the next start the
-     * recorded scope no longer lists it, so a heal that is not persisted is simply lost.
+     * outputs there claimed by nothing else, with no frontier, since the node never consumed
+     * it, and no end-offset seed, since it is no longer declared. So the rescope heal folds its
+     * end offsets into carried ancestry. That heal sees the sink exactly once. By the next start
+     * the recorded scope no longer lists it, so a heal that is not persisted is simply lost.
      */
     @Test
     void aHealedFormerSinksClaimSurvivesASecondStart() {
@@ -458,7 +458,7 @@ class CausalNodeDirectedTest {
 
     /**
      * A dropped input leaves no state behind. Its frontier, advertised clock, queue metadata,
-     * and delivered-sequence marks are all keyed by a channel nothing will feed again; left in
+     * and delivered-sequence marks are all keyed by a channel nothing will feed again. Left in
      * the store they are read back by every later start and replicated by the changelog
      * forever, so the state of a long-lived application only ever grows.
      */
@@ -483,7 +483,7 @@ class CausalNodeDirectedTest {
     /**
      * A sink dropped before anything was ever written to it costs nothing to heal. The heal
      * folds the former sink's end offsets into carried ancestry so the node's own past outputs
-     * stay claimed; an empty topic has no appended offset to claim, and asking for one would
+     * stay claimed. An empty topic has no appended offset to claim, and asking for one would
      * fail a start that has nothing to recover.
      */
     @Test
@@ -502,9 +502,9 @@ class CausalNodeDirectedTest {
     /**
      * An input grown into scope is seeded at what the node already knows, even when that
      * knowledge is offset zero. Here the grown channel is one of the node's own declared sinks,
-     * so the only thing that knows about it is the init end-offset seed: unseeded, the node
+     * so the only thing that knows about it is the init end-offset seed. Unseeded, the node
      * refetches and re-delivers its own output, and with the frontier left unseeded a claim on
-     * that output — which every one of the node's own later stamps carries — waits forever.
+     * that output, which every one of the node's own later stamps carries, waits forever.
      */
     @Test
     void aGrownInputIsSeededAtItsOwnOutputsEndOffset() {
@@ -539,9 +539,9 @@ class CausalNodeDirectedTest {
 
     /**
      * The scope record lists channels in a stable order. It is rewritten at every init and read
-     * back by the next one, so a salt-dependent order means the same logical scope serialises to
-     * different bytes on different JVMs — changelog churn at best, and an unpinnable record in
-     * {@link WireFormatTest} at worst. Five channels, so an unordered set passes by luck once in
+     * back by the next one, so a salt-dependent order means the same logical scope serialises
+     * to different bytes on different JVMs. That is changelog churn at best, and an unpinnable
+     * record in {@link WireFormatTest} at worst. Five channels, so an unordered set passes by luck once in
      * a hundred and twenty runs.
      */
     @Test
@@ -563,9 +563,9 @@ class CausalNodeDirectedTest {
     }
 
     /**
-     * One cascade delivers across channels in a stable order. The order itself is arbitrary —
-     * nothing in the causal model prefers one concurrent channel over another — but it must be
-     * the same on every JVM, because the host runs user logic per delivery in list order, so in
+     * One cascade delivers across channels in a stable order. The order itself is arbitrary,
+     * since nothing in the causal model prefers one concurrent channel over another, but it
+     * must be the same on every JVM, because the host runs user logic per delivery in list order, so in
      * the simulator this order reaches the broker as send order and from there into every
      * offset downstream. Salt-dependent here means a seed no longer reproduces its run.
      */

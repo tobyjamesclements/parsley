@@ -12,25 +12,25 @@ import java.util.TreeMap;
 import java.util.UUID;
 
 /**
- * The protocol implementation: causal delivery with head-of-line blocking per channel.
+ * The protocol implementation, causal delivery with head-of-line blocking per channel.
  *
  * <p>One instance is one causal node (one task). The host feeds records in per-channel offset
  * order through {@link #onRecord}, reports consumer position advances through
- * {@link #positionAdvance}, and stamps every outbound send through {@link #stampForSend}. All
+ * {@link #positionAdvance}, and stamps every outbound send through {@link #prepareSend}. All
  * state mutations go through the {@link StateStore}, which the host commits atomically with the
  * consumed offsets and the sends of each processing step (EOS).
  *
- * <p>Delivery discipline: each channel has a FIFO hold queue; only the head is ever gated. A
- * record is deliverable when the frontier dominates its dependency clock, normalised (own-channel
- * entries dropped — FIFO satisfies them structurally) and restricted to consumed channels
+ * <p>Each channel has a FIFO hold queue, and only the head is ever gated. A record is
+ * deliverable when the frontier dominates its dependency clock, normalised (own-channel
+ * entries dropped, since FIFO satisfies them structurally) and restricted to consumed channels
  * (unconsumed entries are ignored, sound because every stamp claims consumed ancestry behind an
  * unconsumed coordinate directly). Delivering advances the frontier, which can release other
- * heads; the cascade runs to fixpoint.
+ * heads. The cascade runs to fixpoint.
  *
- * <p>Liveness rides append-time facts: every claim names a really-appended offset, and the
+ * <p>Liveness rides append-time facts. Every claim names a really-appended offset, and the
  * host's position advances bridge runs of offsets a {@code read_committed} consumer skips
- * (transaction markers, aborted records). The wait graph is acyclic because every wait edge —
- * a dependency wait or a head-of-line wait — points from a later-appended record to an
+ * (transaction markers, aborted records). The wait graph is acyclic because every wait edge,
+ * whether a dependency wait or a head-of-line wait, points from a later-appended record to an
  * earlier-appended one, even under end-offset over-claims, whose watermarks are append-time
  * snapshots taken before the claiming record's own append.
  */
@@ -43,15 +43,20 @@ final class CausalNode implements DeliveryProtocol {
     private static final String PREFIX_FRONTIER = "f/";
     private static final String PREFIX_CHANNEL_CLOCK = "cc/";
     private static final String PREFIX_QUEUE = "q/";
-    /** Per sink channel: the last send sequence this node issued. */
+    /** Per sink channel, the last send sequence this node issued. */
     private static final String PREFIX_SEND_SEQ = "sq/";
-    /** Per (consumed channel, sender): the highest delivered sequence and its offset. */
+    /** Per consumed channel and sender, the highest delivered sequence and its offset. */
     private static final String PREFIX_DELIVERED_SEQ = "ds/";
 
     private record Held(long offset, VectorClock clock, UUID senderId, long senderSeq,
                         byte[] key, byte[] value, long timestamp) {}
 
-    /** The resolution state for one (channel, sender): highest delivered seq and its offset. */
+    /**
+     * The resolution state for one channel and sender.
+     *
+     * @param seq the highest sequence delivered from that sender on that channel
+     * @param offset the offset the sequence was delivered at
+     */
     private record SeqMark(long seq, long offset) {}
 
     private static final class Queue {
@@ -70,8 +75,8 @@ final class CausalNode implements DeliveryProtocol {
      * order per JVM (a salt seeded at class-init). Iterating them directly would make the
      * cascade's cross-channel delivery order and the scope record's bytes vary between runs of
      * the same tree, which would in turn make a seeded simulator run depend on the JVM as well
-     * as its seed. Ordering is arbitrary but fixed; nothing depends on which order, only that it
-     * is the same one every time.
+     * as its seed. Ordering is arbitrary but fixed. Nothing depends on which order, only that
+     * it is the same one every time.
      */
     private final List<Channel> consumedInOrder;
     private final List<UUID> sinkTopicsInOrder;
@@ -79,25 +84,32 @@ final class CausalNode implements DeliveryProtocol {
     private final Map<Channel, Long> frontier = new HashMap<>();
     private final Map<Channel, VectorClock> channelClocks = new HashMap<>();
     private final VectorClock carriedAncestry;
-    /** Memory-only: seeded from end offsets at init, so persistence would be redundant. */
+    /** Memory-only. Seeded from end offsets at init, so persistence would be redundant. */
     private final VectorClock ownOutputs = new VectorClock();
     private final Map<Channel, Queue> queues = new HashMap<>();
-    /** Memory-only: everything strictly below is known fetched-or-skipped (consumer position). */
+    /** Memory-only. The consumer position, below which everything is fetched-or-skipped. */
     private final Map<Channel, Long> positionKnown = new HashMap<>();
     private final Map<Channel, Long> resumePositions = new HashMap<>();
-    /** Last issued send sequence per sink channel (persisted; -1 = none). */
+    /** Last issued send sequence per sink channel. Persisted, with -1 meaning none. */
     private final Map<Channel, Long> sendSeq = new HashMap<>();
     /**
      * The send counter as restored at init, per sink channel. Every send at or below it is
-     * committed and therefore covered by the init end-offset seed in offset space; sends above
-     * it (this incarnation's) are claimed in sequence space.
+     * committed and therefore covered by the init end-offset seed in offset space. Sends above
+     * it, this incarnation's, are claimed in sequence space.
      */
     private final Map<Channel, Long> baselineSeq = new HashMap<>();
     /** Highest delivered sequence and its offset, per consumed channel and sender (persisted). */
     private final Map<Channel, Map<UUID, SeqMark>> deliveredSeq = new HashMap<>();
-    /** Memory-only: records fed at or below the frontier and discarded, since init. */
+    /** Memory-only. Records fed at or below the frontier and discarded, since init. */
     private long replaysSkipped;
 
+    /**
+     * Initialises the node, restoring persisted state and seeding own-outputs from end offsets.
+     *
+     * @param config the node's identity, consumed channels and declared sink topics
+     * @param store the durable state the host commits with each processing step
+     * @param broker the end-offset and log-start view for the node's channels
+     */
     CausalNode(NodeConfig config, StateStore store, BrokerOffsets broker) {
         this.config = config;
         this.store = store;
@@ -180,7 +192,7 @@ final class CausalNode implements DeliveryProtocol {
         return List.of();
     }
 
-    /** Runs deliveries to fixpoint: any frontier advance may release another channel's head. */
+    /** Runs deliveries to fixpoint. Any frontier advance may release another channel's head. */
     private List<Delivery> cascade() {
         List<Delivery> out = new ArrayList<>();
         boolean changed = true;
@@ -284,11 +296,15 @@ final class CausalNode implements DeliveryProtocol {
     }
 
     /**
-     * Rewrites resolvable sequence claims into offset claims: a claim this node can vouch for
-     * (it delivered the sender's record at or past the claimed sequence) becomes a claim on
-     * the delivered record's offset — at or above the claimed record's own offset, an
-     * over-claim at worst, delay-only and therefore sound. Echoes of this node's own claims
-     * are dropped: the fresh self-claims and ownOutputs subsume them.
+     * Rewrites resolvable sequence claims into offset claims.
+     *
+     * <p>A claim this node can vouch for, meaning it delivered the sender's record at or past
+     * the claimed sequence, becomes a claim on the delivered record's offset. That offset is at
+     * or above the claimed record's own offset, an over-claim at worst, delay-only and
+     * therefore sound.
+     *
+     * <p>Echoes of this node's own claims are dropped, because the fresh self-claims and
+     * ownOutputs subsume them.
      */
     private void normalize(VectorClock stamp) {
         List<VectorClock.SeqKey> subsumed = new ArrayList<>();
@@ -366,11 +382,14 @@ final class CausalNode implements DeliveryProtocol {
     }
 
     /**
-     * Builds the log-start stability bound and truncates with it: {@code logStart - 1} for
-     * each present channel, everything for a channel absent from {@code logStarts} whose
-     * topic is confirmed destroyed. Callers pass log starts for every channel in
-     * {@link #stampChannels()}; {@code confirmedAbsent} must carry only channels whose topic
-     * definitively no longer exists (never a transient resolution failure — fail closed).
+     * Builds the log-start stability bound and truncates with it.
+     *
+     * <p>The bound is {@code logStart - 1} for each present channel, and everything for a
+     * channel absent from {@code logStarts} whose topic is confirmed destroyed.
+     *
+     * @param logStarts the log start of every channel in {@link #stampChannels()}
+     * @param confirmedAbsent only channels whose topic definitively no longer exists, never a
+     *         transient resolution failure, so that the sweep fails closed
      */
     public void truncateToLogStarts(Map<Channel, Long> logStarts, Set<Channel> confirmedAbsent) {
         VectorClock stability = new VectorClock();
@@ -387,10 +406,19 @@ final class CausalNode implements DeliveryProtocol {
 
     // ------------------------------------------------------------------ observation
 
-    /** The two claim-kind widths of the stamp-side clock. */
+    /**
+     * The two claim-kind widths of the stamp-side clock.
+     *
+     * @param offsetEntries how many offset claims the clock carries
+     * @param sequenceEntries how many sequence claims it carries
+     */
     record StampWidth(int offsetEntries, int sequenceEntries) {}
 
-    /** Held records per consumed channel; a channel with an empty hold queue is absent. */
+    /**
+     * Returns the number of held records per consumed channel.
+     *
+     * @return the held count of each channel, a channel with an empty hold queue being absent
+     */
     Map<Channel, Integer> heldCounts() {
         Map<Channel, Integer> out = new HashMap<>();
         queues.forEach((c, q) -> {
@@ -399,7 +427,11 @@ final class CausalNode implements DeliveryProtocol {
         return out;
     }
 
-    /** The offset of each non-empty hold queue's head, the record gating its channel. */
+    /**
+     * Returns the offset of each non-empty hold queue's head, the record gating its channel.
+     *
+     * @return the head offset of each channel with a non-empty hold queue
+     */
     Map<Channel, Long> headOffsets() {
         Map<Channel, Long> out = new HashMap<>();
         queues.forEach((c, q) -> {
@@ -409,30 +441,57 @@ final class CausalNode implements DeliveryProtocol {
         return out;
     }
 
-    /** Records fed at or below the frontier and discarded, since init (rescope-growth refetch). */
+    /**
+     * Returns how many records were fed at or below the frontier and discarded, since init.
+     *
+     * <p>These arise from a rescope-growth refetch.
+     *
+     * @return the discarded-replay count
+     */
     long replaysSkipped() {
         return replaysSkipped;
     }
 
     /**
      * One claim a held head is still waiting for, with the local watermarks it is measured
-     * against. An offset claim carries {@code claimedOffset} and a null sender; a sequence
-     * claim carries {@code sender} and {@code claimedSeq}.
+     * against.
+     *
+     * <p>An offset claim carries {@code claimedOffset} and a null sender. A sequence claim
+     * carries {@code sender} and {@code claimedSeq}.
+     *
+     * @param channel the channel the missing cause sits on
+     * @param claimedOffset the offset claimed, or {@code NOTHING} for a sequence claim
+     * @param localFrontier the highest offset delivered locally on that channel
+     * @param localPosition the local consumer position on that channel
+     * @param sender the claimed record's sender, or null for an offset claim
+     * @param claimedSeq the send sequence claimed, or {@code NOTHING} for an offset claim
+     * @param deliveredSeq the highest sequence delivered locally from that sender on that
+     *         channel, or {@code NOTHING} if none has been
      */
     record UnmetClaim(Channel channel, long claimedOffset, long localFrontier, long localPosition,
                       UUID sender, long claimedSeq, long deliveredSeq) {}
 
-    /** One channel's gating head: the record, its queue depth, and what it still waits on. */
+    /**
+     * One channel's gating head.
+     *
+     * @param channel the channel the head gates
+     * @param offset the head record's offset
+     * @param queueDepth how many records wait on this channel, the head included
+     * @param unmet the claims the head still waits on
+     */
     record HeadHold(Channel channel, long offset, int queueDepth, List<UnmetClaim> unmet) {}
 
     /**
-     * Why each non-empty hold queue's head is waiting: the same predicate as
-     * {@link #deliverable}, collecting every unmet claim instead of stopping at the first.
-     * Only heads are reported, because only heads are gated — everything behind a head waits
-     * on the head, not on causes of its own.
+     * Explains why each non-empty hold queue's head is waiting.
      *
-     * <p>Read-only, and called from the host's punctuator on the stream thread; a head with no
-     * unmet claim is deliverable and so never appears.
+     * <p>The same predicate as {@link #deliverable}, collecting every unmet claim instead of
+     * stopping at the first. Only heads are reported, because only heads are gated. Everything
+     * behind a head waits on the head, not on causes of its own.
+     *
+     * <p>Read-only, and called from the host's punctuator on the stream thread.
+     *
+     * @return one entry per gating head, a head with no unmet claim being deliverable and so
+     *         never appearing
      */
     List<HeadHold> explainHeads() {
         List<HeadHold> out = new ArrayList<>();
@@ -470,9 +529,13 @@ final class CausalNode implements DeliveryProtocol {
     }
 
     /**
-     * The width of the merged stamp-side clock, the claims {@link #prepareSend} stamps before
-     * normalisation and the fresh self-claims. Growth against a steady workload means
-     * truncation is not keeping up with the clock's footprint.
+     * Returns the width of the merged stamp-side clock, the claims {@link #prepareSend} stamps
+     * before normalisation and the fresh self-claims.
+     *
+     * <p>Growth against a steady workload means truncation is not keeping up with the clock's
+     * footprint.
+     *
+     * @return the offset-claim and sequence-claim counts
      */
     StampWidth stampWidth() {
         VectorClock vt = vectorTime();

@@ -47,8 +47,8 @@ class StageMetricsTest {
     };
 
     /**
-     * {@link StreamsMetrics} over a plain client-metrics registry: the three members the
-     * metric surface uses, delegated; the rate-total conveniences are unused by it.
+     * {@link StreamsMetrics} over a plain client-metrics registry, delegating the three
+     * members the metric surface uses. The rate-total conveniences are unused by it.
      */
     private static final class RegistryStreamsMetrics implements StreamsMetrics {
         final Metrics registry;
@@ -106,7 +106,7 @@ class StageMetricsTest {
         return new InboundRecord(c, offset, clock, null, -1, null, null, 1000);
     }
 
-    /** The value of the group's metric {@code name}; task-level when {@code topic} is null. */
+    /** The value of the group's metric {@code name}, task-level when {@code topic} is null. */
     private static double value(RegistryStreamsMetrics registry, String name, String topic) {
         List<Double> matches = registry.metrics().entrySet().stream()
                 .filter(e -> e.getKey().group().equals(StageMetrics.GROUP))

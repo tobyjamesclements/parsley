@@ -11,24 +11,30 @@ import java.util.function.BiConsumer;
  * A vector clock over channels, with two claim kinds:
  *
  * <ul>
- *   <li><b>Offset entries</b> — a map from {@link Channel} to an offset watermark: "every
- *       offset at or below the watermark on that channel is claimed".</li>
- *   <li><b>Sequence entries</b> — a map from (channel, sender) to a send-sequence watermark:
- *       "every record the sender sent to that channel with sequence at or below the watermark
- *       is claimed". Sequence claims are known synchronously at send time (the broker assigns
- *       offsets asynchronously), which is what lets a stamp claim the sender's own
+ *   <li><b>Offset entries</b>, a map from {@link Channel} to an offset watermark, claiming
+ *       every offset at or below the watermark on that channel.</li>
+ *   <li><b>Sequence entries</b>, a map from channel and sender to a send-sequence watermark,
+ *       claiming every record that sender sent to that channel with sequence at or below the
+ *       watermark. Sequence claims are known synchronously at send time, where the broker
+ *       assigns offsets asynchronously, which is what lets a stamp claim the sender's own
  *       just-issued sends without waiting for acknowledgements.</li>
  * </ul>
  *
- * Absent entries claim nothing. Mutable; callers copy when they need a snapshot. The
+ * <p>Absent entries claim nothing. Mutable, so callers copy when they need a snapshot. The
  * serialized form is versioned and sorted so equal clocks are byte-identical.
  */
 final class VectorClock {
 
+    /** The watermark of an absent entry, which claims nothing. */
     static final long NOTHING = -1L;
     private static final byte WIRE_VERSION = 1;
 
-    /** A sequence-claim key: one sender's sends to one channel. */
+    /**
+     * A sequence-claim key, naming one sender's sends to one channel.
+     *
+     * @param channel the destination channel
+     * @param sender the sending node's identity
+     */
     record SeqKey(Channel channel, UUID sender) implements Comparable<SeqKey> {
         @Override
         public int compareTo(SeqKey o) {
@@ -40,60 +46,115 @@ final class VectorClock {
     private final TreeMap<Channel, Long> entries = new TreeMap<>();
     private final TreeMap<SeqKey, Long> seqEntries = new TreeMap<>();
 
+    /** Creates an empty clock, claiming nothing. */
     VectorClock() {}
 
+    /**
+     * Returns a clock claiming one offset on one channel.
+     *
+     * @param c the channel to claim on
+     * @param offset the offset watermark to claim
+     * @return the new clock
+     * @throws IllegalArgumentException if {@code offset} is negative
+     */
     static VectorClock of(Channel c, long offset) {
         VectorClock k = new VectorClock();
         k.advanceTo(c, offset);
         return k;
     }
 
+    /**
+     * Returns the offset watermark claimed on {@code c}.
+     *
+     * @param c the channel to read
+     * @return the watermark, or {@link #NOTHING} when the channel is unclaimed
+     */
     long get(Channel c) {
         Long v = entries.get(c);
         return v == null ? NOTHING : v;
     }
 
+    /**
+     * Reports whether the clock carries no claim of either kind.
+     *
+     * @return {@code true} when both entry maps are empty
+     */
     boolean isEmpty() {
         return entries.isEmpty() && seqEntries.isEmpty();
     }
 
-    /** The number of offset entries. */
+    /**
+     * Returns the number of offset entries.
+     *
+     * @return the offset-claim count
+     */
     int offsetEntryCount() {
         return entries.size();
     }
 
-    /** The number of sequence entries. */
+    /**
+     * Returns the number of sequence entries.
+     *
+     * @return the sequence-claim count
+     */
     int sequenceEntryCount() {
         return seqEntries.size();
     }
 
-    /** Raises the watermark for {@code c} to at least {@code offset}; never lowers it. */
+    /**
+     * Raises the watermark for {@code c} to at least {@code offset}. Never lowers it.
+     *
+     * @param c the channel to claim on
+     * @param offset the offset watermark to raise to
+     * @throws IllegalArgumentException if {@code offset} is negative
+     */
     void advanceTo(Channel c, long offset) {
         if (offset < 0) throw new IllegalArgumentException("offset " + offset);
         entries.merge(c, offset, Math::max);
     }
 
-    /** Raises the sequence watermark for {@code (c, sender)}; never lowers it. */
+    /**
+     * Raises the sequence watermark for {@code c} and {@code sender}. Never lowers it.
+     *
+     * @param c the destination channel
+     * @param sender the sending node's identity
+     * @param seq the send-sequence watermark to raise to
+     * @throws IllegalArgumentException if {@code seq} is negative
+     */
     void advanceSeq(Channel c, UUID sender, long seq) {
         if (seq < 0) throw new IllegalArgumentException("seq " + seq);
         seqEntries.merge(new SeqKey(c, sender), seq, Math::max);
     }
 
+    /**
+     * Returns the send-sequence watermark claimed for {@code key}.
+     *
+     * @param key the channel and sender to read
+     * @return the watermark, or {@link #NOTHING} when that pair is unclaimed
+     */
     long getSeq(SeqKey key) {
         Long v = seqEntries.get(key);
         return v == null ? NOTHING : v;
     }
 
-    /** Pointwise max-merge of {@code other} into this clock, both claim kinds. */
+    /**
+     * Pointwise max-merge of {@code other} into this clock, both claim kinds.
+     *
+     * @param other the clock to merge in, left unchanged
+     */
     void mergeMax(VectorClock other) {
         other.entries.forEach((c, o) -> entries.merge(c, o, Math::max));
         other.seqEntries.forEach((k, s) -> seqEntries.merge(k, s, Math::max));
     }
 
     /**
-     * True iff this clock's offset entries are pointwise {@code >=} {@code other}'s. Sequence
-     * entries are excluded: their satisfaction is a per-node question (delivered sequence),
-     * answered by the gate, not by clock comparison.
+     * Reports whether this clock's offset entries are pointwise {@code >=} {@code other}'s.
+     *
+     * <p>Sequence entries are excluded. Their satisfaction is a per-node question about the
+     * delivered sequence, answered by the gate rather than by clock comparison.
+     *
+     * @param other the clock to compare against
+     * @return {@code true} when every offset entry of {@code other} is matched or exceeded
      */
     boolean dominates(VectorClock other) {
         for (Map.Entry<Channel, Long> e : other.entries.entrySet()) {
@@ -102,34 +163,61 @@ final class VectorClock {
         return true;
     }
 
-    /** Replaces one sequence claim with an offset claim (normalisation). */
+    /**
+     * Replaces one sequence claim with an offset claim, the normalisation step.
+     *
+     * @param key the sequence claim to replace
+     * @param offset the offset watermark to claim in its place
+     */
     void normalizeSeq(SeqKey key, long offset) {
         seqEntries.remove(key);
         advanceTo(key.channel(), offset);
     }
 
-    /** Drops one sequence claim (when a stronger claim subsumes it). */
+    /**
+     * Drops one sequence claim, for when a stronger claim subsumes it.
+     *
+     * @param key the sequence claim to drop
+     */
     void removeSeq(SeqKey key) {
         seqEntries.remove(key);
     }
 
     /**
      * Drops every offset entry at or below the corresponding watermark in {@code stability}.
-     * Sequence entries are untouched: they are transient by design (normalised away as
-     * deliveries resolve them) and carry no offset to compare against the bound.
+     *
+     * <p>Sequence entries are untouched. They are transient by design, normalised away as
+     * deliveries resolve them, and carry no offset to compare against the bound.
+     *
+     * @param stability the stability bound to truncate against
      */
     void truncateAtOrBelow(VectorClock stability) {
         entries.entrySet().removeIf(e -> e.getValue() <= stability.get(e.getKey()));
     }
 
+    /**
+     * Visits every offset entry, in channel order.
+     *
+     * @param consumer receives each channel and its offset watermark
+     */
     void forEach(BiConsumer<Channel, Long> consumer) {
         entries.forEach(consumer);
     }
 
+    /**
+     * Visits every sequence entry, in channel-then-sender order.
+     *
+     * @param consumer receives each key and its send-sequence watermark
+     */
     void forEachSeq(BiConsumer<SeqKey, Long> consumer) {
         seqEntries.forEach(consumer);
     }
 
+    /**
+     * Returns an independent copy, sharing no mutable state with this clock.
+     *
+     * @return the copy
+     */
     VectorClock copy() {
         VectorClock k = new VectorClock();
         k.entries.putAll(entries);
@@ -137,6 +225,11 @@ final class VectorClock {
         return k;
     }
 
+    /**
+     * Returns the wire form, versioned and sorted so equal clocks are byte-identical.
+     *
+     * @return the serialized clock
+     */
     byte[] serialize() {
         ByteBuffer buf = ByteBuffer.allocate(1 + 4 + entries.size() * 28 + 4 + seqEntries.size() * 44);
         buf.put(WIRE_VERSION);
@@ -160,8 +253,14 @@ final class VectorClock {
     }
 
     /**
-     * @throws CorruptClockException on any malformed input; a present but undecodable clock must
-     *     fail the task, never read as empty (an empty read would silently drop claims).
+     * Reads a clock from its serialized form.
+     *
+     * <p>A present but undecodable clock must fail the task, never read as empty, because an
+     * empty read would silently drop the sender's claims.
+     *
+     * @param bytes the serialized clock
+     * @return the decoded clock
+     * @throws CorruptClockException on any malformed input
      */
     static VectorClock deserialize(byte[] bytes) {
         try {

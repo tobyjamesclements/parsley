@@ -30,26 +30,26 @@ import java.util.UUID;
 import java.util.function.Supplier;
 
 /**
- * One causal processing stage: typed source topics, each handled by pure user logic (a
- * {@link Handler} or, with per-key state, a {@link Fold}), and typed sink topics — with the
- * causal boundary in between. The protocol gates and orders deliveries on the source
- * side; the single stamping site applies the returned emissions on the sink side.
+ * One causal processing stage, with typed source topics, pure user logic, and typed sink
+ * topics.
  *
- * <p>The functional core is the user's half: logic is a pure function from a delivered
- * {@link Message} to emissions (and, for folds, the next state), so it holds no references
- * to any runtime and is unit-testable with plain equality. The imperative edge is this
- * class's half: gating, decoding, state persistence, stamping, partitioning, and the
- * transaction, all inside the stage's adapter.
+ * <p>Each source is handled by a {@link Handler}, or by a {@link Fold} where the stage has
+ * per-key state. The protocol gates and orders deliveries on the source side, and the single
+ * stamping site applies the returned emissions on the sink side.
  *
- * <p>Serialization happens exactly once on each side, inside the stage: inbound bytes are
- * held verbatim while gated and decoded at delivery with the source topic's codecs;
- * emissions are encoded with their topic's codecs at the stamping site, so the clock travels
- * with the exact bytes it claims. Non-Parsley headers of a held record are not carried
- * through delivery.
+ * <p>Logic is a pure function from a delivered {@link Message} to emissions, and for folds to
+ * the next state as well. It holds no reference to any runtime and is unit-testable with plain
+ * equality. Gating, decoding, state persistence, stamping, partitioning and the transaction
+ * all sit inside the stage's adapter.
  *
- * <p>Stages are immutable and compose through {@link Parsley}; a stage corresponds to one
- * Kafka Streams sub-topology, and its name keys its state stores, so the name must stay
- * stable across deployments of the same application.
+ * <p>Serialization happens exactly once on each side. Inbound bytes are held verbatim while
+ * gated, and decoded at delivery with the source topic's codecs. Emissions are encoded with
+ * their topic's codecs at the stamping site, so the clock travels with the exact bytes it
+ * claims. Non-Parsley headers of a held record are not carried through delivery.
+ *
+ * <p>Stages are immutable and compose through {@link Parsley}. A stage corresponds to one
+ * Kafka Streams sub-topology, and its name keys its state stores, so the name must stay stable
+ * across deployments of the same application.
  */
 public final class Stage {
 
@@ -62,14 +62,22 @@ public final class Stage {
     private record StateSpec(Codec<Object> codec, Supplier<Object> initial) {}
 
     /**
-     * The tick declaration: the emission interval and the logic, erased. {@code stateful} is
-     * whether the logic folds over the tick state slot; a {@link TickHandler} on a stateful
-     * stage leaves the slot untouched.
+     * The tick declaration, holding the emission interval and the logic, erased.
+     *
+     * <p>{@code stateful} is whether the logic folds over the tick state slot. A
+     * {@link TickHandler} on a stateful stage leaves the slot untouched.
      */
     private record TickSpec(Duration interval, TickFold<Object> fold, boolean stateful) {}
 
-    /** Creates the per-task broker-offsets view; production uses an admin client. */
+    /** Creates the per-task broker-offsets view. Production uses an admin client. */
     interface BrokerOffsetsProvider {
+        /**
+         * Creates the broker-offsets view for one task.
+         *
+         * @param topicIds resolves topic names to their stable identities
+         * @param sinkTopics the stage's declared sink topics, which the view seeds against
+         * @return the view the node queries end offsets and log starts through
+         */
         BrokerOffsets create(TopicIds topicIds, Set<String> sinkTopics);
     }
 
@@ -93,11 +101,18 @@ public final class Stage {
         this.holdWarningAfter = holdWarningAfter;
     }
 
+    /**
+     * Starts building a stage with the given name.
+     *
+     * @param name the stage name, matching {@code [a-zA-Z0-9-]+}
+     * @return a builder for a stateless stage
+     * @throws IllegalArgumentException if the name does not match
+     */
     public static Builder named(String name) {
         return new Builder(name);
     }
 
-    /** Builds a stateless stage; {@link #state} upgrades it to a stateful one. */
+    /** Builds a stateless stage. {@link #state} upgrades it to a stateful one. */
     public static final class Builder {
         private final String name;
         private final Map<String, Source> sources = new LinkedHashMap<>();
@@ -113,7 +128,16 @@ public final class Stage {
             this.name = name;
         }
 
-        /** Declares a source topic handled by stateless logic. */
+        /**
+         * Declares a source topic handled by stateless logic.
+         *
+         * @param <K> the topic's key type
+         * @param <V> the topic's value type
+         * @param topic the source topic to consume
+         * @param handler the logic to hand each delivered message to
+         * @return this builder, for chaining
+         * @throws IllegalArgumentException if the topic is already a source of this stage
+         */
         @SuppressWarnings("unchecked")
         public <K, V> Builder on(Topic<K, V> topic, Handler<K, V> handler) {
             Fold<Object, Object, Object> erased =
@@ -125,8 +149,15 @@ public final class Stage {
         }
 
         /**
-         * Declares the stage's per-key state: its codec and the initial value a fold sees
-         * for an unseen key. Callable once; sources declared before it stay stateless.
+         * Declares the stage's per-key state: its codec, and the initial value a fold sees for
+         * an unseen key.
+         *
+         * <p>Callable once. Sources declared before it stay stateless.
+         *
+         * @param <S> the stage's per-key state type
+         * @param codec the codec the state is persisted with
+         * @param initial supplies the value a fold sees for an unseen key
+         * @return a builder for the stateful stage
          */
         @SuppressWarnings("unchecked")
         public <S> Stateful<S> state(Codec<S> codec, Supplier<S> initial) {
@@ -134,7 +165,12 @@ public final class Stage {
                     new StateSpec((Codec<Object>) codec, (Supplier<Object>) initial));
         }
 
-        /** Declares sink topics; emissions may only name declared sinks. */
+        /**
+         * Declares sink topics. Emissions may only name declared sinks.
+         *
+         * @param topics the sink topics this stage may emit to
+         * @return this builder, for chaining
+         */
         public Builder into(Topic<?, ?>... topics) {
             for (Topic<?, ?> t : topics) {
                 sinks.put(t.name(), t);
@@ -143,10 +179,18 @@ public final class Stage {
         }
 
         /**
-         * Declares ticks: the runtime emits one stamped record per interval to the stage's
-         * own tick topic ({@code <application.id>-<name>-ticks}, which must exist with the
-         * same partition count as the stage's widest source topic), consumes it back through
-         * the gate, and hands it to {@code logic} as a {@link Tick}. Callable once.
+         * Declares ticks handled by stateless logic. Callable once.
+         *
+         * <p>The runtime emits one stamped record per interval to the stage's own tick topic,
+         * consumes it back through the gate, and hands it to {@code logic} as a {@link Tick}.
+         * That topic is {@code <application.id>-<name>-ticks}, and must exist with the same
+         * partition count as the stage's widest source topic.
+         *
+         * @param interval how often to emit a tick
+         * @param logic the logic to hand each tick to
+         * @return this builder, for chaining
+         * @throws IllegalStateException if ticks are already declared
+         * @throws IllegalArgumentException if {@code interval} is zero or negative
          */
         public Builder ticks(Duration interval, TickHandler logic) {
             this.ticks = statelessTickSpec(interval, logic, ticks);
@@ -164,24 +208,40 @@ public final class Stage {
             return new TickSpec(interval, (s, tick) -> new Step<>(s, logic.onTick(tick)), false);
         }
 
-        /** How often the log-start truncation sweep runs. Default ten minutes. */
+        /**
+         * Sets how often the log-start truncation sweep runs. Defaults to ten minutes.
+         *
+         * @param interval how often to run the sweep
+         * @return this builder, for chaining
+         */
         public Builder truncationInterval(Duration interval) {
             this.truncationInterval = interval;
             return this;
         }
 
         /**
-         * How long a record may gate its channel before the runtime logs a WARN naming the
-         * missing cause. Default thirty seconds; zero or negative disables the warning,
-         * leaving {@link CausalStreams#explainHolds()} and the hold metrics as the interface.
-         * A hold is not an error — the warning says a wait has lasted long enough to be worth
-         * a look, and what to look at.
+         * Sets how long a record may gate its channel before the runtime logs a WARN naming
+         * the missing cause. Defaults to thirty seconds.
+         *
+         * <p>Zero or negative disables the warning, leaving
+         * {@link CausalStreams#explainHolds()} and the hold metrics as the interface. A hold is
+         * not an error. The warning says a wait has lasted long enough to be worth a look, and
+         * names what to look at.
+         *
+         * @param threshold the age at which to warn, zero or negative to disable warnings
+         * @return this builder, for chaining
          */
         public Builder holdWarningAfter(Duration threshold) {
             this.holdWarningAfter = threshold;
             return this;
         }
 
+        /**
+         * Builds the stage.
+         *
+         * @return the composed stage
+         * @throws IllegalStateException if no source is declared
+         */
         public Stage build() {
             if (sources.isEmpty()) throw new IllegalStateException("no sources declared");
             return new Stage(name, sources, sinks, null, ticks, truncationInterval,
@@ -189,7 +249,11 @@ public final class Stage {
         }
     }
 
-    /** Builds a stateful stage: sources may fold over the declared per-key state. */
+    /**
+     * Builds a stateful stage, whose sources may fold over the declared per-key state.
+     *
+     * @param <S> the stage's per-key state type
+     */
     public static final class Stateful<S> {
         private final Builder base;
         private final StateSpec state;
@@ -199,7 +263,16 @@ public final class Stage {
             this.state = state;
         }
 
-        /** Declares a source topic folded over the stage's per-key state. */
+        /**
+         * Declares a source topic folded over the stage's per-key state.
+         *
+         * @param <K> the topic's key type
+         * @param <V> the topic's value type
+         * @param topic the source topic to consume
+         * @param fold the fold to apply to each delivered message
+         * @return this builder, for chaining
+         * @throws IllegalArgumentException if the topic is already a source of this stage
+         */
         @SuppressWarnings("unchecked")
         public <K, V> Stateful<S> on(Topic<K, V> topic, Fold<S, K, V> fold) {
             var erased = (Fold<Object, Object, Object>) fold;
@@ -210,25 +283,48 @@ public final class Stage {
             return this;
         }
 
-        /** Declares a source topic handled by stateless logic; the state is untouched. */
+        /**
+         * Declares a source topic handled by stateless logic, leaving the state untouched.
+         *
+         * @param <K> the topic's key type
+         * @param <V> the topic's value type
+         * @param topic the source topic to consume
+         * @param handler the logic to hand each delivered message to
+         * @return this builder, for chaining
+         * @throws IllegalArgumentException if the topic is already a source of this stage
+         */
         public <K, V> Stateful<S> on(Topic<K, V> topic, Handler<K, V> handler) {
             base.on(topic, handler);
             return this;
         }
 
-        /** Declares sink topics; emissions may only name declared sinks. */
+        /**
+         * Declares sink topics. Emissions may only name declared sinks.
+         *
+         * @param topics the sink topics this stage may emit to
+         * @return this builder, for chaining
+         */
         public Stateful<S> into(Topic<?, ?>... topics) {
             base.into(topics);
             return this;
         }
 
         /**
-         * Declares ticks folded over the stage's tick state: one reserved per-partition slot
-         * of the stage's state type, distinct from every per-key slot. The runtime emits one
-         * stamped record per interval to the stage's own tick topic
-         * ({@code <application.id>-<name>-ticks}, which must exist with the same partition
-         * count as the stage's widest source topic), consumes it back through the gate, and
-         * folds it with {@code logic}. Callable once.
+         * Declares ticks folded over the stage's tick state. Callable once.
+         *
+         * <p>The tick state is one reserved per-partition slot of the stage's state type,
+         * distinct from every per-key slot.
+         *
+         * <p>The runtime emits one stamped record per interval to the stage's own tick topic,
+         * consumes it back through the gate, and folds it with {@code logic}. That topic is
+         * {@code <application.id>-<name>-ticks}, and must exist with the same partition count
+         * as the stage's widest source topic.
+         *
+         * @param interval how often to emit a tick
+         * @param logic the fold to apply to each tick
+         * @return this builder, for chaining
+         * @throws IllegalStateException if ticks are already declared
+         * @throws IllegalArgumentException if {@code interval} is zero or negative
          */
         @SuppressWarnings("unchecked")
         public Stateful<S> ticks(Duration interval, TickFold<S> logic) {
@@ -242,27 +338,50 @@ public final class Stage {
             return this;
         }
 
-        /** Declares ticks handled by stateless logic; the tick state slot is untouched. */
+        /**
+         * Declares ticks handled by stateless logic, leaving the tick state slot untouched.
+         * Otherwise as {@link Builder#ticks(Duration, TickHandler)}.
+         *
+         * @param interval how often to emit a tick
+         * @param logic the logic to hand each tick to
+         * @return this builder, for chaining
+         * @throws IllegalStateException if ticks are already declared
+         * @throws IllegalArgumentException if {@code interval} is zero or negative
+         */
         public Stateful<S> ticks(Duration interval, TickHandler logic) {
             base.ticks(interval, logic);
             return this;
         }
 
-        /** How often the log-start truncation sweep runs. Default ten minutes. */
+        /**
+         * Sets how often the log-start truncation sweep runs. Defaults to ten minutes.
+         *
+         * @param interval how often to run the sweep
+         * @return this builder, for chaining
+         */
         public Stateful<S> truncationInterval(Duration interval) {
             base.truncationInterval(interval);
             return this;
         }
 
         /**
-         * How long a record may gate its channel before the runtime logs a WARN naming the
-         * missing cause. Default thirty seconds; zero or negative disables the warning.
+         * Sets how long a record may gate its channel before the runtime logs a WARN naming
+         * the missing cause. As {@link Builder#holdWarningAfter(Duration)}.
+         *
+         * @param threshold the age at which to warn, zero or negative to disable warnings
+         * @return this builder, for chaining
          */
         public Stateful<S> holdWarningAfter(Duration threshold) {
             base.holdWarningAfter(threshold);
             return this;
         }
 
+        /**
+         * Builds the stage.
+         *
+         * @return the composed stage
+         * @throws IllegalStateException if no source is declared
+         */
         public Stage build() {
             if (base.sources.isEmpty()) throw new IllegalStateException("no sources declared");
             return new Stage(base.name, base.sources, base.sinks, state, base.ticks,
@@ -270,45 +389,82 @@ public final class Stage {
         }
     }
 
+    /**
+     * Returns the stage's name.
+     *
+     * @return the name, which keys the stage's state stores
+     */
     String name() {
         return name;
     }
 
-    /** The declared source topics with their typed declarations; the tick topic is not one. */
+    /**
+     * Returns the declared source topics with their typed declarations. Not the tick topic.
+     *
+     * @return the source topics, keyed by name, in declaration order
+     */
     Map<String, Topic<?, ?>> declaredSources() {
         Map<String, Topic<?, ?>> byName = new LinkedHashMap<>();
         sources.forEach((topic, source) -> byName.put(topic, source.topic()));
         return byName;
     }
 
-    /** The declared sink topics with their typed declarations. */
+    /**
+     * Returns the declared sink topics with their typed declarations.
+     *
+     * @return the sink topics, keyed by name, in declaration order
+     */
     Map<String, Topic<?, ?>> declaredSinks() {
         return sinks;
     }
 
+    /**
+     * Reports whether the stage declared ticks.
+     *
+     * @return {@code true} when a tick interval and logic are declared
+     */
     boolean hasTicks() {
         return ticks != null;
     }
 
+    /**
+     * Returns the declared tick interval. Call only when {@link #hasTicks()} is {@code true}.
+     *
+     * @return how often the runtime emits a tick
+     */
     Duration tickInterval() {
         return ticks.interval();
     }
 
+    /**
+     * Reports whether the stage declared per-key state.
+     *
+     * @return {@code true} when a state codec and initial value are declared
+     */
     boolean stateful() {
         return state != null;
     }
 
     /**
-     * The protocol store's name. Kafka Streams derives its changelog topic as
-     * {@code <application.id>-<store>-changelog}, so a store named for the stage alone puts
-     * the changelog beside every other internal topic of the application when a cluster's
-     * topics are listed in name order.
+     * Returns the protocol store's name.
+     *
+     * <p>Kafka Streams derives its changelog topic as
+     * {@code <application.id>-<store>-changelog}, so a store named for the stage alone puts the
+     * changelog beside every other internal topic of the application when a cluster's topics
+     * are listed in name order.
+     *
+     * @return the protocol store's name
      */
     String protocolStoreName() {
         return name + "-state";
     }
 
-    /** The fold store's name; see {@link #protocolStoreName} for why it is stage-relative. */
+    /**
+     * Returns the fold store's name. See {@link #protocolStoreName} for why it is
+     * stage-relative.
+     *
+     * @return the fold store's name
+     */
     String foldStoreName() {
         return name + "-fold";
     }
@@ -326,16 +482,25 @@ public final class Stage {
     }
 
     /**
-     * The stage's tick topic, qualified by the application it belongs to. Kafka Streams names
-     * the topics it creates {@code <application.id>-<name>-<kind>}; the tick topic is the same
-     * kind of thing — internal to one application, owned by one stage — so it takes the same
+     * Returns the stage's tick topic, qualified by the application it belongs to.
+     *
+     * <p>Kafka Streams names the topics it creates {@code <application.id>-<name>-<kind>}. The
+     * tick topic is internal to one application and owned by one stage, so it takes the same
      * shape and sorts into the same block of a topic listing.
+     *
+     * @param applicationId the application the stage belongs to
+     * @return the tick topic's name
      */
     String tickTopicName(String applicationId) {
         return applicationId + "-" + name + "-ticks";
     }
 
-    /** All topics the stage's source node consumes, the tick topic included when declared. */
+    /**
+     * Returns all topics the source node consumes, the tick topic included when declared.
+     *
+     * @param applicationId the application the stage belongs to, which names the tick topic
+     * @return the topics the source node subscribes to
+     */
     Set<String> sourceTopics(String applicationId) {
         if (ticks == null) return sources.keySet();
         Set<String> all = new HashSet<>(sources.keySet());
@@ -343,16 +508,26 @@ public final class Stage {
         return all;
     }
 
-    /** The channel the test wiring resolves for a topic-partition. */
+    /**
+     * Returns the channel the test wiring resolves for a topic-partition.
+     *
+     * @param topic the topic name, hashed into a synthetic topic identity
+     * @param partition the partition within that topic
+     * @return the synthesized channel, the same one for the same name every time
+     */
     static Channel testChannel(String topic, int partition) {
         return new Channel(UUID.nameUUIDFromBytes(topic.getBytes()), partition);
     }
 
     /**
-     * Broker-less wiring for {@code TopologyTestDriver}: topic identity is synthesized
-     * deterministically, every topic has one partition (the driver's reality), and the offset
-     * queries answer empty — safe precisely because no broker means no prior incarnations to
-     * seed against and nothing to truncate.
+     * Wires the stage broker-less, for {@link Topology} under {@code TopologyTestDriver}.
+     *
+     * <p>Topic identity is synthesized deterministically, every topic has one partition, which
+     * is the driver's reality, and the offset queries answer empty. That is safe precisely
+     * because no broker means no prior incarnations to seed against and nothing to truncate.
+     *
+     * @param t the topology to add this stage's nodes to
+     * @param applicationId the application the stage belongs to
      */
     void addToForTest(Topology t, String applicationId) {
         addTo(t, applicationId, topic -> new TopicIds.Resolved(testChannel(topic, 0).topicId(), 1),
@@ -370,9 +545,17 @@ public final class Stage {
     }
 
     /**
-     * Adds this stage's nodes to a topology with the given wiring. The wiring is captured by
-     * the node suppliers rather than stored on the stage, so a stage is immutable and every
-     * assembled topology is self-contained.
+     * Adds this stage's nodes to a topology with the given wiring.
+     *
+     * <p>The wiring is captured by the node suppliers rather than stored on the stage, so a
+     * stage is immutable and every assembled topology is self-contained.
+     *
+     * @param t the topology to add this stage's nodes to
+     * @param applicationId the application the stage belongs to
+     * @param topicIds resolves topic names to their stable identities
+     * @param brokerOffsets creates each task's broker-offsets view
+     * @param testWired whether the wiring is the broker-less test one, which makes the adapter
+     *         fail closed at the first delivered record under a real cluster
      */
     void addTo(Topology t, String applicationId, TopicIds topicIds,
                BrokerOffsetsProvider brokerOffsets, boolean testWired) {
@@ -419,9 +602,14 @@ public final class Stage {
     /**
      * The deterministic partition function shared by the stamping site and the sink
      * partitioner: producer-default murmur2 for keyed records, partition zero for null keys.
-     * The producer's sticky partitioning is nondeterministic, and the stamp must know the
-     * destination channel before the send, so both sites recompute this function — they must
+     *
+     * <p>The producer's sticky partitioning is nondeterministic, and the stamp must know the
+     * destination channel before the send, so both sites recompute this function. They must
      * agree byte for byte.
+     *
+     * @param key the encoded record key, or null
+     * @param numPartitions the destination topic's partition count
+     * @return the partition the record will land on
      */
     static int partitionFor(byte[] key, int numPartitions) {
         if (key == null) return 0;
@@ -430,15 +618,17 @@ public final class Stage {
     }
 
     /**
-     * Whether a gating head warrants its warning now: the threshold is enabled and elapsed,
-     * and this exact head has not been warned about already. One hold warns once — a warning
-     * per punctuator tick would bury the diagnosis it is trying to surface — and a new head on
-     * the same channel is a new hold, so it warns again.
+     * Reports whether a gating head warrants its warning now, meaning the threshold is enabled
+     * and elapsed, and this exact head has not been warned about already.
+     *
+     * <p>One hold warns once. A warning per punctuator tick would bury the diagnosis it is
+     * trying to surface. A new head on the same channel is a new hold, so it warns again.
      *
      * @param threshold the stage's configured age, zero or negative to disable warnings
      * @param heldMs how long the head has gated its channel
      * @param warnedOffset the head offset already warned about on this channel, or null
      * @param headOffset the current head's offset
+     * @return {@code true} when this head should warn now
      */
     static boolean shouldWarn(Duration threshold, long heldMs, Long warnedOffset, long headOffset) {
         if (threshold.isZero() || threshold.isNegative()) return false;
@@ -447,9 +637,14 @@ public final class Stage {
     }
 
     /**
-     * Decodes a tick record's destination partition from its key: the emitting task's own
-     * partition as a big-endian int, written at the stamping site so the sink partitioner
-     * lands the tick back on the emitting task's channel.
+     * Decodes a tick record's destination partition from its key.
+     *
+     * <p>The key is the emitting task's own partition as a big-endian int, written at the
+     * stamping site so the sink partitioner lands the tick back on the emitting task's channel.
+     *
+     * @param key the tick record's key
+     * @return the partition the tick belongs to
+     * @throws IllegalStateException if the key is null or not four bytes
      */
     static int tickPartition(byte[] key) {
         if (key == null || key.length != 4) {
@@ -641,8 +836,10 @@ public final class Stage {
         /**
          * Snapshots why each gating head is waiting, publishes it for
          * {@link CausalStreams#explainHolds()}, and warns once per head that outlives the
-         * stage's threshold. Built on the stream thread from the node's read-only observation
-         * surface; the published list is immutable and payload-free.
+         * stage's threshold.
+         *
+         * <p>Built on the stream thread from the node's read-only observation surface. The
+         * published list is immutable and payload-free.
          */
         private void publishHolds() {
             List<CausalNode.HeadHold> heads = node.explainHeads();
@@ -688,9 +885,11 @@ public final class Stage {
         }
 
         /**
-         * Warns once per head that has gated its channel for longer than the threshold. A
-         * hold is not an error and the gate is not misbehaving, so this is WARN and not ERROR:
-         * it says a wait has lasted long enough to be worth a look, and names what to look at.
+         * Warns once per head that has gated its channel for longer than the threshold.
+         *
+         * <p>A hold is not an error and the gate is not misbehaving, so this is WARN and not
+         * ERROR. It says a wait has lasted long enough to be worth a look, and names what to
+         * look at.
          */
         private void warnIfOverdue(Channel channel, HeldRecord record) {
             if (!shouldWarn(holdWarningAfter, record.heldMs(), warnedHeads.get(channel),
@@ -717,10 +916,12 @@ public final class Stage {
         }
 
         /**
-         * Emits one tick: stamped at the existing door with the task's current clock (a
-         * consistent cut of its consumed history) and forwarded to the tick sink, which
-         * routes it back to this task's own partition via the key. The record commits with
-         * the current transaction and returns through the gate like any other record.
+         * Emits one tick, stamped at the existing door with the task's current clock and
+         * forwarded to the tick sink.
+         *
+         * <p>That clock is a consistent cut of the task's consumed history. The sink routes
+         * the tick back to this task's own partition via the key. The record commits with the
+         * current transaction and returns through the gate like any other record.
          */
         private void emitTick(long ts) {
             var headers = new RecordHeaders();
@@ -753,9 +954,11 @@ public final class Stage {
         }
 
         /**
-         * Applies one fold step: resolve the key's state (initial when absent), apply, persist.
-         * The state key is the inbound key's encoded bytes prefixed with a presence byte, so a
-         * null key folds under its own state without colliding with an empty key.
+         * Applies one fold step: resolve the key's state, initial when absent, then apply,
+         * then persist.
+         *
+         * <p>The state key is the inbound key's encoded bytes prefixed with a presence byte, so
+         * a null key folds under its own state without colliding with an empty key.
          */
         private Step<Object> foldOverState(Source source, byte[] rawKey, Message<Object, Object> message) {
             Bytes stateKey = stateKey(rawKey);
@@ -782,8 +985,8 @@ public final class Stage {
         private static final Bytes TICK_STATE_KEY = Bytes.wrap(new byte[] {2});
 
         /**
-         * Delivers one tick to the stage's tick logic; a stateful tick fold steps the
-         * reserved per-partition slot exactly as a key fold steps its key's state.
+         * Delivers one tick to the stage's tick logic. A stateful tick fold steps the reserved
+         * per-partition slot exactly as a key fold steps its key's state.
          */
         private void deliverTick(Delivery d) {
             Tick tick = new Tick(d.timestamp());
@@ -806,9 +1009,10 @@ public final class Stage {
         }
 
         /**
-         * The stamping door: encode with the emission's topic codecs, partition
-         * deterministically, stamp, and forward to the declared sink node. Emissions to
-         * undeclared sinks fail loudly.
+         * The single stamping site. Encodes with the emission's topic codecs, partitions
+         * deterministically, stamps, and forwards to the declared sink node.
+         *
+         * <p>An emission to an undeclared sink fails loudly.
          */
         @SuppressWarnings("unchecked")
         private void apply(Emission emission, long deliveredTimestamp) {

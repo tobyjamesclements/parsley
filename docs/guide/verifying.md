@@ -27,16 +27,21 @@ void applicationMeetsTheContract(@TempDir Path stateDir) {
 ```
 
 `assertOk()` throws with every failure at once, each finding naming the probe, what it
-observed, and the contract clause it checks:
+observed, and the contract clause it checks. A finding names its clause as the Javadoc element
+that states it, so the pointer stays valid however this site is arranged:
 
 | Probe | Checks | Clause |
 |---|---|---|
-| `key-codec` | Key codecs are deterministic and canonical on the samples: encode twice agrees, decode-then-encode returns the same bytes. The encoded bytes choose the partition and key the fold state. | [Key codecs are identity](codecs.md#key-codecs-are-identity) |
-| `stamps` | Every record observed on a sink carries parseable `vc`, `vc-sender`, `vc-seq` headers. | [Stamps](expectations.md#what-parsley-expects-of-you) |
-| `sink-decode` | Every observed output decodes with its sink topic's own codecs — the bytes the next hop's consumer will decode. | [Codecs](codecs.md) |
-| `declared-sinks` | No handler path emits to an undeclared sink. | [Logic](expectations.md#what-parsley-expects-of-you) |
-| `logic` | Handlers and folds are total on their samples — a throwing handler is a finding, not a stack trace to reverse-engineer. | [Error handling](error-handling.md) |
-| `samples` | Every sample names a topic some stage consumes — a misconfigured probe run fails, it does not silently pass. | [Topics](expectations.md#what-parsley-expects-of-you) |
+| `key-codec` | Key codecs are deterministic and canonical on the samples: encode twice agrees, decode-then-encode returns the same bytes. The encoded bytes choose the partition and key the fold state. | [`Topic#of`](codecs.md#key-codecs-are-identity) |
+| `stamps` | Every record observed on a sink carries parseable `vc`, `vc-sender`, `vc-seq` headers. | [`CausalClock`](clients.md) |
+| `sink-decode` | Every observed output decodes with its sink topic's own codecs — the bytes the next hop's consumer will decode. | [`Codec`](codecs.md) |
+| `declared-sinks` | No handler path emits to an undeclared sink. | [`Handler`](expectations.md#what-parsley-expects-of-you) |
+| `logic` | Handlers and folds are total on their samples — a throwing handler is a finding, not a stack trace to reverse-engineer. | [`Handler`](error-handling.md) |
+| `samples` | Every sample names a topic some stage consumes — a misconfigured probe run fails, it does not silently pass. | [`Parsley`](expectations.md#what-parsley-expects-of-you) |
+| `topic-exists` | Every declared source, sink and tick topic resolves on the cluster. | [`Parsley`](expectations.md#what-parsley-expects-of-you) |
+| `co-partition` | A stage's sources agree on partition count. | [`Stage`](expectations.md#what-parsley-expects-of-you) |
+| `tick-topic` | A stage's tick topic carries exactly the partition count of its widest source. | [`Stage.Builder#ticks`](ticks.md) |
+| `names` | The store names each stage pins, which must stay stable across deployments. | [`Parsley#named`](expectations.md#what-parsley-expects-of-you) |
 
 Findings that are gaps rather than violations arrive as **notes**: a source topic with no
 sample (its handler path went unexercised), a declared sink no sample reached, the tick

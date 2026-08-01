@@ -19,14 +19,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * The compatibility surface, pinned to literal bytes and literal names.
  *
  * <p>Every other serialization test round-trips through this same implementation, so a
- * coordinated change to both sides — a version bump, a reordered field, a renamed header —
- * passes them all while breaking interoperability with every other Parsley application. These
- * assertions are deliberately redundant with {@code docs/reference/wire-format.md}: the
+ * coordinated change to both sides, such as a version bump, a reordered field or a renamed
+ * header, passes them all while breaking interoperability with every other Parsley
+ * application. These assertions are deliberately redundant with the wire-format reference. The
  * document is the contract, and this test is what makes changing the contract a decision rather
  * than an accident.
  *
  * <p>If one of these fails, the fix is almost never to update the expected bytes. It is to
- * restore the layout — or, if the change is intended, to bump the version, update the document,
+ * restore the layout, or, if the change is intended, to bump the version, update the document,
  * and treat every deployed application as needing migration.
  */
 class WireFormatTest {
@@ -62,8 +62,8 @@ class WireFormatTest {
     @Test
     void clockSerializesToTheDocumentedBytes() {
         assertEquals(CLOCK_HEX, HEX.formatHex(goldenClock().serialize()).toUpperCase(),
-                "the clock's byte layout is the cross-application contract; see"
-                        + " docs/reference/wire-format.md");
+                "the clock's byte layout is the cross-application contract; see the"
+                        + " wire-format reference");
     }
 
     /** Those same bytes decode back to the same clock, so the reader is pinned too. */
@@ -91,7 +91,7 @@ class WireFormatTest {
                 "an empty clock still has both section counts on the wire");
     }
 
-    /** The header names are part of the contract; other applications match on these literals. */
+    /** The header names are part of the contract, and other applications match these literals. */
     @Test
     void headerNamesAreTheDocumentedLiterals() {
         assertEquals("vc", CausalHeaders.CLOCK, "the clock header name is part of the wire format");
@@ -160,7 +160,7 @@ class WireFormatTest {
     // on disk — the frontier reads as absent and every record above it is delivered twice.
     // Every other test of these layouts writes and reads through one implementation, so a
     // coordinated change passes them all; these assertions are what make the change a
-    // decision. They mirror docs/reference/wire-format.md#state-store-keys.
+    // decision. They mirror the state-store key layout in the wire-format reference.
 
     /** A second consumed channel, so a record can be gated by an unmet claim on it. */
     private static final UUID CAUSE_TOPIC = new UUID(0x2122232425262728L, 0x292A2B2C2D2E2F30L);
@@ -175,7 +175,7 @@ class WireFormatTest {
 
     /**
      * One held record: offset 1, sender-tagged, a one-entry dependency clock, a two-byte key
-     * and a one-byte value — every field of docs/reference/wire-format.md#held-record.
+     * and a one-byte value, which is every field of the held-record layout.
      */
     private static final String HELD_HEX =
             "0000000000000001"                      // offset 1
@@ -267,8 +267,8 @@ class WireFormatTest {
                         "ds/" + CHANNEL_KEY + "/11121314-1516-1718-191a-1b1c1d1e1f20"),
                 storeAfterOneOfEverything().map.keySet(),
                 "the state-store key layout is what lets the next version of an application"
-                        + " read the state this one committed; see"
-                        + " docs/reference/wire-format.md#state-store-keys");
+                        + " read the state this one committed; see the state-store key layout"
+                        + " in the wire-format reference");
     }
 
     /** A channel's text form in a key is the topic UUID, a colon, and the partition. */
@@ -299,8 +299,8 @@ class WireFormatTest {
     void heldRecordSerializesToTheDocumentedBytes() {
         byte[] held = storeAfterOneOfEverything().map.get("q/" + CHANNEL_KEY + "/e/0000000000000001");
         assertEquals(HELD_HEX, HEX.formatHex(held).toUpperCase(),
-                "the held-record envelope is what a restart reads back; see"
-                        + " docs/reference/wire-format.md#held-record");
+                "the held-record envelope is what a restart reads back; see the held-record"
+                        + " layout in the wire-format reference");
     }
 
     /**

@@ -33,7 +33,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Adapter smoke tests under TopologyTestDriver, driven the way a user would: typed topics,
  * pure handlers and folds, the broker-less {@code Parsley.testTopology()} wiring. Protocol
- * correctness under concurrency, crashes, and EOS lives in the simulator suite — TTD is
+ * correctness under concurrency, crashes, and EOS lives in the simulator suite, since TTD is
  * single-threaded and transactionless, so these tests only assert the adapter's plumbing.
  */
 class StageTest {
@@ -234,7 +234,7 @@ class StageTest {
         }
     }
 
-    /** A stateful stage mixes fold and handler sources; handlers leave the state untouched. */
+    /** A stateful stage mixes fold and handler sources, and handlers leave the state alone. */
     @Test
     void statefulStageMixesFoldAndHandlerSources() {
         Stage mix = Stage.named("mix")
@@ -365,9 +365,9 @@ class StageTest {
 
     /**
      * A poll's post-poll position runs ahead of returned records the task has not yet
-     * processed; the sweep must withhold that position until the whole batch is fed. Applied
-     * early, the frontier jumps the buffered records and they are dropped as replays — lost,
-     * with their offsets committed.
+     * processed, so the sweep must withhold that position until the whole batch is fed.
+     * Applied early, the frontier jumps the buffered records and they are dropped as replays,
+     * lost with their offsets committed.
      */
     @Test
     void positionSweepWaitsForBufferedRecordsOfTheBatch() {
@@ -393,7 +393,7 @@ class StageTest {
         }
     }
 
-    /** The value of the parsley metric {@code name}; the task-level one when {@code topic} is null. */
+    /** The value of the parsley metric {@code name}, task-level when {@code topic} is null. */
     private static double parsleyMetric(TopologyTestDriver driver, String name, String topic) {
         List<Double> matches = driver.metrics().entrySet().stream()
                 .filter(e -> e.getKey().group().equals(StageMetrics.GROUP))
@@ -463,8 +463,8 @@ class StageTest {
 
     /**
      * The broker-less test wiring's truncation sweep is a working no-op, not a failing one. Its
-     * offset queries answer empty because there is no broker and so nothing to truncate; if they
-     * answered with anything the sweep cannot read, every application's own
+     * offset queries answer empty because there is no broker and so nothing to truncate. If
+     * they answered with anything the sweep cannot read, every application's own
      * {@code testTopology()} tests would silently log a warning and count a skipped sweep on
      * every cycle.
      */
@@ -519,7 +519,7 @@ class StageTest {
 
     /**
      * A tick is emitted at the interval as a stamped record on the stage's own tick topic,
-     * loops back through the gate, and is delivered to the tick logic — whose emissions land
+     * loops back through the gate, and is delivered to the tick logic, whose emissions land
      * on the declared sink. The tick record's stamp claims the task's delivered history.
      */
     @Test
@@ -608,7 +608,7 @@ class StageTest {
 
     /**
      * A tick's stamp merges claims advertised by held records, so a tick emitted while a
-     * record is held on an unresolved dependency is itself gated — delay-only — and released
+     * record is held on an unresolved dependency is itself gated, delay-only, and released
      * in causal order once the dependency arrives.
      */
     @Test

@@ -20,8 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 /**
  * The position-capture edge: the thread-local map the adapter reads, and the consumer proxy
- * that fills it after each poll. The proxy is driven with Kafka's {@code MockConsumer}; no
- * broker is involved.
+ * that fills it after each poll. The proxy is driven with Kafka's {@code MockConsumer}, with
+ * no broker involved.
  */
 class PositionsTest {
 
@@ -115,7 +115,7 @@ class PositionsTest {
                 "only a completed poll may record positions");
     }
 
-    /** The supplier builds all five client kinds; only the main consumer is wrapped. */
+    /** The supplier builds all five client kinds, and only the main consumer is wrapped. */
     @Test
     void supplierBuildsAllClientKinds() {
         KafkaClientSupplier supplier = Positions.capturingClientSupplier();

@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * minimum supported version: end offsets reflect what the broker has assigned, log starts
  * reflect what retention has deleted, and a deleted topic's channels are reported as
  * definitively absent by topic ID even when a topic of the same name exists again. The
- * simulator asserts what the protocol does with these answers; this suite asserts that a
+ * simulator asserts what the protocol does with these answers. This suite asserts that a
  * real cluster gives them.
  */
 @Testcontainers

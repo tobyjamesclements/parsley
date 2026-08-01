@@ -37,8 +37,11 @@ that show the gap:
 stage 'reconciler' task 0_3 has held views:3@8814 for 47000ms (queue depth 219):
 vc-hold-not-fetched waiting on commands:3 offset 51204 (local frontier 51199, position 51200)
 — the cause has not reached this consumer yet; check lag on that topic
-— see docs/guide/diagnosing-holds.md#the-cause-has-not-arrived
+— see HeldRecord.Diagnosis#NOT_FETCHED
 ```
+
+The line ends with the `HeldRecord.Diagnosis` constant that names the case. Its Javadoc states
+the condition and the action; the section below expands each one.
 
 Only queue heads appear. Holding is head-of-line blocking by design, so the head is the whole
 story: the 219 records behind it wait on it, not on causes of their own.
@@ -74,8 +77,9 @@ route logs by pattern; the codes are stable.
 
 ### The cause has not arrived
 
-`vc-hold-not-fetched` — the claimed record has not been fetched by this consumer yet. The
-local position is at or below the claimed offset, so the record is genuinely still in flight.
+`vc-hold-not-fetched` (`HeldRecord.Diagnosis#NOT_FETCHED`) — the claimed record has not been
+fetched by this consumer yet. The local position is at or below the claimed offset, so the
+record is genuinely still in flight.
 
 This is the ordinary case and it usually resolves itself. Look at the *cause* topic: consumer
 lag on it, whether its producer is healthy, and whether the producing stage is itself stalled.
@@ -84,8 +88,9 @@ has stopped makes one that does not.
 
 ### The cause is itself held
 
-`vc-hold-held-upstream` — the claimed record has been fetched here but not delivered, so it
-is sitting in its own channel's hold queue behind that channel's head.
+`vc-hold-held-upstream` (`HeldRecord.Diagnosis#HELD_UPSTREAM`) — the claimed record has been
+fetched here but not delivered, so it is sitting in its own channel's hold queue behind that
+channel's head.
 
 Follow the chain: that channel's head appears in the same report, with its own unmet causes.
 Holds compose, and the useful end of the chain is the one record whose cause has not arrived
@@ -93,9 +98,9 @@ at all. Fix that one and the whole chain drains.
 
 ### No record from that sender
 
-`vc-hold-sender-unseen` — a sequence claim naming a sender this task has never delivered on
-that channel. Sequence claims are how a stamp names the sender's own just-issued sends, whose
-offsets the broker has not yet assigned.
+`vc-hold-sender-unseen` (`HeldRecord.Diagnosis#SENDER_UNSEEN`) — a sequence claim naming a
+sender this task has never delivered on that channel. Sequence claims are how a stamp names
+the sender's own just-issued sends, whose offsets the broker has not yet assigned.
 
 Usually this is transient: the sender's record is on its way. If it persists and the sender
 never writes that partition again, this is the documented
@@ -105,8 +110,9 @@ Baseline late joiners at the last stable offset rather than the log end.
 
 ### The sender's later records are behind
 
-`vc-hold-sender-behind` — a sequence claim ahead of what this task has delivered from that
-sender. The sender's later records are in flight, or their transaction has not committed.
+`vc-hold-sender-behind` (`HeldRecord.Diagnosis#SENDER_BEHIND`) — a sequence claim ahead of
+what this task has delivered from that sender. The sender's later records are in flight, or
+their transaction has not committed.
 
 Under `read_committed`, records of an open transaction are invisible until it commits, so a
 long-running or stuck producer transaction shows up exactly here. Check the sender's commit

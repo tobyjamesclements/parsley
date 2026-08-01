@@ -15,10 +15,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class OracleSelfTest {
 
     /**
-     * Diamond race: an edge producer feeds t1; stage A forwards t1 into t2; a broken stage C
-     * consumes both t1 and t2 eagerly. On any schedule where C polls a t2 record before its t1
+     * Diamond race: an edge producer feeds t1, stage A forwards t1 into t2, and a broken stage
+     * C consumes both t1 and t2 eagerly. On any schedule where C polls a t2 record before its t1
      * cause, the oracle must flag the delivery. Across 40 seeds at least one such schedule must
-     * occur (in practice most do).
+     * occur, and in practice most do.
      */
     @Test
     void eagerDeliveryIsCaughtByTheOracle() {

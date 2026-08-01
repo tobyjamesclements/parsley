@@ -10,21 +10,41 @@ import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 
 /**
- * Resolves topic names to their stable Kafka UUIDs — the identity half of a causal channel.
- * Production code uses {@link #fromAdmin}; {@code testTopology()} synthesizes a resolver.
+ * Resolves topic names to their stable Kafka UUIDs, the identity half of a causal channel.
+ *
+ * <p>Production code uses {@link #fromAdmin}. The broker-less test wiring synthesizes a
+ * resolver instead.
  */
 interface TopicIds {
 
     /**
+     * Resolves one topic name.
+     *
+     * <p>Resolution is strict, because starting with identity unresolved would bind
+     * coordinates to nothing.
+     *
+     * @param topic the topic name to resolve
      * @return the topic's UUID and partition count
-     * @throws IllegalStateException when the topic cannot be resolved — strict, because
-     *     starting with identity unresolved would bind coordinates to nothing
+     * @throws IllegalStateException when the topic cannot be resolved
      */
     Resolved resolve(String topic);
 
+    /**
+     * One topic's resolved identity.
+     *
+     * @param id the topic's stable UUID, as the broker assigns it
+     * @param partitions how many partitions the topic has
+     */
     record Resolved(UUID id, int partitions) {}
 
-    /** Resolves through a Kafka admin client, caching per name for the resolver's lifetime. */
+    /**
+     * Returns a resolver backed by a Kafka admin client, caching per name for its lifetime.
+     *
+     * <p>Not thread-safe. Use one resolver per thread.
+     *
+     * @param admin the admin client to describe topics through, owned by the caller
+     * @return the caching resolver
+     */
     static TopicIds fromAdmin(Admin admin) {
         Map<String, Resolved> cache = new HashMap<>();
         return topic -> cache.computeIfAbsent(topic, t -> {

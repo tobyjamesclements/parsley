@@ -92,7 +92,7 @@ class KafkaStateStoreTest {
 
     /**
      * A one-character prefix is scanned like any other. Its exclusive upper bound is its single
-     * byte incremented, which exists; only the empty prefix has no bound at all, and rejecting
+     * byte incremented, which exists. Only the empty prefix has no bound at all, and rejecting
      * anything shorter than two bytes would refuse a legal scan.
      */
     @Test

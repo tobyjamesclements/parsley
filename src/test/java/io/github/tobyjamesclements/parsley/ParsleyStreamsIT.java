@@ -40,7 +40,7 @@ import static org.junit.jupiter.api.Assertions.fail;
  * The production runtime end to end on a real broker: {@link Parsley#streams} under
  * exactly-once, records stamped on the wire with parseable protocol headers, and a restart
  * of the same application resuming without loss or duplication. The suite proves the
- * assembled plumbing works against a live cluster; causal-order correctness stays the
+ * assembled plumbing works against a live cluster. Causal-order correctness stays the
  * simulator's obligation.
  */
 @Testcontainers
@@ -126,8 +126,8 @@ class ParsleyStreamsIT {
     /**
      * A restart of the same application on the same state directory resumes cleanly: the
      * record processed before the stop is not emitted again, and a record produced after the
-     * restart flows through. The deep crash-recovery obligations stay with the simulator;
-     * this is the live-cluster init path (restore, end-offset seed) actually running.
+     * restart flows through. The deep crash-recovery obligations stay with the simulator.
+     * This is the live-cluster init path, restore and end-offset seed, actually running.
      */
     @Test
     void restartResumesWithoutLossOrDuplication() throws Exception {
@@ -164,11 +164,11 @@ class ParsleyStreamsIT {
     /**
      * A task migrating between two live instances of one application keeps the guarantee. Each
      * source partition's records come out exactly once in produced order across two
-     * rebalances — a task moving from the first instance to the second, and moving back when
-     * the first stops — and carry the same sender identity on the new host as on the old.
+     * rebalances, a task moving from the first instance to the second and moving back when the
+     * first stops, and carry the same sender identity on the new host as on the old.
      *
      * <p>Sender identity is derived from the application id, the stage name, and the partition
-     * rather than from the incarnation, precisely so it survives a move; a migration that reset
+     * rather than from the incarnation, precisely so it survives a move. A migration that reset
      * it, or that lost the causal state the changelog carries, would break claim resolution at
      * every downstream consumer. The rebalances are asserted rather than assumed: each phase
      * waits for the assignment to actually move, so a test that silently never migrated fails

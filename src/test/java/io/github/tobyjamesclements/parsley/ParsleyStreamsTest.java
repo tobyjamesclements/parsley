@@ -45,7 +45,7 @@ class ParsleyStreamsTest {
 
     /**
      * Live admin-client threads. A {@code KafkaAdminClient} starts one in its constructor and
-     * joins it in {@code close()}, so this counts open admin clients — the only handle a test
+     * joins it in {@code close()}, so this counts open admin clients, the only handle a test
      * has on a client the runtime deliberately does not expose. An assembled runtime accounts
      * for two: the one Parsley opens to resolve topic identity and owns, and the one Kafka
      * Streams builds for itself through the client supplier.
@@ -88,7 +88,7 @@ class ParsleyStreamsTest {
     /**
      * The composition's application id wins, and properties that name a different one are
      * rejected rather than silently obeyed. The id names the state stores, their changelog
-     * topics and the tick topics; running under another one would consume tick topics nobody
+     * topics and the tick topics. Running under another one would consume tick topics nobody
      * writes to and restore from changelogs nobody wrote. Properties that omit it are filled
      * in, since there is only one right answer.
      */
@@ -111,7 +111,7 @@ class ParsleyStreamsTest {
         }
     }
 
-    /** Close stops the runtime; the bounded form reports completion. */
+    /** Close stops the runtime, and the bounded form reports completion. */
     @Test
     void closeStopsTheRuntime() {
         CausalStreams streams = parsley().streams(props());

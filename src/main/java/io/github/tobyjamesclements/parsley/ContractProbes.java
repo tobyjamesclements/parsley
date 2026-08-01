@@ -21,46 +21,50 @@ import java.util.Properties;
 import java.util.TreeMap;
 
 /**
- * Executable checks for the application contract (docs/guide/expectations.md): every clause
- * that is mechanically checkable runs in the application's own test suite, before deploy,
- * instead of being remembered. The docs describe; this class verifies. Runtime fail-closed
- * checks are unaffected — probes move discovery earlier, they replace nothing.
+ * Executable checks for the application contract.
+ *
+ * <p>Every mechanically checkable clause runs in the application's own test suite, before
+ * deploy. Runtime fail-closed checks are unaffected. Probes move discovery earlier and replace
+ * nothing.
  *
  * <p>{@link #probe(Parsley, Samples, Path)} drives the application's own
- * {@link Parsley#testTopology()} under {@code TopologyTestDriver} (broker-less; requires
- * {@code kafka-streams-test-utils} on the test classpath, an optional dependency of this
- * library) with caller-supplied sample records, and checks what the driver can see: key
- * codecs canonical on the samples, every observed output stamped with parseable causal
- * headers and decodable by its topic's declared codecs, handlers total on their samples, and
- * emissions confined to declared sinks. {@link #probeCluster(Parsley, Admin)} checks what
- * only a live cluster can answer: declared topics exist, a stage's sources agree on
- * partition count (the mechanical half of co-partitioning), and tick topics carry exactly
- * the partition count of the stage's widest source.
+ * {@link Parsley#testTopology()} under {@link TopologyTestDriver} with caller-supplied sample
+ * records, and checks what the driver can see: key codecs canonical on the samples, every
+ * observed output stamped with parseable causal headers and decodable by its topic's declared
+ * codecs, handlers total on their samples, and emissions confined to declared sinks. It runs
+ * broker-less, and needs {@code kafka-streams-test-utils} on the test classpath, an optional
+ * dependency of this library.
  *
- * <p>A {@link Report} separates failures — observed contract violations, each naming the
- * violated clause — from notes, which record coverage gaps (an unsampled source, a sink no
- * sample reached) and the names the deployment must keep stable. A probe run with notes and
- * no failures passed, with stated blind spots.
+ * <p>{@link #probeCluster(Parsley, Admin)} checks what only a live cluster can answer:
+ * declared topics exist, a stage's sources agree on partition count, which is the mechanical
+ * half of co-partitioning, and tick topics carry exactly the partition count of the stage's
+ * widest source.
+ *
+ * <p>A {@link Report} separates failures from notes. Failures are observed contract
+ * violations, each naming the violated clause. Notes record coverage gaps, such as an
+ * unsampled source or a sink no sample reached, and the names the deployment must keep stable.
+ * A probe run with notes and no failures passed, with stated blind spots.
  */
 public final class ContractProbes {
 
-    private static final String CLAUSE_STAMPS =
-            "docs/guide/expectations.md#what-parsley-expects-of-you (Stamps)";
-    private static final String CLAUSE_TOPICS =
-            "docs/guide/expectations.md#what-parsley-expects-of-you (Topics)";
-    private static final String CLAUSE_KEYS = "docs/guide/codecs.md#key-codecs-are-identity";
-    private static final String CLAUSE_COPARTITION =
-            "docs/guide/expectations.md#what-parsley-expects-of-you (Keys and partitioning)";
-    private static final String CLAUSE_LOGIC =
-            "docs/guide/expectations.md#what-parsley-expects-of-you (Logic)";
-    private static final String CLAUSE_NAMES =
-            "docs/guide/expectations.md#what-parsley-expects-of-you (Names)";
-    private static final String CLAUSE_CODECS = "docs/guide/codecs.md";
-    private static final String CLAUSE_TICKS = "docs/guide/ticks.md";
+    private static final String CLAUSE_STAMPS = "CausalClock";
+    private static final String CLAUSE_TOPICS = "Parsley";
+    private static final String CLAUSE_KEYS = "Topic#of";
+    private static final String CLAUSE_COPARTITION = "Stage";
+    private static final String CLAUSE_LOGIC = "Handler";
+    private static final String CLAUSE_NAMES = "Parsley#named";
+    private static final String CLAUSE_CODECS = "Codec";
+    private static final String CLAUSE_TICKS = "Stage.Builder#ticks";
 
     private ContractProbes() {}
 
-    /** One probe result: which probe, what it observed, and the contract clause it checks. */
+    /**
+     * Reports one probe result.
+     *
+     * @param probe the name of the probe that produced it
+     * @param detail what the probe observed, and what to do about it
+     * @param clause the Javadoc element that states the contract clause being checked
+     */
     public record Finding(String probe, String detail, String clause) {
 
         @Override
@@ -70,9 +74,11 @@ public final class ContractProbes {
     }
 
     /**
-     * Sample records for {@link #probe}: at least one per source topic, so every handler path
-     * is exercised. Keys and values are typed against the topic at the call site and encoded
-     * with the topic's own codecs when piped.
+     * Collects the sample records {@link #probe} pipes through the topology.
+     *
+     * <p>Supply at least one per source topic, so that every handler path is exercised. Keys
+     * and values are typed against the topic at the call site, and encoded with the topic's
+     * own codecs when piped.
      */
     public static final class Samples {
 
@@ -82,11 +88,25 @@ public final class ContractProbes {
 
         private Samples() {}
 
+        /**
+         * Returns an empty sample collection.
+         *
+         * @return an empty collection, to add samples to with {@link #on}
+         */
         public static Samples of() {
             return new Samples();
         }
 
-        /** Adds one sample record for {@code topic}. Null keys and values are allowed. */
+        /**
+         * Adds one sample record for {@code topic}. Null keys and values are allowed.
+         *
+         * @param <K> the topic's key type
+         * @param <V> the topic's value type
+         * @param topic the source topic to pipe the sample into
+         * @param key the sample key, or null
+         * @param value the sample value, or null
+         * @return this collection, for chaining
+         */
         @SuppressWarnings("unchecked")
         public <K, V> Samples on(Topic<K, V> topic, K key, V value) {
             entries.add(new Entry((Topic<Object, Object>) topic, key, value));
@@ -94,7 +114,7 @@ public final class ContractProbes {
         }
     }
 
-    /** The outcome of a probe run: failures to act on, notes to read. */
+    /** Holds the outcome of a probe run: failures to act on, notes to read. */
     public static final class Report {
 
         private final List<Finding> failures;
@@ -105,21 +125,38 @@ public final class ContractProbes {
             this.notes = Collections.unmodifiableList(notes);
         }
 
-        /** Observed contract violations; empty when the probes passed. */
+        /**
+         * Returns the observed contract violations, empty when the probes passed.
+         *
+         * @return the failures, in the order the probes found them
+         */
         public List<Finding> failures() {
             return failures;
         }
 
-        /** Coverage gaps and stability manifests; never failures. */
+        /**
+         * Returns the coverage gaps and stability manifests. Never failures.
+         *
+         * @return the notes, in the order the probes found them
+         */
         public List<Finding> notes() {
             return notes;
         }
 
+        /**
+         * Reports whether the probes found no failure.
+         *
+         * @return {@code true} when there are no failures, whatever the notes say
+         */
         public boolean ok() {
             return failures.isEmpty();
         }
 
-        /** Throws an {@link AssertionError} listing every failure; passes silently when ok. */
+        /**
+         * Asserts that the probes found no failure. Returns silently when they found none.
+         *
+         * @throws AssertionError if there is any failure, listing every one of them
+         */
         public void assertOk() {
             if (!failures.isEmpty()) {
                 throw new AssertionError(this);
@@ -138,9 +175,15 @@ public final class ContractProbes {
     }
 
     /**
-     * Runs the test-time probes against the application's own topology. {@code stateDir}
-     * backs the driver's state stores; pass a per-test temporary directory (a shared
-     * directory contends on one RocksDB lock).
+     * Runs the test-time probes against the application's own topology.
+     *
+     * <p>Pass a per-test temporary directory as {@code stateDir}. A shared directory contends
+     * on one RocksDB lock.
+     *
+     * @param app the composed application
+     * @param samples the sample records to pipe, at least one per source topic
+     * @param stateDir the directory backing the driver's state stores
+     * @return the report, carrying both failures and notes
      */
     public static Report probe(Parsley app, Samples samples, Path stateDir) {
         List<Finding> failures = new ArrayList<>();
@@ -186,14 +229,28 @@ public final class ContractProbes {
     }
 
     /**
-     * Runs the cluster probes: everything the contract requires of topics that only a live
-     * cluster can answer. Read-only; the application is not started. The {@code Admin} is
-     * borrowed, not closed.
+     * Runs the cluster probes, covering everything the contract requires of topics that only a
+     * live cluster can answer.
+     *
+     * <p>Read-only. The application is not started, and the {@link Admin} is borrowed rather
+     * than closed.
+     *
+     * @param app the composed application
+     * @param admin an admin client for the target cluster
+     * @return the report, carrying failures and no notes
      */
     public static Report probeCluster(Parsley app, Admin admin) {
         return probeCluster(app, TopicIds.fromAdmin(admin));
     }
 
+    /**
+     * Runs the cluster probes against a given resolver, so tests can drive them without a
+     * cluster.
+     *
+     * @param app the composed application
+     * @param ids resolves topic names to their identities and partition counts
+     * @return the report, carrying failures and no notes
+     */
     static Report probeCluster(Parsley app, TopicIds ids) {
         List<Finding> failures = new ArrayList<>();
         for (Stage stage : app.stageSet()) {
@@ -246,7 +303,7 @@ public final class ContractProbes {
         }
     }
 
-    /** Key codecs must be canonical and deterministic; value codecs total on the sample. */
+    /** Key codecs must be canonical and deterministic. Value codecs total on the sample. */
     private static void probeCodecs(Samples.Entry sample, List<Finding> failures) {
         Topic<Object, Object> topic = sample.topic();
         try {
@@ -334,9 +391,10 @@ public final class ContractProbes {
     }
 
     /**
-     * Drains one output topic: every observed record must carry parseable causal headers, and
-     * — for user sinks, where {@code topic} is non-null — decode with the sink's declared
-     * codecs, since a hop's consumer will decode exactly these bytes.
+     * Drains one output topic. Every observed record must carry parseable causal headers.
+     *
+     * <p>For user sinks, where {@code topic} is non-null, a record must also decode with the
+     * sink's declared codecs, since a hop's consumer will decode exactly these bytes.
      */
     private static void readSink(TopologyTestDriver driver, String name, Topic<?, ?> topic,
                                  List<Finding> failures, List<Finding> notes) {
@@ -382,7 +440,7 @@ public final class ContractProbes {
         }
     }
 
-    /** The first message in the cause chain containing {@code fragment}, or null. */
+    /** Returns the first message in the cause chain containing {@code fragment}, or null. */
     private static String messageContaining(Throwable t, String fragment) {
         for (Throwable c = t; c != null; c = c.getCause()) {
             if (c.getMessage() != null && c.getMessage().contains(fragment)) {

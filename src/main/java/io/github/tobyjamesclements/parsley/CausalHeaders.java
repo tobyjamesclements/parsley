@@ -7,26 +7,46 @@ import java.nio.ByteBuffer;
 import java.util.UUID;
 
 /**
- * The wire vocabulary: {@value #CLOCK} carries the record's dependency clock, and
- * {@value #SENDER} / {@value #SEQ} carry the sender tag that lets receivers resolve sequence
- * claims against this record. Absent headers claim and tag nothing. There are no protocol
- * records.
+ * Names the record headers the protocol travels in.
+ *
+ * <p>{@value #CLOCK} carries the record's dependency clock. {@value #SENDER} and
+ * {@value #SEQ} carry the sender tag that lets receivers resolve sequence claims against this
+ * record.
+ *
+ * <p>Absent headers claim and tag nothing. There are no protocol records.
  */
 public final class CausalHeaders {
 
+    /** The header carrying the record's dependency clock. */
     public static final String CLOCK = "vc";
+
+    /** The header carrying the sender's identity. */
     public static final String SENDER = "vc-sender";
+
+    /** The header carrying the sender's send sequence. */
     public static final String SEQ = "vc-seq";
 
     private CausalHeaders() {}
 
-    /** Reads the clock header; null when absent. Undecodable bytes throw (fail closed). */
+    /**
+     * Reads the clock header. Fails closed on undecodable bytes.
+     *
+     * @param headers the record's headers
+     * @return the carried clock, or null when the header is absent
+     * @throws CorruptClockException if the header is present but undecodable
+     */
     static VectorClock read(Headers headers) {
         Header h = headers.lastHeader(CLOCK);
         return h == null || h.value() == null ? null : VectorClock.deserialize(h.value());
     }
 
-    /** Reads the sender tag; null when untagged. Undecodable bytes throw (fail closed). */
+    /**
+     * Reads the sender tag. Fails closed on undecodable bytes.
+     *
+     * @param headers the record's headers
+     * @return the sender identity, or null when the record is untagged
+     * @throws CorruptClockException if the header is present but not sixteen bytes
+     */
     public static UUID readSender(Headers headers) {
         Header h = headers.lastHeader(SENDER);
         if (h == null || h.value() == null) return null;
@@ -35,7 +55,13 @@ public final class CausalHeaders {
         return new UUID(b.getLong(), b.getLong());
     }
 
-    /** Reads the sender sequence; -1 when untagged. Undecodable bytes throw (fail closed). */
+    /**
+     * Reads the sender sequence. Fails closed on undecodable bytes.
+     *
+     * @param headers the record's headers
+     * @return the send sequence, or {@code -1} when the record is untagged
+     * @throws CorruptClockException if the header is present but not eight bytes
+     */
     public static long readSeq(Headers headers) {
         Header h = headers.lastHeader(SEQ);
         if (h == null || h.value() == null) return -1;
@@ -43,7 +69,12 @@ public final class CausalHeaders {
         return ByteBuffer.wrap(h.value()).getLong();
     }
 
-    /** Replaces the protocol headers with {@code stamp}'s clock and sender tag. */
+    /**
+     * Replaces the protocol headers with {@code stamp}'s clock and sender tag.
+     *
+     * @param headers the outbound record's headers, written in place
+     * @param stamp the clock and sender tag to write
+     */
     static void write(Headers headers, SendStamp stamp) {
         headers.remove(CLOCK);
         headers.add(CLOCK, stamp.clock().serialize());
@@ -56,7 +87,12 @@ public final class CausalHeaders {
         headers.add(SEQ, ByteBuffer.allocate(8).putLong(stamp.senderSeq()).array());
     }
 
-    /** Replaces only the clock header (plain producers, which carry no sender tag). */
+    /**
+     * Replaces only the clock header, for plain producers, which carry no sender tag.
+     *
+     * @param headers the outbound record's headers, written in place
+     * @param clock the clock to write
+     */
     static void write(Headers headers, VectorClock clock) {
         headers.remove(CLOCK);
         headers.add(CLOCK, clock.serialize());

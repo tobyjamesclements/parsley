@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
  * The plain-client clock: the three verbs a non-Streams producer uses to carry causal custody.
- * Topic identity is resolved through a synthesized resolver; no broker is involved.
+ * Topic identity is resolved through a synthesized resolver, with no broker involved.
  */
 class CausalClockTest {
 
@@ -62,7 +62,7 @@ class CausalClockTest {
                 "the record's own coordinate must be claimed alongside");
     }
 
-    /** An acknowledged send is claimed; an acknowledgement without an offset claims nothing. */
+    /** An acknowledged send is claimed, and an acknowledgement without an offset claims nothing. */
     @Test
     void recordProducedClaimsOnlyAcknowledgedOffsets() {
         CausalClock clock = new CausalClock(IDS);

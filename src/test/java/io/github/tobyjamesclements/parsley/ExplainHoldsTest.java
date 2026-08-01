@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * The hold-diagnosis surface: {@link CausalStreams#explainHolds()} and the age-triggered
  * warning. Each test builds a real hold by feeding a stamped record ahead of its cause, then
- * asserts the runtime explains it correctly — the missing cause, the local watermarks, and a
+ * asserts the runtime explains it correctly: the missing cause, the local watermarks, and a
  * diagnosis whose remedy is never to skip the record.
  */
 class ExplainHoldsTest {
@@ -56,7 +56,7 @@ class ExplainHoldsTest {
         return d.createInputTopic(topic, new ByteArraySerializer(), new ByteArraySerializer());
     }
 
-    /** A stage consuming both topics; what it emits is irrelevant to the diagnosis. */
+    /** A stage consuming both topics. What it emits is irrelevant to the diagnosis. */
     private static Stage consumer(Duration warnAfter) {
         return Stage.named("consumer")
                 .on(CAUSES, m -> List.of(OUT.send(m.key(), m.value())))
@@ -219,17 +219,18 @@ class ExplainHoldsTest {
             assertTrue(summary.contains("effects:0@0") && summary.contains("causes:0"),
                     "both coordinates must appear: " + summary);
             assertTrue(summary.contains("check lag"), "the remedy must appear: " + summary);
-            assertTrue(summary.contains("docs/guide/diagnosing-holds.md"),
-                    "the documentation anchor must appear: " + summary);
+            assertTrue(summary.contains("HeldRecord.Diagnosis#NOT_FETCHED"),
+                    "the diagnosis reference must appear: " + summary);
         }
     }
 
-    /** Every diagnosis carries a stable code and an anchor, and none of them says "skip it". */
+    /** Every diagnosis carries a stable code and a reference, and none of them says "skip it". */
     @Test
     void everyDiagnosisCarriesAStableCodeAndAnchor() {
         for (HeldRecord.Diagnosis d : HeldRecord.Diagnosis.values()) {
             assertTrue(d.code().startsWith("vc-hold-"), "stable code prefix: " + d.code());
-            assertTrue(d.reference().startsWith("docs/"), "documentation anchor: " + d.reference());
+            assertTrue(d.reference().equals("HeldRecord.Diagnosis#" + d.name()),
+                    "each diagnosis references its own constant: " + d.reference());
             assertFalse(d.remedy().contains("skip") || d.remedy().contains("timeout"),
                     "no remedy may suggest skipping or timing out: " + d.remedy());
         }
@@ -279,7 +280,7 @@ class ExplainHoldsTest {
      * A cause that has already been fetched here but is itself held is diagnosed as such, not
      * as one still in flight. The local consumer position is the dividing line: everything
      * strictly below it arrived here or was consumer-skipped, so a claim below it names a
-     * record that is waiting on its own channel's head — a different investigation entirely
+     * record that is waiting on its own channel's head, a different investigation entirely
      * from a lagging upstream.
      */
     @Test
@@ -335,8 +336,8 @@ class ExplainHoldsTest {
 
     /**
      * A sequence claim ahead of a sender this task has delivered is diagnosed as that sender
-     * being behind, not as one never seen. The two point at different things — the second is
-     * the late-joiner caveat, the first is ordinary lag — and sequence zero is a real delivery,
+     * being behind, not as one never seen. The two point at different things, the second at
+     * the late-joiner caveat and the first at ordinary lag. Sequence zero is a real delivery,
      * so the mark must be read as present rather than as nothing.
      */
     @Test
@@ -386,9 +387,9 @@ class ExplainHoldsTest {
 
     /**
      * Only the claims a head is actually waiting for are reported. A stamp carries the emitter's
-     * whole causal past, most of which the reader has already delivered; reporting a claim that
-     * is exactly met sends the operator after a cause that is already here, which is the one
-     * mistake a diagnosis surface must not make.
+     * whole causal past, most of which the reader has already delivered. Reporting a claim
+     * that is exactly met sends the operator after a cause that is already here, which is the
+     * one mistake a diagnosis surface must not make.
      */
     @Test
     void aClaimMetExactlyAtTheFrontierIsNotReportedAsUnmet() {
@@ -503,7 +504,7 @@ class ExplainHoldsTest {
 
     /**
      * A closing task drops its published snapshot. Tasks migrate, and a snapshot left behind
-     * describes a task this instance no longer runs — it would be reported to every reader of
+     * describes a task this instance no longer runs. It would be reported to every reader of
      * {@link CausalStreams#explainHolds()} forever, naming a hold nobody here can act on.
      */
     @Test
@@ -548,7 +549,7 @@ class ExplainHoldsTest {
 
     /**
      * Each claim kind renders in its own vocabulary, and a hold with several causes says so.
-     * An offset claim names an offset measured against the local frontier; a sequence claim
+     * An offset claim names an offset measured against the local frontier. A sequence claim
      * names a sender and a sequence measured against what that sender has delivered here.
      * Rendering one as the other prints {@code -1} where the operator expects the number the
      * gate is actually comparing.

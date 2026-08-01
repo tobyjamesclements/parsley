@@ -15,15 +15,15 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
  * The functional core tested as plain functions: handlers and folds return emission values
- * with equality, so logic is verified with {@code assertEquals} — no driver, no runtime, no
- * Kafka. This is the testing story the API is shaped for; the adapter plumbing has its own
- * tests under {@code TopologyTestDriver}.
+ * with equality, so logic is verified with {@code assertEquals}, with no driver, no runtime
+ * and no Kafka. This is the testing story the API is shaped for. The adapter plumbing has its
+ * own tests under {@code TopologyTestDriver}.
  */
 class LogicTest {
 
     private static final Topic<String, String> OUT = Topic.of("out", Codec.utf8(), Codec.utf8());
 
-    /** A handler is a pure function; its emissions compare by value. */
+    /** A handler is a pure function, and its emissions compare by value. */
     @Test
     void handlerIsTestableByEquality() {
         Handler<String, String> enrich = m -> List.of(OUT.send(m.key(), m.value() + "!"));
@@ -33,7 +33,7 @@ class LogicTest {
                 "the handler's emissions must equal the expected emission values");
     }
 
-    /** A fold is a pure step function; state and emissions compare by value together. */
+    /** A fold is a pure step function, and state and emissions compare by value together. */
     @Test
     void foldIsTestableByEquality() {
         Fold<Long, String, String> counter =
@@ -70,7 +70,7 @@ class LogicTest {
                 "the hash must combine topic name, key, value, and timestamp");
     }
 
-    /** An emission carries its payload; the default timestamp is the inherit sentinel. */
+    /** An emission carries its payload, and the default timestamp is the inherit sentinel. */
     @Test
     void emissionCarriesPayloadAndTimestamp() {
         Emission inherit = OUT.send("k", "v");
@@ -92,7 +92,7 @@ class LogicTest {
                 "an explicit timestamp must appear in the text form");
     }
 
-    /** Topic names follow Kafka's legal character set; timestamps must be non-negative. */
+    /** Topic names follow Kafka's legal character set, and timestamps must be non-negative. */
     @Test
     void topicValidatesNameAndTimestamp() {
         assertEquals("legal.Name_1-x", Topic.of("legal.Name_1-x", Codec.utf8(), Codec.utf8()).toString(),
@@ -209,7 +209,7 @@ class LogicTest {
     /**
      * A Kafka serde bridges into the core as a codec bound to one topic. The topic name is
      * fixed at bridge time because serdes take it per call, and it is what a schema-registry
-     * serde derives its subject from — so the bridge must pass the declared name through to
+     * serde derives its subject from, so the bridge must pass the declared name through to
      * both halves of the serde.
      */
     @Test

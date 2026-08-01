@@ -17,8 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Directed persistence tests: everything a restart must restore, checked deterministically
  * against a shared store across two node incarnations. The simulator exercises these paths
- * under load; these tests pin each persisted fact individually (they exist to kill the
- * mutants the simulator's randomized schedules let slip).
+ * under load. These tests pin each persisted fact individually, to kill the mutants the
+ * simulator's randomized schedules let slip.
  */
 class CausalNodePersistenceTest {
 
@@ -30,7 +30,7 @@ class CausalNodePersistenceTest {
     private static final Channel SINK_0 = new Channel(SINK, 0);
     private static final UUID UPSTREAM = UUID.nameUUIDFromBytes("upstream".getBytes());
 
-    /** Plain in-memory store: no staging — every write is immediately durable. */
+    /** Plain in-memory store, with no staging. Every write is immediately durable. */
     private static final class MapStore implements StateStore {
         final TreeMap<String, byte[]> map = new TreeMap<>();
 
@@ -125,7 +125,7 @@ class CausalNodePersistenceTest {
 
     /**
      * A held record survives a restart byte-for-byte, including a null key, an empty value,
-     * and its sender tag — the tag must still advance the delivered sequence on release.
+     * and its sender tag, which must still advance the delivered sequence on release.
      */
     @Test
     void heldRecordsSurviveRestartVerbatim() {
@@ -150,9 +150,9 @@ class CausalNodePersistenceTest {
 
     /**
      * The payload of a held record survives the restore path unchanged: key bytes, value
-     * bytes, and timestamp. The oracle cannot see this — it judges deliveries by coordinate,
-     * so a restore that returned the right record with the wrong bytes reads as correct
-     * everywhere in the simulator. This is the assertion that says the bytes handed to user
+     * bytes, and timestamp. The oracle cannot see this, because it judges deliveries by
+     * coordinate, so a restore that returned the right record with the wrong bytes reads as
+     * correct everywhere in the simulator. This is the assertion that says the bytes handed to user
      * logic after a restart are the bytes that were fetched.
      */
     @Test
@@ -184,8 +184,7 @@ class CausalNodePersistenceTest {
      * The envelope's optional fields round-trip in every combination the layout distinguishes:
      * an untagged sender, a null key beside a non-empty value, an empty key beside a null
      * value, and an empty dependency clock. Each pairs a presence flag with a length field in
-     * {@code docs/reference/wire-format.md#held-record}, and each is a place where null and
-     * empty can silently swap.
+     * the held-record layout, and each is a place where null and empty can silently swap.
      */
     @Test
     void heldRecordEnvelopeRoundTripsEveryOptionalField() {

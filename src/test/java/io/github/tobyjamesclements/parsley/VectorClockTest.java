@@ -10,7 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** The clock's algebra and its wire form — the byte layout every stamp travels as. */
+/** The clock's algebra and its wire form, the byte layout every stamp travels as. */
 class VectorClockTest {
 
     private static final Channel C1 = new Channel(UUID.nameUUIDFromBytes("c1".getBytes()), 0);
@@ -109,7 +109,7 @@ class VectorClockTest {
         assertEquals(3, back.getSeq(new VectorClock.SeqKey(C1, sender)));
     }
 
-    /** Clocks differing in either claim kind are unequal; equal clocks share a hash. */
+    /** Clocks differing in either claim kind are unequal, and equal clocks share a hash. */
     @Test
     void equalityDistinguishesClaims() {
         UUID sender = UUID.nameUUIDFromBytes("s1".getBytes());
@@ -126,7 +126,7 @@ class VectorClockTest {
         assertFalse(offsets.equals("not a clock"), "a non-clock must never be equal");
     }
 
-    /** The hash combines both claim maps; recomputed here from their public map forms. */
+    /** The hash combines both claim maps, recomputed here from their public map forms. */
     @Test
     void hashCombinesBothClaimMaps() {
         UUID sender = UUID.nameUUIDFromBytes("s1".getBytes());
@@ -153,7 +153,7 @@ class VectorClockTest {
                 "live sequence claims must be visible in the text form");
     }
 
-    /** A present but undecodable clock throws — it must never read as empty. */
+    /** A present but undecodable clock throws, and must never read as empty. */
     @Test
     void corruptBytesFailClosed() {
         assertThrows(CorruptClockException.class, () -> VectorClock.deserialize(new byte[] {1, 2, 3}));

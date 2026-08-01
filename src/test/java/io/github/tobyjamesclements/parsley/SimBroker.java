@@ -14,14 +14,14 @@ import java.util.UUID;
  *
  * <p>Modeling assumptions, stated once:
  * <ul>
- *   <li>Transactions are step-atomic: a simulation step appends a transaction's records and its
+ *   <li>Transactions are step-atomic. A simulation step appends a transaction's records and its
  *       per-partition commit or abort marker together. No transaction spans steps, so consumers
  *       never observe an open transaction and last-stable-offset tracking is unnecessary. What
- *       consumers do observe — real offsets occupied by markers and aborted records that a fetch
- *       silently skips — is modeled faithfully, because that is what the density adaptation
- *       (seed/bridge) must survive.</li>
+ *       consumers do observe is modeled faithfully, meaning real offsets occupied by markers and
+ *       aborted records that a fetch silently skips, because that is what the seed and bridge
+ *       density adaptation must survive.</li>
  *   <li>Offsets are assigned at append, exactly like the broker. Nothing carries them back to
- *       the sender: neither the protocol nor the Streams adapter folds a producer
+ *       the sender. Neither the protocol nor the Streams adapter folds a producer
  *       acknowledgement, so a node's own sends stay claimed in sequence space until a
  *       restart's end-offset seed converts them to offsets.</li>
  * </ul>
@@ -31,9 +31,11 @@ final class SimBroker {
     enum Kind { BUSINESS, MARKER, ABORTED }
 
     /**
-     * One slot in a partition log. {@code recordId} is the oracle's id, -1 for non-business;
-     * {@code senderId}/{@code senderSeq} are the sender tag (null / -1 for untagged
-     * producers and non-business entries).
+     * One slot in a partition log.
+     *
+     * <p>{@code recordId} is the oracle's id, or -1 for non-business entries. {@code senderId}
+     * and {@code senderSeq} are the sender tag, null and -1 for untagged producers and
+     * non-business entries.
      */
     record Entry(Kind kind, long recordId, VectorClock clock, java.util.UUID senderId, long senderSeq,
                  byte[] key, byte[] value, long timestamp) {
@@ -45,7 +47,7 @@ final class SimBroker {
     private final Map<String, UUID> topicIds = new HashMap<>();
     private final Map<String, Integer> partitionCounts = new HashMap<>();
     private final Map<Channel, List<Entry>> logs = new HashMap<>();
-    /** First non-deleted offset per channel — retention's high-water mark. */
+    /** First non-deleted offset per channel, which is retention's high-water mark. */
     private final Map<Channel, Long> logStarts = new HashMap<>();
 
     void createTopic(String name, int partitions) {
@@ -98,7 +100,7 @@ final class SimBroker {
         if (e.kind() == Kind.MARKER) throw new IllegalStateException("aborting a marker");
     }
 
-    /** Next offset to be assigned — the end offset the init-time own-outputs seed folds. */
+    /** Next offset to be assigned, the end offset the init-time own-outputs seed folds. */
     long endOffset(Channel c) {
         return log(c).size();
     }
