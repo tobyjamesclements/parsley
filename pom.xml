@@ -142,6 +142,25 @@
                 <version>3.4.2</version>
                 <executions>
                     <execution>
+                        <!-- Name the automatic module the library jar becomes on a JPMS
+                             module path. Without this the name is derived from the filename,
+                             which makes every consumer's `requires` clause depend on how the
+                             jar happens to be called; the JDK documents that name as unstable
+                             and warns against binding to it. Declaring it commits to the one
+                             name, which is the package name, matching the single-package
+                             layout. Scoped to this execution rather than the plugin so the
+                             conformance-kit test-jar below does not claim the same module
+                             name. Changing it after a release breaks JPMS consumers. -->
+                        <id>default-jar</id>
+                        <configuration>
+                            <archive>
+                                <manifestEntries>
+                                    <Automatic-Module-Name>io.github.tobyjamesclements.parsley</Automatic-Module-Name>
+                                </manifestEntries>
+                            </archive>
+                        </configuration>
+                    </execution>
+                    <execution>
                         <!-- The conformance kit (docs/reference/conformance-kit.md): the
                              simulator, oracle, and protocol tests as a consumable artifact, so
                              a vendored copy or an alternative host can run the verification
