@@ -118,6 +118,23 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.6</version>
+                <configuration>
+                    <!-- Keep every temporary file the test JVMs create inside target/, where
+                         `mvn clean` sweeps it, instead of the OS temp directory, where nothing
+                         does. RocksDB extracts its 9 MB native library to a fresh temp file per
+                         JVM and relies on deleteOnExit to remove it; that hook only runs on a
+                         graceful shutdown, so every forcibly killed test JVM stranded a copy.
+                         2833 of them, 25 GB, had built up by 2026-08-01 (#64).
+
+                         ROCKSDB_SHAREDLIB_DIR would collapse this to one reused file, but it is
+                         unsafe: concurrent JVMs each delete and rewrite that one path on
+                         startup, and a thread whose load fails midway leaves RocksDB's static
+                         LibraryState stuck at LOADING, which every other thread in the JVM then
+                         spins on forever. Measured under -Dpitest.threads=4: minions hung in
+                         RocksDB.loadLibrary and the build never finished. Per-JVM temp files are
+                         what the loader is designed for; only their location needed fixing. -->
+                    <argLine>-Djava.io.tmpdir=${project.build.directory}</argLine>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -180,6 +197,12 @@
                         <param>XML</param>
                     </outputFormats>
                     <timestampedReports>false</timestampedReports>
+                    <!-- Minions are killed rather than shut down, so they stranded every one of
+                         the RocksDB libraries surefire's argLine above describes; surefire's own
+                         setting does not reach them. -->
+                    <jvmArgs>
+                        <param>-Djava.io.tmpdir=${project.build.directory}</param>
+                    </jvmArgs>
                 </configuration>
                 <executions>
                     <execution>
@@ -210,6 +233,8 @@
                             <systemPropertyVariables>
                                 <parsley.broker.image>${broker.image}</parsley.broker.image>
                             </systemPropertyVariables>
+                            <!-- As surefire: keep temporary files out of the OS temp directory. -->
+                            <argLine>-Djava.io.tmpdir=${project.build.directory}</argLine>
                         </configuration>
                         <executions>
                             <execution>
