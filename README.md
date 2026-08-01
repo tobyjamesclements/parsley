@@ -124,6 +124,9 @@ that index at [`/llms.txt`](https://tobyjamesclements.github.io/parsley/llms.txt
 text of all of them, in one file, at
 [`/llms-full.txt`](https://tobyjamesclements.github.io/parsley/llms-full.txt).
 
+AI coding agents should start at [`AGENTS.md`](AGENTS.md): the rule that overrides everything,
+the map of the docs, how to verify a change, and the rules for vendoring the source.
+
 ## Current limitations
 
 - Non-Parsley headers on held records are not carried through delivery.

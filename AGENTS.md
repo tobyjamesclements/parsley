@@ -1,5 +1,8 @@
 # Parsley
 
+Guidance for AI coding agents working on Parsley, or using it from an application. It is
+written to be read by any agent or assistant; nothing here is specific to one tool.
+
 Parsley provides causal delivery order for Kafka stream processing: a record reaches a
 processor only after every cause that processor consumes has been delivered locally. Single
 Maven module, single package `io.github.tobyjamesclements.parsley`, Java 21, brokers 3.7.0
@@ -41,6 +44,11 @@ by reordering, skipping, or adding a timeout. The delivery invariant is
   `Step`, `Tick`, `TickHandler`, `TickFold`) plus the imperative edges (`Stage`, `Parsley`,
   `CausalStreams`, `CausalClock`, `CausalHeaders`, `ContractProbes`, `HeldRecord`,
   `CorruptClockException`); everything else is package-private.
+
+`docs/llms.txt` indexes every document with a one-line description of what it settles. If
+you are working from outside this checkout, that index and the full text of all documents in
+one fetch are served at https://tobyjamesclements.github.io/parsley/llms.txt and
+https://tobyjamesclements.github.io/parsley/llms-full.txt.
 
 ## Verifying anything
 

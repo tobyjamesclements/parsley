@@ -40,8 +40,6 @@ docs/llms-full.txt
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
 replay_pid*
-# Claude Code local state: machine-specific, never tracked. CLAUDE.md itself is tracked.
-.claude/settings.json
-.claude/settings.local.json
-.claude/scheduled_tasks.lock
+# Agent tool state: machine-specific, never tracked. The tracked guidance is AGENTS.md.
+.claude/
 /parsley.iml
