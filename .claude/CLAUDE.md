@@ -3,8 +3,9 @@
 Parsley provides causal delivery order for Kafka stream processing: a record reaches a
 processor only after every cause that processor consumes has been delivered locally. Single
 Maven module, single package `io.github.tobyjamesclements.parsley`, Java 21, brokers 3.7.0
-or newer. `kafka-clients` is the only required runtime dependency; `kafka-streams` is
-optional and needed only by the Streams adapter.
+or newer. `kafka-clients` and `kafka-streams` are the runtime dependencies, both inherited.
+Only the Streams adapter touches `kafka-streams`; an application using just the plain-client
+edge (`CausalClock`, `CausalHeaders`) can exclude it.
 
 This tree is version 0.2.0-SNAPSHOT: the Maven artifact
 `io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT`, resolved from the Central snapshots

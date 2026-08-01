@@ -60,13 +60,16 @@
             <artifactId>kafka-clients</artifactId>
             <version>${kafka.version}</version>
         </dependency>
-        <!-- Optional: only the Streams adapter touches kafka-streams; the protocol core and the
-             edge ops need kafka-clients at most. -->
+        <!-- Inherited, though only the Streams adapter touches it: the documented runtime path
+             is Kafka Streams, so an application that resolved kafka-clients alone could not run
+             the getting-started example. Inheriting both from here also keeps them on one
+             ${kafka.version} by construction. An application using only the plain-client edge
+             (CausalClock, CausalHeaders) reaches nothing under org.apache.kafka.streams and can
+             exclude it, along with the RocksDB and Jackson trees it carries. -->
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-streams</artifactId>
             <version>${kafka.version}</version>
-            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.slf4j</groupId>
