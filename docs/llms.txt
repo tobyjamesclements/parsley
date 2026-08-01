@@ -44,7 +44,6 @@ version number.
 - [Error handling](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/error-handling.md): the error model and the recovering decorators
 - [Ticks](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/ticks.md): runtime-emitted time records delivered through the causal gate
 - [The contract](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/expectations.md): what Parsley promises and what it requires of the application
-- [Worked examples](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/examples.md): runnable, asserted examples per shape — Commander/CQRS, request-reply, ticks, plain clients, concurrent inputs
 - [Diagnosing held records](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/diagnosing-holds.md): explainHolds(), the vc-hold-* warnings, and what each diagnosis means — never fixed by skipping or a timeout
 - [Verifying your application](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/verifying.md): ContractProbes — the contract's checkable clauses as test-time and cluster probes
 - [Plain clients](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/clients.md): stamping from plain producers with CausalClock and incremental adoption

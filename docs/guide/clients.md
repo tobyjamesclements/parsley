@@ -42,7 +42,3 @@ headers (`CausalHeaders.CLOCK` and the sender tag, readable via `CausalHeaders.r
 A plain consumer that wants causal *observation* — so that records it later produces claim
 what it read — uses `observe` as above. A plain consumer that wants causal *delivery order*
 is, by definition, a causal stage: run it as one.
-
-Runnable: `ExamplePlainClientEdgeTest` ([worked examples](examples.md)) — an observed record
-gating what the client writes next, sequential sends ordered across topics, and stamps read
-by a plain consumer.

@@ -90,6 +90,3 @@ Under `TopologyTestDriver`, `advanceWallClockTime(interval)` emits the tick, and
 feeds the tick topic back into the stage; construct the driver with a fixed initial wall
 clock to make tick timestamps deterministic. Each emitted tick counts on the
 `ticks-emitted-total` metric ([metrics](../reference/metrics.md)).
-
-Runnable: `ExampleTickPolicyTest` ([worked examples](examples.md)) — a policy on its own
-cadence, the tick slot shown distinct from per-key state, and the tick's stamp inspected.

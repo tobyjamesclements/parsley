@@ -55,7 +55,6 @@ nav:
     - Error handling: guide/error-handling.md
     - Ticks: guide/ticks.md
     - The contract: guide/expectations.md
-    - Worked examples: guide/examples.md
     - Diagnosing held records: guide/diagnosing-holds.md
     - Verifying your application: guide/verifying.md
     - Plain clients: guide/clients.md

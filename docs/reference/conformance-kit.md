@@ -53,7 +53,6 @@ a vendored copy) — the same convention the kit's own suites use.
 | `WireFormatTest` | The compatibility surface pinned to literal bytes and literal names: the record headers, which cross applications, and the state-store keys and held-record envelope, which cross versions of one application through its committed state and changelog. A coordinated change to both sides of a codec cannot pass silently. |
 | `OracleSelfTest` | V8: a deliberately broken protocol (`EagerProtocol`) must be flagged. A harness that cannot fail is not a harness. |
 | `HostContractSelfTest` | V9: a deliberately broken host must be flagged — the host-side analogue of V8. |
-| `Example*Test` | The [worked examples](../guide/examples.md): runnable, asserted applications per topology shape, usable as starting points rather than verification. |
 
 ## The host contract
 
