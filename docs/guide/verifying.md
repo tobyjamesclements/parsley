@@ -10,8 +10,9 @@ The docs describe, the probes verify. Nothing here replaces the runtime's fail-c
 `ContractProbes.probe` drives your application's own `testTopology()` under
 `TopologyTestDriver` — broker-less, so it runs in plain CI — with sample records you supply,
 at least one per source topic. `kafka-streams-test-utils` must be on the test classpath (it
-is an optional dependency of Parsley, so your test scope declares it, production classpaths
-never see it).
+is an optional dependency of Parsley, so your test scope declares it — the coordinates are in
+[getting started](getting-started.md#adding-the-dependency) — and production classpaths never
+see it).
 
 ```java
 @Test

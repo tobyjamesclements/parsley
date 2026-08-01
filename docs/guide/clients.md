@@ -42,3 +42,7 @@ headers (`CausalHeaders.CLOCK` and the sender tag, readable via `CausalHeaders.r
 A plain consumer that wants causal *observation* — so that records it later produces claim
 what it read — uses `observe` as above. A plain consumer that wants causal *delivery order*
 is, by definition, a causal stage: run it as one.
+
+An application that runs no stage reaches nothing under `org.apache.kafka.streams`, and can
+exclude `kafka-streams` from the Parsley dependency
+([getting started](getting-started.md#adding-the-dependency)).
