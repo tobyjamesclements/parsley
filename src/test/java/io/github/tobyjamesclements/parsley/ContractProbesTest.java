@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ContractProbesTest {
 
     private static final Topic<String, String> T1 = Topic.of("t1", Codec.utf8(), Codec.utf8());
+    private static final String APPLICATION_ID = "parsley-probes";
     private static final Topic<String, String> MID = Topic.of("mid", Codec.utf8(), Codec.utf8());
     private static final Topic<String, String> T3 = Topic.of("t3", Codec.utf8(), Codec.utf8());
 
@@ -37,7 +38,7 @@ class ContractProbesTest {
                 .on(MID, m -> List.of(T3.send(m.key(), m.value() + ":b")))
                 .into(T3)
                 .build();
-        return Parsley.of(first, second);
+        return Parsley.named(APPLICATION_ID, first, second);
     }
 
     private static boolean hasProbe(List<ContractProbes.Finding> findings, String probe) {
@@ -89,21 +90,21 @@ class ContractProbesTest {
                 .into(T3)
                 .build();
 
-        var report = ContractProbes.probe(Parsley.of(stateless, stateful),
+        var report = ContractProbes.probe(Parsley.named(APPLICATION_ID, stateless, stateful),
                 ContractProbes.Samples.of().on(T1, "k", "v").on(MID, "k", "v"), stateDir);
 
         String statelessNote = withProbe(report.notes(), "names").stream()
                 .map(ContractProbes.Finding::detail)
                 .filter(d -> d.contains("'stateless'")).findFirst().orElseThrow();
-        assertTrue(statelessNote.contains("vc-stateless-state"),
+        assertTrue(statelessNote.contains("stateless-state"),
                 "every stage pins its protocol store: " + statelessNote);
-        assertFalse(statelessNote.contains("vc-stateless-fold"),
+        assertFalse(statelessNote.contains("stateless-fold"),
                 "a stateless stage keeps no fold store, so none may be pinned: " + statelessNote);
 
         String statefulNote = withProbe(report.notes(), "names").stream()
                 .map(ContractProbes.Finding::detail)
                 .filter(d -> d.contains("'stateful'")).findFirst().orElseThrow();
-        assertTrue(statefulNote.contains("vc-stateful-fold"),
+        assertTrue(statefulNote.contains("stateful-fold"),
                 "a stateful stage's fold store name must be pinned too: " + statefulNote);
     }
 
@@ -119,7 +120,7 @@ class ContractProbesTest {
                 .into(T3)
                 .build();
 
-        var report = ContractProbes.probe(Parsley.of(stage),
+        var report = ContractProbes.probe(Parsley.named(APPLICATION_ID, stage),
                 ContractProbes.Samples.of().on(byFoldedKey, "MixedCase", "v"), stateDir);
         assertTrue(hasProbe(report.failures(), "key-codec"),
                 "a non-canonical key codec must fail the key-codec probe: " + report);
@@ -133,7 +134,7 @@ class ContractProbesTest {
                 .into(MID) // t3 deliberately undeclared
                 .build();
 
-        var report = ContractProbes.probe(Parsley.of(stage),
+        var report = ContractProbes.probe(Parsley.named(APPLICATION_ID, stage),
                 ContractProbes.Samples.of().on(T1, "k", "v"), stateDir);
         assertTrue(hasProbe(report.failures(), "declared-sinks"),
                 "an undeclared-sink emission must fail the declared-sinks probe: " + report);
@@ -161,7 +162,7 @@ class ContractProbesTest {
                 .into(T3)
                 .build();
 
-        var report = ContractProbes.probeCluster(Parsley.of(join), fixed(Map.of("t1", 4, "t3", 4)));
+        var report = ContractProbes.probeCluster(Parsley.named(APPLICATION_ID, join), fixed(Map.of("t1", 4, "t3", 4)));
 
         assertEquals(List.of("topic-exists"),
                 report.failures().stream().map(ContractProbes.Finding::probe).toList(),
@@ -180,7 +181,7 @@ class ContractProbesTest {
                 .into(T3)
                 .build();
 
-        var report = ContractProbes.probe(Parsley.of(stage),
+        var report = ContractProbes.probe(Parsley.named(APPLICATION_ID, stage),
                 ContractProbes.Samples.of().on(T1, "k", null), stateDir);
 
         assertTrue(report.ok(), "a null value is absent, not undecodable: " + report);
@@ -198,7 +199,7 @@ class ContractProbesTest {
                 .into(T3)
                 .build();
 
-        var report = ContractProbes.probe(Parsley.of(stage),
+        var report = ContractProbes.probe(Parsley.named(APPLICATION_ID, stage),
                 ContractProbes.Samples.of().on(T1, "k", "v"), stateDir);
 
         assertTrue(report.ok(), "a null key is absent, not undecodable: " + report);
@@ -219,7 +220,7 @@ class ContractProbesTest {
                 .into(T3)
                 .build();
 
-        var report = ContractProbes.probe(Parsley.of(keyed),
+        var report = ContractProbes.probe(Parsley.named(APPLICATION_ID, keyed),
                 ContractProbes.Samples.of().on(T1, "k", "v"), stateDir);
 
         assertTrue(report.ok(), "the sample must arrive at the handler keyed as declared: " + report);
@@ -239,7 +240,7 @@ class ContractProbesTest {
                 .into(T3)
                 .build();
 
-        var report = ContractProbes.probe(Parsley.of(stage),
+        var report = ContractProbes.probe(Parsley.named(APPLICATION_ID, stage),
                 ContractProbes.Samples.of().on(T1, "k", "v"), stateDir);
 
         assertTrue(withProbe(report.notes(), "coverage").stream()
@@ -258,7 +259,7 @@ class ContractProbesTest {
                 .into(T3)
                 .build();
 
-        var report = ContractProbes.probe(Parsley.of(stage),
+        var report = ContractProbes.probe(Parsley.named(APPLICATION_ID, stage),
                 ContractProbes.Samples.of().on(T1, "k", "v"), stateDir);
         assertTrue(report.failures().stream().anyMatch(
                         f -> f.probe().equals("logic") && f.detail().contains("boom")),
@@ -287,7 +288,7 @@ class ContractProbesTest {
                 .into(rejecting)
                 .build();
 
-        var report = ContractProbes.probe(Parsley.of(stage),
+        var report = ContractProbes.probe(Parsley.named(APPLICATION_ID, stage),
                 ContractProbes.Samples.of().on(T1, "k", "v"), stateDir);
         assertTrue(hasProbe(report.failures(), "sink-decode"),
                 "output the sink's codec cannot decode must be flagged: " + report);
@@ -302,11 +303,12 @@ class ContractProbesTest {
                 .into(T3)
                 .build();
 
-        var report = ContractProbes.probe(Parsley.of(stage),
+        var report = ContractProbes.probe(Parsley.named(APPLICATION_ID, stage),
                 ContractProbes.Samples.of().on(T1, "k", "v"), stateDir);
         assertTrue(report.ok(), "a ticking stage must pass under the driver: " + report);
         assertTrue(report.notes().stream().anyMatch(
-                        f -> f.probe().equals("tick-topic") && f.detail().contains("vc-ticking-ticks")),
+                        f -> f.probe().equals("tick-topic")
+                                && f.detail().contains(APPLICATION_ID + "-ticking-ticks")),
                 "the tick-topic requirement must surface as a note: " + report);
     }
 
@@ -335,7 +337,7 @@ class ContractProbesTest {
                 .into(T3)
                 .build();
 
-        var report = ContractProbes.probeCluster(Parsley.of(join),
+        var report = ContractProbes.probeCluster(Parsley.named(APPLICATION_ID, join),
                 fixed(Map.of("t1", 4, "mid", 3, "t3", 4)));
         assertTrue(hasProbe(report.failures(), "co-partition"),
                 "unequal source partition counts must be flagged: " + report);
@@ -350,13 +352,13 @@ class ContractProbesTest {
                 .into(T3)
                 .build();
 
-        var report = ContractProbes.probeCluster(Parsley.of(ticking),
-                fixed(Map.of("t1", 4, "t3", 4, "vc-ticking-ticks", 1)));
+        var report = ContractProbes.probeCluster(Parsley.named(APPLICATION_ID, ticking),
+                fixed(Map.of("t1", 4, "t3", 4, APPLICATION_ID + "-ticking-ticks", 1)));
         assertTrue(hasProbe(report.failures(), "tick-topic"),
                 "a mis-partitioned tick topic must be flagged: " + report);
 
-        var conforming = ContractProbes.probeCluster(Parsley.of(ticking),
-                fixed(Map.of("t1", 4, "t3", 4, "vc-ticking-ticks", 4)));
+        var conforming = ContractProbes.probeCluster(Parsley.named(APPLICATION_ID, ticking),
+                fixed(Map.of("t1", 4, "t3", 4, APPLICATION_ID + "-ticking-ticks", 4)));
         assertTrue(conforming.ok(), "a correctly partitioned tick topic must pass: " + conforming);
     }
 

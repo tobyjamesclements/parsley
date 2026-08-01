@@ -24,18 +24,20 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ParsleyStreamsTest {
 
+    private static final String APPLICATION_ID = "parsley-assembly";
     private static final Topic<String, String> T1 = Topic.of("t1", Codec.utf8(), Codec.utf8());
 
     @TempDir
     Path stateDir;
 
     private Parsley parsley() {
-        return Parsley.of(Stage.named("edge").on(T1, m -> List.of()).build());
+        return Parsley.named(APPLICATION_ID,
+                Stage.named("edge").on(T1, m -> List.of()).build());
     }
 
     private Properties props() {
         Properties props = new Properties();
-        props.put(StreamsConfig.APPLICATION_ID_CONFIG, "parsley-assembly");
+        props.put(StreamsConfig.APPLICATION_ID_CONFIG, APPLICATION_ID);
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9099");
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toString());
         return props;
@@ -80,6 +82,32 @@ class ParsleyStreamsTest {
         try (CausalStreams streams = parsley().streams(explicit)) {
             assertEquals(KafkaStreams.State.CREATED, streams.state(),
                     "an explicit exactly_once_v2 must be accepted");
+        }
+    }
+
+    /**
+     * The composition's application id wins, and properties that name a different one are
+     * rejected rather than silently obeyed. The id names the state stores, their changelog
+     * topics and the tick topics; running under another one would consume tick topics nobody
+     * writes to and restore from changelogs nobody wrote. Properties that omit it are filled
+     * in, since there is only one right answer.
+     */
+    @Test
+    void pinsTheCompositionsApplicationId() {
+        Properties conflicting = props();
+        conflicting.put(StreamsConfig.APPLICATION_ID_CONFIG, "some-other-application");
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> parsley().streams(conflicting),
+                "an application id other than the composition's must be rejected");
+        assertTrue(e.getMessage().contains(APPLICATION_ID),
+                "the failure must name the id the composition was built with: " + e.getMessage());
+
+        Properties unset = props();
+        unset.remove(StreamsConfig.APPLICATION_ID_CONFIG);
+        try (CausalStreams streams = parsley().streams(unset)) {
+            assertEquals(KafkaStreams.State.CREATED, streams.state(),
+                    "properties that leave the application id unset must take the"
+                            + " composition's");
         }
     }
 
@@ -132,12 +160,14 @@ class ParsleyStreamsTest {
      */
     @Test
     void aFailedAssemblyClosesTheAdminClientItOpened() {
-        Properties missingApplicationId = props();
-        missingApplicationId.remove(StreamsConfig.APPLICATION_ID_CONFIG);
+        // Any config Kafka Streams rejects will do: the failure must land after the admin
+        // client is open, which is what leaves something to clean up.
+        Properties unparseableConfig = props();
+        unparseableConfig.put(StreamsConfig.NUM_STREAM_THREADS_CONFIG, "not-a-number");
         long before = adminClientThreads();
 
-        assertThrows(RuntimeException.class, () -> parsley().streams(missingApplicationId),
-                "an application id is required, and the failure must surface to the caller");
+        assertThrows(RuntimeException.class, () -> parsley().streams(unparseableConfig),
+                "an unusable configuration must surface to the caller");
 
         assertEquals(before, adminClientThreads(),
                 "the admin client opened before the failure must not be left behind");

@@ -80,7 +80,7 @@ Stage settlement = Stage.named("settlement")
         .into(settlements)
         .build();
 
-try (CausalStreams app = Parsley.of(settlement).streams(props)) {
+try (CausalStreams app = Parsley.named("settlements-app", settlement).streams(props)) {
     app.start();
     // messages reach each handler in causal order; emissions are stamped automatically
 }
@@ -90,7 +90,7 @@ Stages compose into pipelines within one application — a hop is the same `Topi
 as one stage's sink and another's source, an ordinary causal channel:
 
 ```java
-Parsley.of(enrichment, settlement).streams(props).start();
+Parsley.named("settlements-app", enrichment, settlement).streams(props).start();
 ```
 
 Plain producers stamp with a `CausalClock` — `observe` consumed records, `recordProduced` your

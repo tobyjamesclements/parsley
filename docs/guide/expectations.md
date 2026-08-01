@@ -26,10 +26,17 @@ pipeline — see [verifying your application](verifying.md).
 - Every declared topic exists before the application starts. Sinks are resolved at init and
   a missing one fails loudly; nothing is auto-created, and there are no automatic
   repartition topics.
-- A stage that declares [ticks](ticks.md) owns the topic `vc-<stage-name>-ticks`, which
-  likewise exists before start, with exactly the partition count of the stage's widest
-  source topic — assembly fails loudly on a mismatch. Short retention suffices; ticks are
-  transient.
+- A stage that declares [ticks](ticks.md) owns the topic
+  `<application.id>-<stage-name>-ticks`, which likewise exists before start, with exactly the
+  partition count of the stage's widest source topic — assembly fails loudly on a mismatch.
+  Short retention suffices; ticks are transient.
+- The application id names things, so it is fixed at composition — `Parsley.named(id, ...)` —
+  and `Parsley.streams` rejects properties that set `application.id` to anything else. Every
+  topic and store the application owns is named `<application.id>-<stage>-<kind>`: the tick
+  topic directly, and the state stores by way of the `<application.id>-<stage>-state-changelog`
+  and `-fold-changelog` topics Kafka Streams derives from them. That is the convention Streams
+  itself uses, so an operator listing a cluster's topics in name order sees an application's
+  Parsley and Streams topics as one block rather than in two unrelated places.
 - Topic identity is stable mid-run: a topic deleted and recreated under the same name is a
   different channel, and the old incarnation's history is loss, never reordering.
 - Retention covers consumer lag on causal topics. A consumer must be able to fetch, or

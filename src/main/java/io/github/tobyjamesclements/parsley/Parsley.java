@@ -25,15 +25,31 @@ import java.util.Set;
  * <p>Constraints checked at composition: stage names must be distinct (each names its state
  * stores), and source topics must be disjoint across stages — Kafka Streams allows a topic to
  * feed only one source node per topology. A topic may be a sink of several stages.
+ *
+ * <p>The application id belongs to the composition rather than to the runtime properties alone,
+ * because it names things. Kafka Streams prefixes every topic it creates with the application
+ * id, and Parsley follows that convention for the one topic it asks you to create — a stage's
+ * tick topic is {@code <application.id>-<stage>-ticks}, alongside the
+ * {@code <application.id>-<stage>-state-changelog} that Streams creates for the same stage. An
+ * operator listing the cluster's topics in name order sees an application's topics together,
+ * Parsley's and Streams' alike, rather than in two unrelated places. Fixing the id at
+ * composition is also what lets {@link ContractProbes} report those names without a cluster.
  */
 public final class Parsley {
 
     private static final org.slf4j.Logger LOG = org.slf4j.LoggerFactory.getLogger(Parsley.class);
 
+    private final String applicationId;
     private final Map<String, Stage> stages;
 
-    private Parsley(Map<String, Stage> stages) {
+    private Parsley(String applicationId, Map<String, Stage> stages) {
+        this.applicationId = applicationId;
         this.stages = stages;
+    }
+
+    /** The application id every topic and store name the application owns is qualified by. */
+    public String applicationId() {
+        return applicationId;
     }
 
     /** The composed stages, in declaration order. */
@@ -41,7 +57,16 @@ public final class Parsley {
         return stages.values();
     }
 
-    public static Parsley of(Stage... stages) {
+    /**
+     * Composes stages into an application. The application id is the one Kafka Streams will run
+     * under — {@link #streams} pins it — and must stay stable across deployments, because the
+     * state stores, their changelog topics and the tick topics are all named from it.
+     */
+    public static Parsley named(String applicationId, Stage... stages) {
+        if (applicationId == null || !applicationId.matches("[a-zA-Z0-9._-]+")) {
+            throw new IllegalArgumentException("application id must be [a-zA-Z0-9._-]+: "
+                    + applicationId + " (it prefixes the names of the topics Parsley owns)");
+        }
         if (stages.length == 0) throw new IllegalArgumentException("no stages");
         Map<String, Stage> byName = new LinkedHashMap<>();
         Set<String> sourceTopics = new HashSet<>();
@@ -50,14 +75,14 @@ public final class Parsley {
                 throw new IllegalArgumentException("duplicate stage name: " + stage.name()
                         + " (name each stage with " + Stage.class.getSimpleName() + ".named)");
             }
-            for (String topic : stage.sourceTopics()) {
+            for (String topic : stage.sourceTopics(applicationId)) {
                 if (!sourceTopics.add(topic)) {
                     throw new IllegalArgumentException("topic " + topic + " is a source of two"
                             + " stages; Kafka Streams allows one source node per topic");
                 }
             }
         }
-        return new Parsley(byName);
+        return new Parsley(applicationId, byName);
     }
 
     /**
@@ -71,7 +96,7 @@ public final class Parsley {
     public Topology testTopology() {
         Topology t = new Topology();
         for (Stage stage : stages.values()) {
-            stage.addToForTest(t);
+            stage.addToForTest(t, applicationId);
         }
         return t;
     }
@@ -82,8 +107,9 @@ public final class Parsley {
      * (the protocol's transactional state and liveness are defined against them), installs
      * the position-capturing client supplier — the consumer's position advance past
      * transaction markers is the protocol's liveness signal — and resolves topic identity
-     * through an admin client built from the same properties. Set listeners on the returned
-     * handle, then {@link CausalStreams#start()} it.
+     * through an admin client built from the same properties. Sets {@code application.id} to the
+     * composition's, rejecting properties that name a different one. Set listeners on the
+     * returned handle, then {@link CausalStreams#start()} it.
      */
     public CausalStreams streams(Properties props) {
         Properties p = new Properties();
@@ -94,6 +120,15 @@ public final class Parsley {
         }
         p.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
         p.put(StreamsConfig.consumerPrefix(ConsumerConfig.ISOLATION_LEVEL_CONFIG), "read_committed");
+        // The composition already named every topic and store from the application id; running
+        // under a different one would consume tick topics nobody writes to.
+        Object declared = p.get(StreamsConfig.APPLICATION_ID_CONFIG);
+        if (declared != null && !applicationId.equals(declared)) {
+            throw new IllegalArgumentException("application.id is " + declared
+                    + " but the composition is named " + applicationId
+                    + "; the composition's id names its topics and stores");
+        }
+        p.put(StreamsConfig.APPLICATION_ID_CONFIG, applicationId);
 
         Admin admin = Admin.create(Map.of("bootstrap.servers",
                 p.getProperty(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG)));
@@ -101,14 +136,12 @@ public final class Parsley {
             TopicIds topicIds = TopicIds.fromAdmin(admin);
             Topology t = new Topology();
             for (Stage stage : stages.values()) {
-                stage.addTo(t, topicIds,
+                stage.addTo(t, applicationId, topicIds,
                         (ids, sinkTopics) -> new AdminBrokerOffsets(ids, admin, sinkTopics), false);
             }
             KafkaStreams streams = new KafkaStreams(t, p, Positions.capturingClientSupplier());
-            LOG.info("assembled application {} with stages {}",
-                    p.getProperty(StreamsConfig.APPLICATION_ID_CONFIG), stages.keySet());
-            return new CausalStreams(streams, admin,
-                    p.getProperty(StreamsConfig.APPLICATION_ID_CONFIG));
+            LOG.info("assembled application {} with stages {}", applicationId, stages.keySet());
+            return new CausalStreams(streams, admin, applicationId);
         } catch (RuntimeException e) {
             admin.close();
             throw e;

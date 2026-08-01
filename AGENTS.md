@@ -66,8 +66,11 @@ Start from `docs/guide/getting-started.md`. The runtime enforces
 `processing.guarantee=exactly_once_v2` and `isolation.level=read_committed`, and must be
 started through `Parsley.streams` (it installs the position-capturing client supplier the
 protocol's liveness depends on). Emissions may only name declared sinks, and a stage with
-ticks needs its tick topic (`vc-<stage>-ticks`) created with the partition count of the
-stage's widest source topic. The full application contract is `docs/guide/expectations.md`.
+ticks needs its tick topic (`<application.id>-<stage>-ticks`) created with the partition
+count of the stage's widest source topic. Every topic and store Parsley owns is named
+`<application.id>-<stage>-<kind>`, the convention Kafka Streams uses for the topics it
+creates, so an application's topics sort together in a listing. The full application
+contract is `docs/guide/expectations.md`.
 
 ## Vendoring this library
 

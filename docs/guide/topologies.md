@@ -20,16 +20,17 @@ Stages compose into one application, or run as separate applications, and the gu
 not change: ordering is carried by the stamps on the wire, not by co-deployment.
 
 ```java
-try (CausalStreams app = Parsley.of(p1, p2).streams(props)) {
+try (CausalStreams app = Parsley.named("pipeline-app", p1, p2).streams(props)) {
     app.start();
 }
 ```
 
-`Parsley.of(p1, p2)` assembles both stages into one Streams topology; each keeps its own
-state stores, keyed by its stage name. Splitting the same stages across two applications
-changes deployment granularity and nothing else. A new application joins a running topology
-by simply starting to consume: it self-gates into causal order during replay, and its
-outputs are correctly gated everywhere from its first emission.
+`Parsley.named("pipeline-app", p1, p2)` assembles both stages into one Streams topology,
+under the application id that names every topic and store the application owns. Each stage
+keeps its own state stores, keyed by its stage name. Splitting the same stages across two
+applications changes deployment granularity and nothing else. A new application joins a
+running topology by simply starting to consume: it self-gates into causal order during
+replay, and its outputs are correctly gated everywhere from its first emission.
 
 ## Linear
 

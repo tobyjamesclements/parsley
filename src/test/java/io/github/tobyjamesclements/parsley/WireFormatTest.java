@@ -3,6 +3,7 @@ package io.github.tobyjamesclements.parsley;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.HexFormat;
 import java.util.Map;
 import java.util.Set;
@@ -112,6 +113,42 @@ class WireFormatTest {
         assertEquals("0000000000000009",
                 HEX.formatHex(headers.lastHeader("vc-seq").value()).toUpperCase(),
                 "vc-seq is 8 bytes, big-endian");
+    }
+
+    /**
+     * The names Parsley puts on a cluster, pinned. They are a compatibility surface twice
+     * over: the tick topic is created by hand before start, so renaming it leaves an
+     * application consuming a topic nobody made, and the store names are what Kafka Streams
+     * builds the changelog topics and state directories from, so renaming those orphans the
+     * committed state of every deployed instance.
+     *
+     * <p>The shape is Kafka Streams' own, {@code <application.id>-<name>-<kind>}: an operator
+     * listing a cluster's topics in name order sees one application's Parsley and Streams
+     * topics as a single block. A stray prefix on any of these scatters them again, which is
+     * what this pins against.
+     */
+    @Test
+    void ownedNamesFollowTheKafkaStreamsConvention() {
+        Topic<String, String> orders = Topic.of("orders", Codec.utf8(), Codec.utf8());
+        Stage stage = Stage.named("balances")
+                .state(Codec.int64(), () -> 0L)
+                .on(orders, (Long n, Message<String, String> m) -> Step.of(n + 1))
+                .ticks(Duration.ofSeconds(1), (Long n, Tick t) -> Step.of(n))
+                .build();
+
+        assertEquals("payments-balances-ticks", stage.tickTopicName("payments"),
+                "the tick topic is qualified by the application id, like every internal topic"
+                        + " Kafka Streams creates");
+        // Streams wraps the store name as <application.id>-<store>-changelog, so a
+        // stage-relative store name lands as payments-balances-state-changelog on the cluster.
+        assertEquals("balances-state", stage.protocolStoreName(),
+                "the protocol store is named for the stage alone");
+        assertEquals("balances-fold", stage.foldStoreName(),
+                "the fold store is named for the stage alone");
+
+        assertTrue(Parsley.named("payments", stage).testTopology().describe().toString()
+                        .contains("payments-balances-ticks"),
+                "and the assembled topology really sources and sinks that name");
     }
 
     // ---------------------------------------------------------------- state-store layout

@@ -17,7 +17,7 @@ never see it).
 @Test
 void applicationMeetsTheContract(@TempDir Path stateDir) {
     ContractProbes.probe(
-            Parsley.of(settlement, balances),
+            Parsley.named("settlements-app", settlement, balances),
             ContractProbes.Samples.of()
                     .on(orders, "o-1", sampleOrder())
                     .on(payments, "p-1", samplePayment()),
@@ -58,7 +58,8 @@ cluster, read-only, without starting the application:
 
 ```java
 try (Admin admin = Admin.create(Map.of("bootstrap.servers", brokers))) {
-    ContractProbes.probeCluster(Parsley.of(settlement, balances), admin).assertOk();
+    ContractProbes.probeCluster(
+            Parsley.named("settlements-app", settlement, balances), admin).assertOk();
 }
 ```
 

@@ -169,8 +169,8 @@ record — so a topology run outside `Parsley.streams` fails closed instead of w
 `TopologyTestDriver` runs without a broker through `testTopology()`, which assembles a fresh
 broker-less topology per call.
 
-Stages compose: `Parsley.of(stageA, stageB, ...)` assembles several named stages into
-one Streams topology, connected through ordinary topics — one stage's sink is another's
+Stages compose: `Parsley.named(applicationId, stageA, stageB, ...)` assembles several named
+stages into one Streams topology, connected through ordinary topics — one stage's sink is another's
 source, and the connecting topic is a causal channel like any other, stamped on write and
 gated on read. Hops cost only the broker round trip (stamping is synchronous under sequence
 claims), custody carries transitively across them, and each stage keeps its own state store

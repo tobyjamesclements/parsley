@@ -69,13 +69,19 @@ cadence floor, not an exact schedule.
 
 ## The tick topic
 
-The tick topic is named `vc-<stage-name>-ticks` and is the stage's own: it appears as
-one of the stage's sources, so composition rules prevent any other stage from consuming it.
+The tick topic is named `<application.id>-<stage-name>-ticks` and is the stage's own: it
+appears as one of the stage's sources, so composition rules prevent any other stage from
+consuming it. The application id comes from `Parsley.named`, and prefixing it follows the
+convention Kafka Streams uses for the topics it creates — a stage named `balances` in the
+application `payments` owns `payments-balances-ticks`, which sorts beside the
+`payments-balances-state-changelog` Streams creates for the same stage.
+
 Like every declared topic it must exist before the application starts, and assembly fails
 loudly when it is missing or its partition count differs from the stage's widest source
 topic — each task emits ticks to its own partition, so the counts must agree exactly.
-Ticks are transient by design; a short retention on the topic is enough, provided it covers
-consumer lag like any causal topic.
+`ContractProbes.probe` reports the name to create without needing a cluster. Ticks are
+transient by design; a short retention on the topic is enough, provided it covers consumer
+lag like any causal topic.
 
 ## Testing
 

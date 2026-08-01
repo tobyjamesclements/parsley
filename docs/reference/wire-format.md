@@ -88,14 +88,15 @@ headers. This is a known limit of the current cut.
 ## Tick record
 
 A stage with declared ticks emits one record per interval per task to its tick topic,
-`vc-<stage>-ticks`. The key is the emitting task's partition as a big-endian `int32` —
-the sink partitioner reads it back to land the tick on the emitting task's own channel — the
-value is null, the timestamp is the task's wall clock at emission, and the headers are the
+`<application.id>-<stage>-ticks`. The key is the emitting task's partition as a big-endian
+`int32` — the sink partitioner reads it back to land the tick on the emitting task's own
+channel — the value is null, the timestamp is the task's wall clock at emission, and the headers are the
 standard stamp above.
 
 ## Fold-state store
 
-A stateful stage keeps its per-key fold state in a second store, `vc-<stage>-fold`.
+A stateful stage keeps its per-key fold state in a second store, `<stage>-fold` — which
+Kafka Streams backs with the changelog topic `<application.id>-<stage>-fold-changelog`.
 Keys are the message key's encoded bytes with a one-byte presence prefix — `0x00` alone for
 a null key, `0x01` followed by the key bytes otherwise — so a null key folds under its own
 state without colliding with an empty key. The tick state occupies the single key `0x02`,

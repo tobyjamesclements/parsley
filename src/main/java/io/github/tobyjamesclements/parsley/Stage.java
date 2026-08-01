@@ -144,9 +144,9 @@ public final class Stage {
 
         /**
          * Declares ticks: the runtime emits one stamped record per interval to the stage's
-         * own tick topic ({@code vc-<name>-ticks}, which must exist with the same
-         * partition count as the stage's widest source topic), consumes it back through the
-         * gate, and hands it to {@code logic} as a {@link Tick}. Callable once.
+         * own tick topic ({@code <application.id>-<name>-ticks}, which must exist with the
+         * same partition count as the stage's widest source topic), consumes it back through
+         * the gate, and hands it to {@code logic} as a {@link Tick}. Callable once.
          */
         public Builder ticks(Duration interval, TickHandler logic) {
             this.ticks = statelessTickSpec(interval, logic, ticks);
@@ -226,9 +226,9 @@ public final class Stage {
          * Declares ticks folded over the stage's tick state: one reserved per-partition slot
          * of the stage's state type, distinct from every per-key slot. The runtime emits one
          * stamped record per interval to the stage's own tick topic
-         * ({@code vc-<name>-ticks}, which must exist with the same partition count as
-         * the stage's widest source topic), consumes it back through the gate, and folds it
-         * with {@code logic}. Callable once.
+         * ({@code <application.id>-<name>-ticks}, which must exist with the same partition
+         * count as the stage's widest source topic), consumes it back through the gate, and
+         * folds it with {@code logic}. Callable once.
          */
         @SuppressWarnings("unchecked")
         public Stateful<S> ticks(Duration interval, TickFold<S> logic) {
@@ -298,12 +298,19 @@ public final class Stage {
         return state != null;
     }
 
+    /**
+     * The protocol store's name. Kafka Streams derives its changelog topic as
+     * {@code <application.id>-<store>-changelog}, so a store named for the stage alone puts
+     * the changelog beside every other internal topic of the application when a cluster's
+     * topics are listed in name order.
+     */
     String protocolStoreName() {
-        return "vc-" + name + "-state";
+        return name + "-state";
     }
 
+    /** The fold store's name; see {@link #protocolStoreName} for why it is stage-relative. */
     String foldStoreName() {
-        return "vc-" + name + "-fold";
+        return name + "-fold";
     }
 
     private String sourceNode() {
@@ -318,15 +325,21 @@ public final class Stage {
         return "vc-" + name + "-sink-" + topic;
     }
 
-    String tickTopicName() {
-        return "vc-" + name + "-ticks";
+    /**
+     * The stage's tick topic, qualified by the application it belongs to. Kafka Streams names
+     * the topics it creates {@code <application.id>-<name>-<kind>}; the tick topic is the same
+     * kind of thing — internal to one application, owned by one stage — so it takes the same
+     * shape and sorts into the same block of a topic listing.
+     */
+    String tickTopicName(String applicationId) {
+        return applicationId + "-" + name + "-ticks";
     }
 
     /** All topics the stage's source node consumes, the tick topic included when declared. */
-    Set<String> sourceTopics() {
+    Set<String> sourceTopics(String applicationId) {
         if (ticks == null) return sources.keySet();
         Set<String> all = new HashSet<>(sources.keySet());
-        all.add(tickTopicName());
+        all.add(tickTopicName(applicationId));
         return all;
     }
 
@@ -341,8 +354,8 @@ public final class Stage {
      * queries answer empty — safe precisely because no broker means no prior incarnations to
      * seed against and nothing to truncate.
      */
-    void addToForTest(Topology t) {
-        addTo(t, topic -> new TopicIds.Resolved(testChannel(topic, 0).topicId(), 1),
+    void addToForTest(Topology t, String applicationId) {
+        addTo(t, applicationId, topic -> new TopicIds.Resolved(testChannel(topic, 0).topicId(), 1),
                 (ids, sinkTopics) -> new BrokerOffsets() {
                     @Override
                     public Map<Channel, Long> endOffsets(Set<UUID> topicIds) {
@@ -361,20 +374,23 @@ public final class Stage {
      * the node suppliers rather than stored on the stage, so a stage is immutable and every
      * assembled topology is self-contained.
      */
-    void addTo(Topology t, TopicIds topicIds, BrokerOffsetsProvider brokerOffsets, boolean testWired) {
+    void addTo(Topology t, String applicationId, TopicIds topicIds,
+               BrokerOffsetsProvider brokerOffsets, boolean testWired) {
         t.addSource(sourceNode(), new ByteArrayDeserializer(), new ByteArrayDeserializer(),
-                sourceTopics().toArray(String[]::new));
-        t.addProcessor(processorNode(), new AdapterSupplier(topicIds, brokerOffsets, testWired),
+                sourceTopics(applicationId).toArray(String[]::new));
+        t.addProcessor(processorNode(),
+                new AdapterSupplier(applicationId, topicIds, brokerOffsets, testWired),
                 sourceNode());
         if (ticks != null) {
+            String tickTopic = tickTopicName(applicationId);
             // A task emits ticks to its own partition, so the tick topic must cover every
             // task: fewer partitions than the widest source and high tasks cannot tick; more
             // and Streams creates ghost tasks consuming nothing but their tick partition.
-            int tickPartitions = topicIds.resolve(tickTopicName()).partitions();
+            int tickPartitions = topicIds.resolve(tickTopic).partitions();
             int taskPartitions = sources.keySet().stream()
                     .mapToInt(topic -> topicIds.resolve(topic).partitions()).max().orElseThrow();
             if (tickPartitions != taskPartitions) {
-                throw new IllegalStateException("tick topic " + tickTopicName() + " has "
+                throw new IllegalStateException("tick topic " + tickTopic + " has "
                         + tickPartitions + " partitions but the stage's widest source has "
                         + taskPartitions + "; create it with exactly that count");
             }
@@ -383,7 +399,7 @@ public final class Stage {
             org.apache.kafka.streams.processor.StreamPartitioner<byte[], byte[]> partitioner =
                     (topic, key, value, numPartitions) ->
                             Optional.of(Set.of(tickPartition(key)));
-            t.addSink(sinkNode(tickTopicName()), tickTopicName(),
+            t.addSink(sinkNode(tickTopic), tickTopic,
                     new ByteArraySerializer(), new ByteArraySerializer(),
                     partitioner, processorNode());
         }
@@ -444,12 +460,14 @@ public final class Stage {
 
     private final class AdapterSupplier implements ProcessorSupplier<byte[], byte[], byte[], byte[]> {
 
+        private final String applicationId;
         private final TopicIds topicIds;
         private final BrokerOffsetsProvider brokerOffsets;
         private final boolean testWired;
 
-        private AdapterSupplier(TopicIds topicIds, BrokerOffsetsProvider brokerOffsets,
-                                boolean testWired) {
+        private AdapterSupplier(String applicationId, TopicIds topicIds,
+                                BrokerOffsetsProvider brokerOffsets, boolean testWired) {
+            this.applicationId = applicationId;
             this.topicIds = topicIds;
             this.brokerOffsets = brokerOffsets;
             this.testWired = testWired;
@@ -473,12 +491,13 @@ public final class Stage {
 
         @Override
         public Processor<byte[], byte[], byte[], byte[]> get() {
-            return new Adapter(topicIds, brokerOffsets, testWired);
+            return new Adapter(applicationId, topicIds, brokerOffsets, testWired);
         }
     }
 
     private final class Adapter implements Processor<byte[], byte[], byte[], byte[]> {
 
+        private final String applicationId;
         private final TopicIds topicIds;
         private final BrokerOffsetsProvider brokerOffsets;
         private final boolean testWired;
@@ -493,12 +512,13 @@ public final class Stage {
         private final Map<Channel, Long> fedThrough = new HashMap<>();
         /** Head offset already warned about per channel, so one hold warns once. */
         private final Map<Channel, Long> warnedHeads = new HashMap<>();
-        private String applicationId;
         private String taskKey;
         private int taskPartition;
         private boolean positionCaptureChecked;
 
-        private Adapter(TopicIds topicIds, BrokerOffsetsProvider brokerOffsets, boolean testWired) {
+        private Adapter(String applicationId, TopicIds topicIds,
+                        BrokerOffsetsProvider brokerOffsets, boolean testWired) {
+            this.applicationId = applicationId;
             this.topicIds = topicIds;
             this.brokerOffsets = brokerOffsets;
             this.testWired = testWired;
@@ -520,7 +540,7 @@ public final class Stage {
             }
 
             Set<Channel> consumed = new HashSet<>();
-            for (String topic : sourceTopics()) {
+            for (String topic : sourceTopics(applicationId)) {
                 Channel c = new Channel(topicIds.resolve(topic).id(), taskPartition);
                 consumed.add(c);
                 channelByTopic.put(topic, c);
@@ -532,10 +552,10 @@ public final class Stage {
             }
             Set<String> sinkTopics = new HashSet<>(sinks.keySet());
             if (ticks != null) {
-                tickChannel = channelByTopic.get(tickTopicName());
+                tickChannel = channelByTopic.get(tickTopicName(applicationId));
                 // The tick channel is both consumed and produced: the end-offset seed must
                 // cover it so a restart's stamps still claim the prior incarnation's ticks.
-                sinkTopics.add(tickTopicName());
+                sinkTopics.add(tickTopicName(applicationId));
             }
             Set<UUID> sinkIds = new HashSet<>();
             for (String topic : sinkTopics) {
@@ -562,7 +582,6 @@ public final class Stage {
             metrics = new StageMetrics(context.metrics(), name, context.taskId().toString(),
                     topicByChannel, node);
 
-            this.applicationId = context.applicationId();
             this.taskKey = context.taskId().toString();
             context.schedule(Duration.ofMillis(500), PunctuationType.WALL_CLOCK_TIME,
                     ts -> {
@@ -707,7 +726,8 @@ public final class Stage {
             var headers = new RecordHeaders();
             CausalHeaders.write(headers, node.prepareSend(tickChannel));
             byte[] key = java.nio.ByteBuffer.allocate(4).putInt(taskPartition).array();
-            context.forward(new Record<>(key, null, ts, headers), sinkNode(tickTopicName()));
+            context.forward(new Record<>(key, null, ts, headers),
+                    sinkNode(tickTopicName(applicationId)));
             metrics.recordTickEmitted();
         }
 

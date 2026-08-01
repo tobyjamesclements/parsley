@@ -76,7 +76,7 @@ class ExplainHoldsTest {
                 .into(EFFECTS)
                 .build();
         try (TopologyTestDriver d = new TopologyTestDriver(
-                Parsley.of(upstream).testTopology(), props("explain-upstream"))) {
+                Parsley.named("explain-upstream", upstream).testTopology(), props("explain-upstream"))) {
             in(d, "causes").pipeInput(Codec.utf8().encode("k"), Codec.utf8().encode("c0"));
             return d.createOutputTopic("effects",
                     new ByteArrayDeserializer(), new ByteArrayDeserializer())
@@ -93,7 +93,8 @@ class ExplainHoldsTest {
     void aHeldRecordNamesTheCauseItIsWaitingFor() {
         TestRecord<byte[], byte[]> effect = effectClaimingCause("e0");
         try (TopologyTestDriver app = new TopologyTestDriver(
-                Parsley.of(consumer(Duration.ofSeconds(30))).testTopology(),
+                Parsley.named("explain-offset", consumer(Duration.ofSeconds(30)))
+                        .testTopology(),
                 props("explain-offset"))) {
             in(app, "effects").pipeInput(effect);
             app.advanceWallClockTime(TICK);
@@ -121,7 +122,8 @@ class ExplainHoldsTest {
     void deliveringTheCauseClearsTheExplanation() {
         TestRecord<byte[], byte[]> effect = effectClaimingCause("e0");
         try (TopologyTestDriver app = new TopologyTestDriver(
-                Parsley.of(consumer(Duration.ofSeconds(30))).testTopology(),
+                Parsley.named("explain-cleared", consumer(Duration.ofSeconds(30)))
+                        .testTopology(),
                 props("explain-cleared"))) {
             in(app, "effects").pipeInput(effect);
             app.advanceWallClockTime(TICK);
@@ -151,7 +153,7 @@ class ExplainHoldsTest {
                 .build();
         TestRecord<byte[], byte[]> reply;
         try (TopologyTestDriver service = new TopologyTestDriver(
-                Parsley.of(responder).testTopology(), props("explain-seq-upstream"))) {
+                Parsley.named("explain-seq-upstream", responder).testTopology(), props("explain-seq-upstream"))) {
             in(service, "causes").pipeInput(Codec.utf8().encode("k"), Codec.utf8().encode("c0"));
             reply = service.createOutputTopic("replies",
                     new ByteArrayDeserializer(), new ByteArrayDeserializer())
@@ -164,7 +166,7 @@ class ExplainHoldsTest {
                 .into(OUT)
                 .build();
         try (TopologyTestDriver app = new TopologyTestDriver(
-                Parsley.of(watcher).testTopology(), props("explain-seq"))) {
+                Parsley.named("explain-seq", watcher).testTopology(), props("explain-seq"))) {
             in(app, "replies").pipeInput(reply);
             app.advanceWallClockTime(TICK);
 
@@ -187,7 +189,8 @@ class ExplainHoldsTest {
     void explanationsCarryNoPayload() {
         TestRecord<byte[], byte[]> effect = effectClaimingCause("SUPER-SECRET-PAYLOAD");
         try (TopologyTestDriver app = new TopologyTestDriver(
-                Parsley.of(consumer(Duration.ofSeconds(30))).testTopology(),
+                Parsley.named("explain-nopayload", consumer(Duration.ofSeconds(30)))
+                        .testTopology(),
                 props("explain-nopayload"))) {
             in(app, "effects").pipeInput(effect);
             app.advanceWallClockTime(TICK);
@@ -204,7 +207,8 @@ class ExplainHoldsTest {
     void theSummaryCarriesTheCodeRemedyAndReference() {
         TestRecord<byte[], byte[]> effect = effectClaimingCause("e0");
         try (TopologyTestDriver app = new TopologyTestDriver(
-                Parsley.of(consumer(Duration.ofSeconds(30))).testTopology(),
+                Parsley.named("explain-summary", consumer(Duration.ofSeconds(30)))
+                        .testTopology(),
                 props("explain-summary"))) {
             in(app, "effects").pipeInput(effect);
             app.advanceWallClockTime(TICK);
@@ -287,7 +291,7 @@ class ExplainHoldsTest {
                 .build();
         TestRecord<byte[], byte[]> cause;
         try (TopologyTestDriver d = new TopologyTestDriver(
-                Parsley.of(gatedCause).testTopology(), props("upstream-gatedcause"))) {
+                Parsley.named("upstream-gatedcause", gatedCause).testTopology(), props("upstream-gatedcause"))) {
             in(d, "replies").pipeInput(Codec.utf8().encode("k"), Codec.utf8().encode("r0"));
             cause = d.createOutputTopic("causes",
                             new ByteArrayDeserializer(), new ByteArrayDeserializer())
@@ -302,7 +306,7 @@ class ExplainHoldsTest {
                 .into(OUT)
                 .build();
         try (TopologyTestDriver app = new TopologyTestDriver(
-                Parsley.of(watcher).testTopology(), props("explain-upstream-held"))) {
+                Parsley.named("explain-upstream-held", watcher).testTopology(), props("explain-upstream-held"))) {
             // causes@0 arrives and holds: it claims replies@0, which never comes.
             in(app, "causes").pipeInput(cause);
             // effects@0 claims causes@0 — fetched here, and held.
@@ -346,7 +350,7 @@ class ExplainHoldsTest {
         List<TestRecord<byte[], byte[]>> effects;
         List<TestRecord<byte[], byte[]>> replies;
         try (TopologyTestDriver service = new TopologyTestDriver(
-                Parsley.of(responder).testTopology(), props("behind-upstream"))) {
+                Parsley.named("behind-upstream", responder).testTopology(), props("behind-upstream"))) {
             in(service, "causes").pipeInput(Codec.utf8().encode("k"), Codec.utf8().encode("c0"));
             in(service, "causes").pipeInput(Codec.utf8().encode("k"), Codec.utf8().encode("c1"));
             effects = service.createOutputTopic("effects",
@@ -361,7 +365,7 @@ class ExplainHoldsTest {
                 .into(OUT)
                 .build();
         try (TopologyTestDriver app = new TopologyTestDriver(
-                Parsley.of(watcher).testTopology(), props("explain-behind"))) {
+                Parsley.named("explain-behind", watcher).testTopology(), props("explain-behind"))) {
             in(app, "effects").pipeInput(effects.get(0)); // delivers; marks the sender at 0
             in(app, "replies").pipeInput(replies.get(1)); // claims that sender's sequence 1
             app.advanceWallClockTime(TICK);
@@ -395,7 +399,7 @@ class ExplainHoldsTest {
                 .build();
         TestRecord<byte[], byte[]> effect;
         try (TopologyTestDriver d = new TopologyTestDriver(
-                Parsley.of(upstream).testTopology(), props("upstream-twoclaims"))) {
+                Parsley.named("upstream-twoclaims", upstream).testTopology(), props("upstream-twoclaims"))) {
             in(d, "causes").pipeInput(Codec.utf8().encode("k"), Codec.utf8().encode("c0"));
             in(d, "replies").pipeInput(Codec.utf8().encode("k"), Codec.utf8().encode("r0"));
             // The second emission claims both causes@0 and replies@0.
@@ -411,7 +415,7 @@ class ExplainHoldsTest {
                 .into(OUT)
                 .build();
         try (TopologyTestDriver app = new TopologyTestDriver(
-                Parsley.of(watcher).testTopology(), props("explain-metclaim"))) {
+                Parsley.named("explain-metclaim", watcher).testTopology(), props("explain-metclaim"))) {
             in(app, "causes").pipeInput(Codec.utf8().encode("k"), Codec.utf8().encode("c0"));
             in(app, "effects").pipeInput(effect);
             app.advanceWallClockTime(TICK);
@@ -439,7 +443,7 @@ class ExplainHoldsTest {
         TestRecord<byte[], byte[]> effect;
         TestRecord<byte[], byte[]> reply;
         try (TopologyTestDriver service = new TopologyTestDriver(
-                Parsley.of(responder).testTopology(), props("metseq-upstream"))) {
+                Parsley.named("metseq-upstream", responder).testTopology(), props("metseq-upstream"))) {
             in(service, "causes").pipeInput(Codec.utf8().encode("k"), Codec.utf8().encode("c0"));
             effect = service.createOutputTopic("effects",
                             new ByteArrayDeserializer(), new ByteArrayDeserializer())
@@ -457,7 +461,7 @@ class ExplainHoldsTest {
                 .into(OUT)
                 .build();
         try (TopologyTestDriver app = new TopologyTestDriver(
-                Parsley.of(watcher).testTopology(), props("explain-metseq"))) {
+                Parsley.named("explain-metseq", watcher).testTopology(), props("explain-metseq"))) {
             in(app, "effects").pipeInput(effect); // delivers; marks the sender at sequence 0
             in(app, "replies").pipeInput(reply);
             app.advanceWallClockTime(TICK);
@@ -482,7 +486,8 @@ class ExplainHoldsTest {
     void aHoldAgesFromWhenItsRecordBecameTheHead() {
         TestRecord<byte[], byte[]> effect = effectClaimingCause("e0");
         try (TopologyTestDriver app = new TopologyTestDriver(
-                Parsley.of(consumer(Duration.ofSeconds(30))).testTopology(),
+                Parsley.named("explain-age", consumer(Duration.ofSeconds(30)))
+                        .testTopology(),
                 props("explain-age"), Instant.ofEpochMilli(0L))) {
             in(app, "effects").pipeInput(effect);
 
@@ -505,7 +510,8 @@ class ExplainHoldsTest {
     void aClosingTaskDropsItsPublishedHolds() {
         TestRecord<byte[], byte[]> effect = effectClaimingCause("e0");
         TopologyTestDriver app = new TopologyTestDriver(
-                Parsley.of(consumer(Duration.ofSeconds(30))).testTopology(), props("explain-closed"));
+                Parsley.named("explain-closed", consumer(Duration.ofSeconds(30)))
+                        .testTopology(), props("explain-closed"));
         try {
             in(app, "effects").pipeInput(effect);
             app.advanceWallClockTime(TICK);

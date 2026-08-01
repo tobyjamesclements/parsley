@@ -88,7 +88,7 @@ class StageTest {
                 .on(T2, m -> List.of(T3.send(m.key(), "out:" + m.value())))
                 .into(T3)
                 .build();
-        return new TopologyTestDriver(Parsley.of(stage).testTopology(), props("parsley-ttd"));
+        return new TopologyTestDriver(Parsley.named("parsley-ttd", stage).testTopology(), props("parsley-ttd"));
     }
 
     /** An unstamped record delivers immediately and its output carries a stamp claiming it. */
@@ -154,7 +154,7 @@ class StageTest {
                 .into(T3)
                 .build();
         try (TopologyTestDriver driver =
-                     new TopologyTestDriver(Parsley.of(counts).testTopology(), props("parsley-fold-ttd"))) {
+                     new TopologyTestDriver(Parsley.named("parsley-fold-ttd", counts).testTopology(), props("parsley-fold-ttd"))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> t3 =
@@ -219,7 +219,7 @@ class StageTest {
                 .into(T3)
                 .build();
         try (TopologyTestDriver driver = new TopologyTestDriver(
-                Parsley.of(counts).testTopology(), props("parsley-nullkey-ttd"))) {
+                Parsley.named("parsley-nullkey-ttd", counts).testTopology(), props("parsley-nullkey-ttd"))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> t3 =
@@ -246,7 +246,7 @@ class StageTest {
                 .into(T3)
                 .build();
         try (TopologyTestDriver driver = new TopologyTestDriver(
-                Parsley.of(mix).testTopology(), props("parsley-mixed-ttd"))) {
+                Parsley.named("parsley-mixed-ttd", mix).testTopology(), props("parsley-mixed-ttd"))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestInputTopic<String, String> t2 =
@@ -271,7 +271,7 @@ class StageTest {
                 .into(T3)
                 .build();
         Topology t = new Topology();
-        stage.addTo(t, TEST_IDS, (ids, sinks) -> NO_OFFSETS, false);
+        stage.addTo(t, "parsley-eos-guard", TEST_IDS, (ids, sinks) -> NO_OFFSETS, false);
 
         RuntimeException e = assertThrows(RuntimeException.class,
                 () -> new TopologyTestDriver(t, props("parsley-eos-guard")).close(),
@@ -288,7 +288,7 @@ class StageTest {
                 .into(T3)
                 .build();
         Topology t = new Topology();
-        stage.addTo(t, TEST_IDS, (ids, sinks) -> NO_OFFSETS, false);
+        stage.addTo(t, "parsley-pos-guard", TEST_IDS, (ids, sinks) -> NO_OFFSETS, false);
         Properties props = props("parsley-pos-guard");
         props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
 
@@ -445,7 +445,8 @@ class StageTest {
         Properties props = props("parsley-ttd-debug");
         props.put(StreamsConfig.METRICS_RECORDING_LEVEL_CONFIG, "DEBUG");
         try (TopologyTestDriver driver =
-                     new TopologyTestDriver(Parsley.of(stage).testTopology(), props)) {
+                     new TopologyTestDriver(Parsley.named("parsley-ttd-debug", stage).testTopology(),
+                             props)) {
             TestInputTopic<String, String> t2 =
                     driver.createInputTopic("t2", new StringSerializer(), new StringSerializer());
 
@@ -475,7 +476,7 @@ class StageTest {
                 .truncationInterval(Duration.ofSeconds(1))
                 .build();
         try (TopologyTestDriver driver = new TopologyTestDriver(
-                Parsley.of(stage).testTopology(), props("parsley-ttd-testwiring-sweep"))) {
+                Parsley.named("parsley-ttd-testwiring-sweep", stage).testTopology(), props("parsley-ttd-testwiring-sweep"))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             var headers = new RecordHeaders();
@@ -508,7 +509,7 @@ class StageTest {
             }
         };
         Topology t = new Topology();
-        stage.addTo(t, TEST_IDS, (ids, sinks) -> failing, true);
+        stage.addTo(t, "parsley-ttd-sweep", TEST_IDS, (ids, sinks) -> failing, true);
         try (TopologyTestDriver driver = new TopologyTestDriver(t, props("parsley-ttd-sweep"))) {
             driver.advanceWallClockTime(Duration.ofSeconds(1));
             assertEquals(1.0, parsleyMetric(driver, "truncation-sweeps-skipped-total", null),
@@ -530,14 +531,14 @@ class StageTest {
                 .into(T3)
                 .build();
         try (TopologyTestDriver driver = new TopologyTestDriver(
-                Parsley.of(stage).testTopology(), props("parsley-tick-ttd"),
+                Parsley.named("parsley-tick-ttd", stage).testTopology(), props("parsley-tick-ttd"),
                 Instant.ofEpochMilli(0L))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> t3 =
                     driver.createOutputTopic("t3", new StringDeserializer(), new StringDeserializer());
             TestOutputTopic<byte[], byte[]> tickTopic = driver.createOutputTopic(
-                    "vc-ticker-ticks",
+                    "parsley-tick-ttd-ticker-ticks",
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer());
 
@@ -584,7 +585,7 @@ class StageTest {
                 .into(T3)
                 .build();
         try (TopologyTestDriver driver = new TopologyTestDriver(
-                Parsley.of(stage).testTopology(), props("parsley-tickfold-ttd"),
+                Parsley.named("parsley-tickfold-ttd", stage).testTopology(), props("parsley-tickfold-ttd"),
                 Instant.ofEpochMilli(0L))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
@@ -620,7 +621,7 @@ class StageTest {
                 .into(T3)
                 .build();
         try (TopologyTestDriver driver = new TopologyTestDriver(
-                Parsley.of(stage).testTopology(), props("parsley-tickgate-ttd"),
+                Parsley.named("parsley-tickgate-ttd", stage).testTopology(), props("parsley-tickgate-ttd"),
                 Instant.ofEpochMilli(0L))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
@@ -629,7 +630,7 @@ class StageTest {
             TestOutputTopic<String, String> t3 =
                     driver.createOutputTopic("t3", new StringDeserializer(), new StringDeserializer());
             TestOutputTopic<byte[], byte[]> tickTopic = driver.createOutputTopic(
-                    "vc-gated-ticks",
+                    "parsley-tickgate-ttd-gated-ticks",
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer());
 
@@ -675,7 +676,7 @@ class StageTest {
                 .build();
 
         try (TopologyTestDriver driver = new TopologyTestDriver(
-                Parsley.of(stage).testTopology(), props("parsley-statefultick-ttd"),
+                Parsley.named("parsley-statefultick-ttd", stage).testTopology(), props("parsley-statefultick-ttd"),
                 Instant.ofEpochMilli(0L))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
@@ -723,9 +724,10 @@ class StageTest {
                 .ticks(Duration.ofSeconds(1), tick -> List.of())
                 .build();
         TopicIds ids = topic -> new TopicIds.Resolved(
-                Stage.testChannel(topic, 0).topicId(), topic.startsWith("vc-") ? 1 : 2);
+                Stage.testChannel(topic, 0).topicId(), topic.endsWith("-ticks") ? 1 : 2);
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> stage.addTo(new Topology(), ids, (i, s) -> NO_OFFSETS, true),
+                () -> stage.addTo(new Topology(), "parsley-tickwidth", ids,
+                        (i, s) -> NO_OFFSETS, true),
                 "a tick topic narrower than the widest source must fail assembly");
         assertTrue(e.getMessage().contains("partitions"),
                 "the failure must name the partition mismatch, got: " + e.getMessage());
@@ -767,7 +769,7 @@ class StageTest {
                 .truncationInterval(Duration.ofSeconds(1))
                 .build();
         Topology t = new Topology();
-        stage.addTo(t, TEST_IDS, (ids, sinks) -> logStarts, true);
+        stage.addTo(t, "parsley-trunc-ttd", TEST_IDS, (ids, sinks) -> logStarts, true);
 
         try (TopologyTestDriver driver = new TopologyTestDriver(t, props("parsley-trunc-ttd"))) {
             TestInputTopic<String, String> t1 =

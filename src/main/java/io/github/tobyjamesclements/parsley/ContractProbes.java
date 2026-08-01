@@ -173,8 +173,8 @@ public final class ContractProbes {
         for (Stage stage : app.stageSet()) {
             if (stage.hasTicks()) {
                 notes.add(new Finding("tick-topic", "stage '" + stage.name() + "' needs topic '"
-                        + stage.tickTopicName() + "' created with the partition count of its"
-                        + " widest source before start", CLAUSE_TICKS));
+                        + stage.tickTopicName(app.applicationId()) + "' created with the"
+                        + " partition count of its widest source before start", CLAUSE_TICKS));
             }
             notes.add(new Finding("names", "stage '" + stage.name() + "' pins store '"
                     + stage.protocolStoreName() + "'"
@@ -216,13 +216,14 @@ public final class ContractProbes {
                         + " topics need the same count", CLAUSE_COPARTITION));
             }
             if (stage.hasTicks()) {
+                String tickTopic = stage.tickTopicName(app.applicationId());
                 Integer tickPartitions =
-                        resolveOrReport(ids, stage.tickTopicName(), "tick topic", stage, failures);
+                        resolveOrReport(ids, tickTopic, "tick topic", stage, failures);
                 if (tickPartitions != null && allSourcesResolved) {
                     int widest = sourcePartitions.values().stream()
                             .mapToInt(Integer::intValue).max().orElse(0);
                     if (tickPartitions != widest) {
-                        failures.add(new Finding("tick-topic", "topic '" + stage.tickTopicName()
+                        failures.add(new Finding("tick-topic", "topic '" + tickTopic
                                 + "' has " + tickPartitions + " partition(s) but the widest source"
                                 + " of stage '" + stage.name() + "' has " + widest
                                 + "; create it with exactly that count", CLAUSE_TICKS));
@@ -278,7 +279,7 @@ public final class ContractProbes {
                                     Map<String, Topic<?, ?>> sources, Map<String, Topic<?, ?>> sinks,
                                     List<Finding> failures, List<Finding> notes) {
         Properties props = new Properties();
-        props.put(StreamsConfig.APPLICATION_ID_CONFIG, "vc-contract-probes");
+        props.put(StreamsConfig.APPLICATION_ID_CONFIG, app.applicationId());
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "probe:9092");
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toString());
 
@@ -305,7 +306,8 @@ public final class ContractProbes {
             }
             for (Stage stage : app.stageSet()) {
                 if (stage.hasTicks()) {
-                    readSink(driver, stage.tickTopicName(), null, failures, new ArrayList<>());
+                    readSink(driver, stage.tickTopicName(app.applicationId()), null, failures,
+                            new ArrayList<>());
                 }
             }
         }

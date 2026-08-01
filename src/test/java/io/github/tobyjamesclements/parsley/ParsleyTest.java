@@ -54,7 +54,8 @@ class ParsleyTest {
                 .build();
 
         try (TopologyTestDriver driver = new TopologyTestDriver(
-                Parsley.of(first, second).testTopology(), props("parsley-multi-ttd"))) {
+                Parsley.named("parsley-multi-ttd", first, second).testTopology(),
+                props("parsley-multi-ttd"))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             TestOutputTopic<String, String> t3 =
@@ -79,6 +80,19 @@ class ParsleyTest {
         }
     }
 
+    /** The application id prefixes topic names, so a composition may not take an unusable one. */
+    @Test
+    void compositionRejectsAnApplicationIdThatCannotNameATopic() {
+        Stage stage = Stage.named("stage").on(T1, m -> List.of()).build();
+
+        assertThrows(IllegalArgumentException.class, () -> Parsley.named(null, stage),
+                "a null application id must be rejected at composition");
+        assertThrows(IllegalArgumentException.class, () -> Parsley.named("", stage),
+                "an empty application id must be rejected at composition");
+        assertThrows(IllegalArgumentException.class, () -> Parsley.named("has spaces", stage),
+                "an application id no topic could carry must be rejected at composition");
+    }
+
     /** Composition validation: duplicate names and shared source topics fail loudly. */
     @Test
     void compositionValidatesNamesAndSources() {
@@ -86,12 +100,12 @@ class ParsleyTest {
 
         Stage a = Stage.named("same").on(T1, drop).build();
         Stage b = Stage.named("same").on(MID, drop).build();
-        assertThrows(IllegalArgumentException.class, () -> Parsley.of(a, b),
+        assertThrows(IllegalArgumentException.class, () -> Parsley.named("parsley-dup", a, b),
                 "stages sharing a name must be rejected");
 
         Stage c = Stage.named("c").on(T1, drop).build();
         Stage d = Stage.named("d").on(T1, drop).build();
-        assertThrows(IllegalArgumentException.class, () -> Parsley.of(c, d),
+        assertThrows(IllegalArgumentException.class, () -> Parsley.named("parsley-shared", c, d),
                 "two stages sourcing one topic must be rejected (one source node per topic)");
     }
 
@@ -103,13 +117,14 @@ class ParsleyTest {
 
         Stage ticking = Stage.named("a").on(T1, drop).ticks(second, tick -> List.of()).build();
         Stage poacher = Stage.named("b")
-                .on(Topic.of("vc-a-ticks", Codec.utf8(), Codec.utf8()), drop)
+                .on(Topic.of("parsley-ticks-ttd-a-ticks", Codec.utf8(), Codec.utf8()), drop)
                 .build();
-        assertThrows(IllegalArgumentException.class, () -> Parsley.of(ticking, poacher),
+        assertThrows(IllegalArgumentException.class,
+                () -> Parsley.named("parsley-ticks-ttd", ticking, poacher),
                 "a stage sourcing another stage's tick topic must be rejected");
 
         Stage other = Stage.named("z").on(MID, drop).ticks(second, tick -> List.of()).build();
-        assertNotNull(Parsley.of(ticking, other),
+        assertNotNull(Parsley.named("parsley-ticks-ttd", ticking, other),
                 "two ticking stages have distinct tick topics and must compose");
     }
 
@@ -122,7 +137,8 @@ class ParsleyTest {
                 .build();
 
         try (TopologyTestDriver driver = new TopologyTestDriver(
-                Parsley.of(stage).testTopology(), props("parsley-undeclared-ttd"))) {
+                Parsley.named("parsley-undeclared-ttd", stage).testTopology(),
+                props("parsley-undeclared-ttd"))) {
             TestInputTopic<String, String> t1 =
                     driver.createInputTopic("t1", new StringSerializer(), new StringSerializer());
             boolean threw = false;
@@ -142,7 +158,7 @@ class ParsleyTest {
                 .on(T1, m -> List.of(T3.send(m.key(), m.value())))
                 .into(T3)
                 .build();
-        Parsley parsley = Parsley.of(stage);
+        Parsley parsley = Parsley.named("parsley-fresh", stage);
 
         try (TopologyTestDriver ignored = new TopologyTestDriver(
                 parsley.testTopology(), props("parsley-fresh-a"))) {

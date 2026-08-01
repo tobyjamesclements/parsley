@@ -97,7 +97,7 @@ class ParsleyStreamsIT {
                 .into(mid)
                 .build();
 
-        try (CausalStreams streams = Parsley.of(edge).streams(props("parsley-it-single"))) {
+        try (CausalStreams streams = Parsley.named("parsley-it-single", edge).streams(props("parsley-it-single"))) {
             streams.start();
             produce("t1", "k1", "v1", "k2", "v2", "k3", "v3");
 
@@ -141,7 +141,7 @@ class ParsleyStreamsIT {
                 .into(shipped)
                 .build();
 
-        try (CausalStreams first = Parsley.of(ship).streams(props("parsley-it-restart"))) {
+        try (CausalStreams first = Parsley.named("parsley-it-restart", ship).streams(props("parsley-it-restart"))) {
             first.start();
             produce("orders", "o1", "packed");
             consume("shipped", 1);
@@ -149,7 +149,7 @@ class ParsleyStreamsIT {
                     "the first instance must stop cleanly before the restart");
         }
 
-        try (CausalStreams second = Parsley.of(ship).streams(props("parsley-it-restart"))) {
+        try (CausalStreams second = Parsley.named("parsley-it-restart", ship).streams(props("parsley-it-restart"))) {
             second.start();
             produce("orders", "o2", "packed");
 
@@ -190,7 +190,7 @@ class ParsleyStreamsIT {
         // on one sink partition — which makes their offsets a total order over that task's
         // output, and any loss, duplication, or reordering visible.
         String applicationId = "parsley-it-rebalance";
-        try (CausalStreams first = Parsley.of(relay).streams(props(applicationId, stateDir))) {
+        try (CausalStreams first = Parsley.named(applicationId, relay).streams(props(applicationId, stateDir))) {
             first.start();
             awaitActiveTasks(first, 2, "the first instance alone must own both tasks");
             produceTo("moves", 0, "k0", "a");
@@ -198,7 +198,7 @@ class ParsleyStreamsIT {
             consume("moved", 2);
 
             try (CausalStreams second =
-                         Parsley.of(relay).streams(props(applicationId, secondStateDir))) {
+                         Parsley.named(applicationId, relay).streams(props(applicationId, secondStateDir))) {
                 second.start();
                 // The state here is a handful of records, so the joining instance is inside
                 // acceptable.recovery.lag immediately and the assignor moves an active task on

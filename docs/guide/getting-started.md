@@ -45,14 +45,18 @@ Stage settlement = Stage.named("settlement")
         .build();
 
 Properties props = new Properties();
-props.put(StreamsConfig.APPLICATION_ID_CONFIG, "settlements-app");
 props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092");
 
-try (CausalStreams app = Parsley.of(settlement).streams(props)) {
+try (CausalStreams app = Parsley.named("settlements-app", settlement).streams(props)) {
     app.start();
     // run until shutdown
 }
 ```
+
+The application id goes to `Parsley.named` rather than into the properties, because it names
+things: `streams` sets `application.id` from it, and it prefixes every topic and store the
+application owns — the same convention Kafka Streams uses, so a cluster's topic listing keeps
+an application's topics together. See [expectations](expectations.md#what-parsley-expects-of-you).
 
 Every cause the stage consumes has already been delivered when a handler runs; that is the
 guarantee. A message carries its own coordinate — source topic, partition, offset,
@@ -95,12 +99,12 @@ assertEquals(Step.of(expectedBalance, settlements.send("k", expected)),
         fold.apply(balance, Message.of("payments", "k", payment)));
 ```
 
-For the wiring, `Parsley.of(stage).testTopology()` returns a fresh broker-less topology for
-`TopologyTestDriver`: pipe records and assert on outputs. Stamp presence is observable via
-the `CausalHeaders` name constants; gating behaviour itself is Parsley's contract, verified
-by Parsley's own suite. The test topology is for the driver only — under a real cluster it
-neither captures consumer positions nor resolves real topic identity, and the adapter fails
-closed at the first delivered record.
+For the wiring, `Parsley.named(applicationId, stage).testTopology()` returns a fresh
+broker-less topology for `TopologyTestDriver`: pipe records and assert on outputs. Stamp
+presence is observable via the `CausalHeaders` name constants; gating behaviour itself is
+Parsley's contract, verified by Parsley's own suite. The test topology is for the driver
+only — under a real cluster it neither captures consumer positions nor resolves real topic
+identity, and the adapter fails closed at the first delivered record.
 
 ## What the runtime wires for you
 
