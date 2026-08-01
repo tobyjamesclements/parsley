@@ -98,8 +98,20 @@ acknowledgements, `stamp` outbound headers. Adoption is incremental: a producer 
 nothing claims nothing, so you stamp the producers whose ordering matters, one at a time,
 with no flag day.
 
-Requires Java 21 or later and brokers that serve topic IDs (Kafka 3.7+). Build from source
-with `mvn verify`.
+Requires Java 21 or later and brokers that serve topic IDs (Kafka 3.7+).
+
+```xml
+<dependency>
+    <groupId>io.github.tobyjamesclements</groupId>
+    <artifactId>parsley</artifactId>
+    <version>0.2.0-SNAPSHOT</version>
+</dependency>
+```
+
+Snapshots resolve from `https://central.sonatype.com/repository/maven-snapshots/`, which a
+consuming build declares for itself;
+[getting started](docs/guide/getting-started.md#adding-the-dependency) has that declaration
+and the Gradle equivalent. Build from source with `mvn verify`.
 
 ## Documentation
 

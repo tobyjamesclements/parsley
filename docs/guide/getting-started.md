@@ -8,6 +8,54 @@
   the consumer to `read_committed`. Parsley's state is defined against EOS; there is no
   at-least-once mode.
 
+## Adding the dependency
+
+```xml
+<repositories>
+    <repository>
+        <id>central-snapshots</id>
+        <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        <releases><enabled>false</enabled></releases>
+        <snapshots><enabled>true</enabled></snapshots>
+    </repository>
+</repositories>
+
+<dependencies>
+    <dependency>
+        <groupId>io.github.tobyjamesclements</groupId>
+        <artifactId>parsley</artifactId>
+        <version>0.2.0-SNAPSHOT</version>
+    </dependency>
+
+    <!-- Only for a test suite that uses ContractProbes. -->
+    <dependency>
+        <groupId>org.apache.kafka</groupId>
+        <artifactId>kafka-streams-test-utils</artifactId>
+        <version>4.3.1</version>
+        <scope>test</scope>
+    </dependency>
+</dependencies>
+```
+
+The same in Gradle:
+
+```kotlin
+repositories {
+    mavenCentral()
+    maven { url = uri("https://central.sonatype.com/repository/maven-snapshots/") }
+}
+
+dependencies {
+    implementation("io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT")
+    testImplementation("org.apache.kafka:kafka-streams-test-utils:4.3.1")   // ContractProbes
+}
+```
+
+`kafka-clients` and `kafka-streams` are inherited and required; the coordinates alone run
+everything on this page. An application with no stage, using only `CausalClock` and
+`CausalHeaders` ([plain clients](clients.md)), is the one exception and may drop 74 MiB of
+RocksDB with `<exclusion>` / `exclude(group = "org.apache.kafka", module = "kafka-streams")`.
+
 ## The shape: functional core, imperative edges
 
 Your logic is a pure function. It receives a causally delivered `Message` and returns
