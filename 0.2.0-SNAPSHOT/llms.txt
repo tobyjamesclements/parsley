@@ -7,8 +7,9 @@
 > on a timeout.
 
 Parsley is a Java 21 library (Maven artifact, MIT license) for Kafka Streams applications
-against brokers 3.7.0 or newer. The only required runtime dependency is kafka-clients;
-kafka-streams is optional and needed only by the Streams adapter. The on-wire footprint is
+against brokers 3.7.0 or newer. The runtime dependencies are kafka-clients and kafka-streams,
+both inherited; only the Streams adapter touches kafka-streams, and an application using just
+the plain-client edge (CausalClock, CausalHeaders) can exclude it. The on-wire footprint is
 three record headers (`vc`, `vc-sender`, `vc-seq`) on the application's own records; there
 are no protocol records and plain consumers need no Parsley awareness. The primary
 correctness gate is a deterministic simulator with a ground-truth causal oracle, run by
@@ -43,7 +44,6 @@ version number.
 - [Error handling](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/error-handling.md): the error model and the recovering decorators
 - [Ticks](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/ticks.md): runtime-emitted time records delivered through the causal gate
 - [The contract](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/expectations.md): what Parsley promises and what it requires of the application
-- [Worked examples](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/examples.md): runnable, asserted examples per shape — Commander/CQRS, request-reply, ticks, plain clients, concurrent inputs
 - [Diagnosing held records](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/diagnosing-holds.md): explainHolds(), the vc-hold-* warnings, and what each diagnosis means — never fixed by skipping or a timeout
 - [Verifying your application](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/verifying.md): ContractProbes — the contract's checkable clauses as test-time and cluster probes
 - [Plain clients](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/clients.md): stamping from plain producers with CausalClock and incremental adoption

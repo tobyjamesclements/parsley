@@ -14,7 +14,7 @@
         <link rel="prev" href="../ticks/">
       
       
-        <link rel="next" href="../examples/">
+        <link rel="next" href="../diagnosing-holds/">
       
       
         
@@ -725,8 +725,6 @@
       
         
       
-        
-      
     
     
     
@@ -1027,34 +1025,6 @@
   
 </nav>
       
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../examples/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Worked examples
-  
-
-    
-  </span>
-  
-  
-
-      </a>
     </li>
   
 
@@ -1375,10 +1345,17 @@ pipeline — see <a href="../verifying/">verifying your application</a>.</p>
 <li>Every declared topic exists before the application starts. Sinks are resolved at init and
   a missing one fails loudly; nothing is auto-created, and there are no automatic
   repartition topics.</li>
-<li>A stage that declares <a href="../ticks/">ticks</a> owns the topic <code>vc-&lt;stage-name&gt;-ticks</code>, which
-  likewise exists before start, with exactly the partition count of the stage's widest
-  source topic — assembly fails loudly on a mismatch. Short retention suffices; ticks are
-  transient.</li>
+<li>A stage that declares <a href="../ticks/">ticks</a> owns the topic
+  <code>&lt;application.id&gt;-&lt;stage-name&gt;-ticks</code>, which likewise exists before start, with exactly the
+  partition count of the stage's widest source topic — assembly fails loudly on a mismatch.
+  Short retention suffices; ticks are transient.</li>
+<li>The application id names things, so it is fixed at composition — <code>Parsley.named(id, ...)</code> —
+  and <code>Parsley.streams</code> rejects properties that set <code>application.id</code> to anything else. Every
+  topic and store the application owns is named <code>&lt;application.id&gt;-&lt;stage&gt;-&lt;kind&gt;</code>: the tick
+  topic directly, and the state stores by way of the <code>&lt;application.id&gt;-&lt;stage&gt;-state-changelog</code>
+  and <code>-fold-changelog</code> topics Kafka Streams derives from them. That is the convention Streams
+  itself uses, so an operator listing a cluster's topics in name order sees an application's
+  Parsley and Streams topics as one block rather than in two unrelated places.</li>
 <li>Topic identity is stable mid-run: a topic deleted and recreated under the same name is a
   different channel, and the old incarnation's history is loss, never reordering.</li>
 <li>Retention covers consumer lag on causal topics. A consumer must be able to fetch, or
@@ -1555,13 +1532,13 @@ pipeline — see <a href="../verifying/">verifying your application</a>.</p>
         
         
           
-          <a href="../examples/" class="md-footer__link md-footer__link--next" aria-label="Next: Worked examples">
+          <a href="../diagnosing-holds/" class="md-footer__link md-footer__link--next" aria-label="Next: Diagnosing held records">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Worked examples
+                Diagnosing held records
               </div>
             </div>
             <div class="md-footer__button md-icon">

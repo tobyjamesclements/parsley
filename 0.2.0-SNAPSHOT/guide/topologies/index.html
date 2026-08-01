@@ -725,8 +725,6 @@
       
         
       
-        
-      
     
     
     
@@ -1083,34 +1081,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../examples/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Worked examples
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../diagnosing-holds/" class="md-nav__link">
         
   
@@ -1410,15 +1380,16 @@ them from one stamping site, or consume the record you need to come first.</p>
 <h2 id="one-application-or-several">One application or several</h2>
 <p>Stages compose into one application, or run as separate applications, and the guarantee does
 not change: ordering is carried by the stamps on the wire, not by co-deployment.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="n">CausalStreams</span><span class="w"> </span><span class="n">app</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Parsley</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">p1</span><span class="p">,</span><span class="w"> </span><span class="n">p2</span><span class="p">).</span><span class="na">streams</span><span class="p">(</span><span class="n">props</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="n">CausalStreams</span><span class="w"> </span><span class="n">app</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Parsley</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;pipeline-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">p1</span><span class="p">,</span><span class="w"> </span><span class="n">p2</span><span class="p">).</span><span class="na">streams</span><span class="p">(</span><span class="n">props</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="n">app</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">}</span>
 </code></pre></div>
-<p><code>Parsley.of(p1, p2)</code> assembles both stages into one Streams topology; each keeps its own
-state stores, keyed by its stage name. Splitting the same stages across two applications
-changes deployment granularity and nothing else. A new application joins a running topology
-by simply starting to consume: it self-gates into causal order during replay, and its
-outputs are correctly gated everywhere from its first emission.</p>
+<p><code>Parsley.named("pipeline-app", p1, p2)</code> assembles both stages into one Streams topology,
+under the application id that names every topic and store the application owns. Each stage
+keeps its own state stores, keyed by its stage name. Splitting the same stages across two
+applications changes deployment granularity and nothing else. A new application joins a
+running topology by simply starting to consume: it self-gates into causal order during
+replay, and its outputs are correctly gated everywhere from its first emission.</p>
 <h2 id="linear">Linear</h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>c1 --&gt; p1 --&gt; c2 --&gt; p2 --&gt; c3
 </code></pre></div>
@@ -1481,9 +1452,6 @@ cause it consumed. Two records with no causal relation are delivered in arrival 
 the delivered history is one valid extension of the causal partial order, not a total order
 anyone chose. If the outcome must not depend on which concurrent record lands first, make
 the logic commutative for concurrent inputs; causal order fixes everything else.</p>
-<p>Runnable: <code>ExampleConcurrentInputsTest</code> (<a href="../examples/">worked examples</a>) makes the
-commutativity point concrete — the same two unrelated records in either order, with a
-commutative fold and a non-commutative one.</p>
 <p>Two expectations come with the shape. Related keys must land on the same partition number of
 every source topic — in practice, the same key bytes and the same partition count — because
 the guarantee is per task and a task consumes one partition slice of each source
@@ -1512,8 +1480,6 @@ that the join consumes. The sharpest version is the base-and-derived triangle:</
 the base record it was derived from, so p4 always delivers the base before the derivation —
 whatever the branch's lag. This is the shape that removes the classic race where an
 enrichment, an index entry, or a projection arrives ahead of the record it describes.</p>
-<p>Runnable: <code>ExampleCommanderTest</code> (<a href="../examples/">worked examples</a>) is this triangle at full
-size — a CQRS read model held behind the command that produced it, two hops upstream.</p>
 <h2 id="request-and-reply">Request and reply</h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>p1 --&gt; c1 --&gt; p2 --&gt; c2 --&gt; p1
 </code></pre></div>
@@ -1534,8 +1500,6 @@ emit its effects before its reply, in one handler:</p>
 both c3 and c2 delivers the effect before the reply: by the time p1 processes an
 acknowledgement, everything it acknowledges is already visible locally. Read-your-writes
 across services, expressed as a topology shape.</p>
-<p>Runnable: <code>ExampleRequestReplyTest</code> (<a href="../examples/">worked examples</a>), which feeds the
-requester the reply first and shows the gate holding it until the effect arrives.</p>
 <h2 id="event-flows">Event flows</h2>
 <p>An event notification is a record announcing state that lives elsewhere, and its classic
 failure is the dangling notification: the announcement arrives before the data it points

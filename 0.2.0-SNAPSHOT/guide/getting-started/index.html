@@ -725,8 +725,6 @@
       
         
       
-        
-      
     
     
     
@@ -1083,34 +1081,6 @@
   
   
     <li class="md-nav__item">
-      <a href="../examples/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Worked examples
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
       <a href="../diagnosing-holds/" class="md-nav__link">
         
   
@@ -1431,14 +1401,17 @@ site, and an emission to an undeclared sink fails loudly at the stamping site.</
 <a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">        </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="n">Properties</span><span class="w"> </span><span class="n">props</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">new</span><span class="w"> </span><span class="n">Properties</span><span class="p">();</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">props</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">StreamsConfig</span><span class="p">.</span><span class="na">APPLICATION_ID_CONFIG</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;settlements-app&quot;</span><span class="p">);</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="n">props</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">StreamsConfig</span><span class="p">.</span><span class="na">BOOTSTRAP_SERVERS_CONFIG</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;broker:9092&quot;</span><span class="p">);</span>
-<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>
-<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="n">CausalStreams</span><span class="w"> </span><span class="n">app</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Parsley</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">settlement</span><span class="p">).</span><span class="na">streams</span><span class="p">(</span><span class="n">props</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="n">app</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
-<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="w">    </span><span class="c1">// run until shutdown</span>
-<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="p">}</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="n">props</span><span class="p">.</span><span class="na">put</span><span class="p">(</span><span class="n">StreamsConfig</span><span class="p">.</span><span class="na">BOOTSTRAP_SERVERS_CONFIG</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;broker:9092&quot;</span><span class="p">);</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="n">CausalStreams</span><span class="w"> </span><span class="n">app</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Parsley</span><span class="p">.</span><span class="na">named</span><span class="p">(</span><span class="s">&quot;settlements-app&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">settlement</span><span class="p">).</span><span class="na">streams</span><span class="p">(</span><span class="n">props</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a><span class="w">    </span><span class="n">app</span><span class="p">.</span><span class="na">start</span><span class="p">();</span>
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="w">    </span><span class="c1">// run until shutdown</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a><span class="p">}</span>
 </code></pre></div>
+<p>The application id goes to <code>Parsley.named</code> rather than into the properties, because it names
+things: <code>streams</code> sets <code>application.id</code> from it, and it prefixes every topic and store the
+application owns — the same convention Kafka Streams uses, so a cluster's topic listing keeps
+an application's topics together. See <a href="../expectations/#what-parsley-expects-of-you">expectations</a>.</p>
 <p>Every cause the stage consumes has already been delivered when a handler runs; that is the
 guarantee. A message carries its own coordinate — source topic, partition, offset,
 timestamp — and for a message released from the hold queue, the coordinate is its own, not
@@ -1470,12 +1443,12 @@ no runtime at all:</p>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="n">assertEquals</span><span class="p">(</span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="n">expectedBalance</span><span class="p">,</span><span class="w"> </span><span class="n">settlements</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="s">&quot;k&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">expected</span><span class="p">)),</span>
 <a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">        </span><span class="n">fold</span><span class="p">.</span><span class="na">apply</span><span class="p">(</span><span class="n">balance</span><span class="p">,</span><span class="w"> </span><span class="n">Message</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="s">&quot;payments&quot;</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;k&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">payment</span><span class="p">)));</span>
 </code></pre></div>
-<p>For the wiring, <code>Parsley.of(stage).testTopology()</code> returns a fresh broker-less topology for
-<code>TopologyTestDriver</code>: pipe records and assert on outputs. Stamp presence is observable via
-the <code>CausalHeaders</code> name constants; gating behaviour itself is Parsley's contract, verified
-by Parsley's own suite. The test topology is for the driver only — under a real cluster it
-neither captures consumer positions nor resolves real topic identity, and the adapter fails
-closed at the first delivered record.</p>
+<p>For the wiring, <code>Parsley.named(applicationId, stage).testTopology()</code> returns a fresh
+broker-less topology for <code>TopologyTestDriver</code>: pipe records and assert on outputs. Stamp
+presence is observable via the <code>CausalHeaders</code> name constants; gating behaviour itself is
+Parsley's contract, verified by Parsley's own suite. The test topology is for the driver
+only — under a real cluster it neither captures consumer positions nor resolves real topic
+identity, and the adapter fails closed at the first delivered record.</p>
 <h2 id="what-the-runtime-wires-for-you">What the runtime wires for you</h2>
 <p><code>Parsley.streams</code> installs a client supplier that records consumer positions after each poll
 (the liveness signal — see <a href="../../foundations/liveness/#position-advance-bridging">liveness</a>),
@@ -1499,8 +1472,6 @@ counters in the <code>vc-metrics</code> group, listed in the
   tick per interval, and pure logic folds over it.</li>
 <li><a href="../expectations/">The contract</a> — everything Parsley expects of you and everything it
   promises back, including the operational notes.</li>
-<li><a href="../examples/">Worked examples</a> — a runnable, asserted example per shape, including the
-  Commander (CQRS) architecture end to end.</li>
 <li><a href="../verifying/">Verifying your application</a> — the contract's checkable clauses as probes
   in your test suite and deploy pipeline.</li>
 <li><a href="../diagnosing-holds/">Diagnosing held records</a> — <code>explainHolds()</code>, the hold warnings, and

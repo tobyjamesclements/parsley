@@ -725,8 +725,6 @@
       
         
       
-        
-      
     
     
     
@@ -1030,34 +1028,6 @@
     
   
     The contract
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../examples/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Worked examples
   
 
     
@@ -1415,13 +1385,18 @@ unresolved dependency is itself held until that dependency delivers — delay-on
 liveness is unaffected: every claim names a really-appended offset. The tick interval is a
 cadence floor, not an exact schedule.</p>
 <h2 id="the-tick-topic">The tick topic</h2>
-<p>The tick topic is named <code>vc-&lt;stage-name&gt;-ticks</code> and is the stage's own: it appears as
-one of the stage's sources, so composition rules prevent any other stage from consuming it.
-Like every declared topic it must exist before the application starts, and assembly fails
+<p>The tick topic is named <code>&lt;application.id&gt;-&lt;stage-name&gt;-ticks</code> and is the stage's own: it
+appears as one of the stage's sources, so composition rules prevent any other stage from
+consuming it. The application id comes from <code>Parsley.named</code>, and prefixing it follows the
+convention Kafka Streams uses for the topics it creates — a stage named <code>balances</code> in the
+application <code>payments</code> owns <code>payments-balances-ticks</code>, which sorts beside the
+<code>payments-balances-state-changelog</code> Streams creates for the same stage.</p>
+<p>Like every declared topic it must exist before the application starts, and assembly fails
 loudly when it is missing or its partition count differs from the stage's widest source
 topic — each task emits ticks to its own partition, so the counts must agree exactly.
-Ticks are transient by design; a short retention on the topic is enough, provided it covers
-consumer lag like any causal topic.</p>
+<code>ContractProbes.probe</code> reports the name to create without needing a cluster. Ticks are
+transient by design; a short retention on the topic is enough, provided it covers consumer
+lag like any causal topic.</p>
 <h2 id="testing">Testing</h2>
 <p>Tick logic is pure, so the primary tests need no runtime:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="n">assertEquals</span><span class="p">(</span><span class="n">Step</span><span class="p">.</span><span class="na">of</span><span class="p">(</span><span class="mi">1L</span><span class="p">,</span><span class="w"> </span><span class="n">audits</span><span class="p">.</span><span class="na">send</span><span class="p">(</span><span class="kc">null</span><span class="p">,</span><span class="w"> </span><span class="s">&quot;fired&quot;</span><span class="p">)),</span>
@@ -1431,8 +1406,6 @@ consumer lag like any causal topic.</p>
 feeds the tick topic back into the stage; construct the driver with a fixed initial wall
 clock to make tick timestamps deterministic. Each emitted tick counts on the
 <code>ticks-emitted-total</code> metric (<a href="../../reference/metrics/">metrics</a>).</p>
-<p>Runnable: <code>ExampleTickPolicyTest</code> (<a href="../examples/">worked examples</a>) — a policy on its own
-cadence, the tick slot shown distinct from per-key state, and the tick's stamp inspected.</p>
 
 
 

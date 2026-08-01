@@ -723,8 +723,6 @@
       
         
       
-        
-      
     
     
     
@@ -923,34 +921,6 @@
     
   
     The contract
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guide/examples/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Worked examples
   
 
     
@@ -1502,12 +1472,13 @@ fetched:</p>
 headers. This is a known limit of the current cut.</p>
 <h2 id="tick-record">Tick record</h2>
 <p>A stage with declared ticks emits one record per interval per task to its tick topic,
-<code>vc-&lt;stage&gt;-ticks</code>. The key is the emitting task's partition as a big-endian <code>int32</code> —
-the sink partitioner reads it back to land the tick on the emitting task's own channel — the
-value is null, the timestamp is the task's wall clock at emission, and the headers are the
+<code>&lt;application.id&gt;-&lt;stage&gt;-ticks</code>. The key is the emitting task's partition as a big-endian
+<code>int32</code> — the sink partitioner reads it back to land the tick on the emitting task's own
+channel — the value is null, the timestamp is the task's wall clock at emission, and the headers are the
 standard stamp above.</p>
 <h2 id="fold-state-store">Fold-state store</h2>
-<p>A stateful stage keeps its per-key fold state in a second store, <code>vc-&lt;stage&gt;-fold</code>.
+<p>A stateful stage keeps its per-key fold state in a second store, <code>&lt;stage&gt;-fold</code> — which
+Kafka Streams backs with the changelog topic <code>&lt;application.id&gt;-&lt;stage&gt;-fold-changelog</code>.
 Keys are the message key's encoded bytes with a one-byte presence prefix — <code>0x00</code> alone for
 a null key, <code>0x01</code> followed by the key bytes otherwise — so a null key folds under its own
 state without colliding with an empty key. The tick state occupies the single key <code>0x02</code>,

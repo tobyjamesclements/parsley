@@ -841,8 +841,6 @@
       
         
       
-        
-      
     
     
     
@@ -1041,34 +1039,6 @@
     
   
     The contract
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guide/examples/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Worked examples
   
 
     
@@ -1570,8 +1540,8 @@ EOS from the task's configuration at init, captured positions at the first deliv
 record — so a topology run outside <code>Parsley.streams</code> fails closed instead of wedging.
 <code>TopologyTestDriver</code> runs without a broker through <code>testTopology()</code>, which assembles a fresh
 broker-less topology per call.</p>
-<p>Stages compose: <code>Parsley.of(stageA, stageB, ...)</code> assembles several named stages into
-one Streams topology, connected through ordinary topics — one stage's sink is another's
+<p>Stages compose: <code>Parsley.named(applicationId, stageA, stageB, ...)</code> assembles several named
+stages into one Streams topology, connected through ordinary topics — one stage's sink is another's
 source, and the connecting topic is a causal channel like any other, stamped on write and
 gated on read. Hops cost only the broker round trip (stamping is synchronous under sequence
 claims), custody carries transitively across them, and each stage keeps its own state store

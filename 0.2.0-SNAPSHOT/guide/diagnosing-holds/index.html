@@ -11,7 +11,7 @@
       
       
       
-        <link rel="prev" href="../examples/">
+        <link rel="prev" href="../expectations/">
       
       
         <link rel="next" href="../verifying/">
@@ -725,8 +725,6 @@
       
         
       
-        
-      
     
     
     
@@ -928,34 +926,6 @@
     
   
     The contract
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../examples/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Worked examples
   
 
     
@@ -1445,8 +1415,10 @@ that show the gap:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>stage &#39;reconciler&#39; task 0_3 has held views:3@8814 for 47000ms (queue depth 219):
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>vc-hold-not-fetched waiting on commands:3 offset 51204 (local frontier 51199, position 51200)
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>— the cause has not reached this consumer yet; check lag on that topic
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>— see docs/guide/diagnosing-holds.md#the-cause-has-not-arrived
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>— see HeldRecord.Diagnosis#NOT_FETCHED
 </code></pre></div>
+<p>The line ends with the <code>HeldRecord.Diagnosis</code> constant that names the case. Its Javadoc states
+the condition and the action; the section below expands each one.</p>
 <p>Only queue heads appear. Holding is head-of-line blocking by design, so the head is the whole
 story: the 219 records behind it wait on it, not on causes of their own.</p>
 <p>Two properties are worth knowing before you build on this. It is <strong>payload-free</strong> — coordinates,
@@ -1471,30 +1443,33 @@ long enough to be worth a look, and names what to look at. Match on the <code>vc
 route logs by pattern; the codes are stable.</p>
 <h2 id="the-diagnoses">The diagnoses</h2>
 <h3 id="the-cause-has-not-arrived">The cause has not arrived</h3>
-<p><code>vc-hold-not-fetched</code> — the claimed record has not been fetched by this consumer yet. The
-local position is at or below the claimed offset, so the record is genuinely still in flight.</p>
+<p><code>vc-hold-not-fetched</code> (<code>HeldRecord.Diagnosis#NOT_FETCHED</code>) — the claimed record has not been
+fetched by this consumer yet. The local position is at or below the claimed offset, so the
+record is genuinely still in flight.</p>
 <p>This is the ordinary case and it usually resolves itself. Look at the <em>cause</em> topic: consumer
 lag on it, whether its producer is healthy, and whether the producing stage is itself stalled.
 A cause channel that is merely slow makes a hold that clears; a cause channel whose producer
 has stopped makes one that does not.</p>
 <h3 id="the-cause-is-itself-held">The cause is itself held</h3>
-<p><code>vc-hold-held-upstream</code> — the claimed record has been fetched here but not delivered, so it
-is sitting in its own channel's hold queue behind that channel's head.</p>
+<p><code>vc-hold-held-upstream</code> (<code>HeldRecord.Diagnosis#HELD_UPSTREAM</code>) — the claimed record has been
+fetched here but not delivered, so it is sitting in its own channel's hold queue behind that
+channel's head.</p>
 <p>Follow the chain: that channel's head appears in the same report, with its own unmet causes.
 Holds compose, and the useful end of the chain is the one record whose cause has not arrived
 at all. Fix that one and the whole chain drains.</p>
 <h3 id="no-record-from-that-sender">No record from that sender</h3>
-<p><code>vc-hold-sender-unseen</code> — a sequence claim naming a sender this task has never delivered on
-that channel. Sequence claims are how a stamp names the sender's own just-issued sends, whose
-offsets the broker has not yet assigned.</p>
+<p><code>vc-hold-sender-unseen</code> (<code>HeldRecord.Diagnosis#SENDER_UNSEEN</code>) — a sequence claim naming a
+sender this task has never delivered on that channel. Sequence claims are how a stamp names
+the sender's own just-issued sends, whose offsets the broker has not yet assigned.</p>
 <p>Usually this is transient: the sender's record is on its way. If it persists and the sender
 never writes that partition again, this is the documented
 <a href="../../foundations/liveness/#the-sequence-claim-caveat-late-joiners">late-joiner window</a> — a
 consumer that baselined at the log end cannot deliver a record that sits below its baseline.
 Baseline late joiners at the last stable offset rather than the log end.</p>
 <h3 id="the-senders-later-records-are-behind">The sender's later records are behind</h3>
-<p><code>vc-hold-sender-behind</code> — a sequence claim ahead of what this task has delivered from that
-sender. The sender's later records are in flight, or their transaction has not committed.</p>
+<p><code>vc-hold-sender-behind</code> (<code>HeldRecord.Diagnosis#SENDER_BEHIND</code>) — a sequence claim ahead of
+what this task has delivered from that sender. The sender's later records are in flight, or
+their transaction has not committed.</p>
 <p>Under <code>read_committed</code>, records of an open transaction are invisible until it commits, so a
 long-running or stuck producer transaction shows up exactly here. Check the sender's commit
 interval and whether it is making progress.</p>
@@ -1543,7 +1518,7 @@ delivers immediately, which is a per-topic decision made at the producer
       <nav class="md-footer__inner md-grid" aria-label="Footer" >
         
           
-          <a href="../examples/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Worked examples">
+          <a href="../expectations/" class="md-footer__link md-footer__link--prev" aria-label="Previous: The contract">
             <div class="md-footer__button md-icon">
               
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
@@ -1553,7 +1528,7 @@ delivers immediately, which is a per-topic decision made at the producer
                 Previous
               </span>
               <div class="md-ellipsis">
-                Worked examples
+                The contract
               </div>
             </div>
           </a>

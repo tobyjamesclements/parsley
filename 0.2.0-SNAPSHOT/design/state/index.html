@@ -819,8 +819,6 @@
       
         
       
-        
-      
     
     
     
@@ -1019,34 +1017,6 @@
     
   
     The contract
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guide/examples/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Worked examples
   
 
     
@@ -1355,7 +1325,7 @@
 the same EOS transaction as the delivery that mutated it and the sends it caused. Only entries
 that changed are written on an advance. The full byte layouts are in
 <a href="../../reference/wire-format/">wire format</a>. A stateful stage's fold state is separate — its
-own store, <code>vc-&lt;stage&gt;-fold</code>, keyed by the message key's encoded bytes with a presence
+own store, <code>&lt;stage&gt;-fold</code>, keyed by the message key's encoded bytes with a presence
 prefix and holding the user codec's bytes — but commits in the same transaction, so protocol
 state, fold state, deliveries, and emissions advance atomically together.</p>
 <table>
