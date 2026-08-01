@@ -904,7 +904,7 @@ Two further boundaries are worth naming, because a scenario list reads as a cove
 
 Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/getting-started.md
 
-declaring topics, stages, and running an application
+the coordinates, the snapshot repository, the resolved footprint, and declaring topics, stages, and running an application
 
 # Getting started
 
@@ -915,6 +915,54 @@ declaring topics, stages, and running an application
 - `processing.guarantee=exactly_once_v2` — enforced by `Parsley.streams`, which also pins
   the consumer to `read_committed`. Parsley's state is defined against EOS; there is no
   at-least-once mode.
+
+## Adding the dependency
+
+```xml
+<repositories>
+    <repository>
+        <id>central-snapshots</id>
+        <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        <releases><enabled>false</enabled></releases>
+        <snapshots><enabled>true</enabled></snapshots>
+    </repository>
+</repositories>
+
+<dependencies>
+    <dependency>
+        <groupId>io.github.tobyjamesclements</groupId>
+        <artifactId>parsley</artifactId>
+        <version>0.2.0-SNAPSHOT</version>
+    </dependency>
+
+    <!-- Only for a test suite that uses ContractProbes. -->
+    <dependency>
+        <groupId>org.apache.kafka</groupId>
+        <artifactId>kafka-streams-test-utils</artifactId>
+        <version>4.3.1</version>
+        <scope>test</scope>
+    </dependency>
+</dependencies>
+```
+
+The same in Gradle:
+
+```kotlin
+repositories {
+    mavenCentral()
+    maven { url = uri("https://central.sonatype.com/repository/maven-snapshots/") }
+}
+
+dependencies {
+    implementation("io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT")
+    testImplementation("org.apache.kafka:kafka-streams-test-utils:4.3.1")   // ContractProbes
+}
+```
+
+`kafka-clients` and `kafka-streams` are inherited and required; the coordinates alone run
+everything on this page. An application with no stage, using only `CausalClock` and
+`CausalHeaders` ([plain clients](clients.md)), is the one exception and may drop 74 MiB of
+RocksDB with `<exclusion>` / `exclude(group = "org.apache.kafka", module = "kafka-streams")`.
 
 ## The shape: functional core, imperative edges
 
@@ -1991,8 +2039,9 @@ The docs describe, the probes verify. Nothing here replaces the runtime's fail-c
 `ContractProbes.probe` drives your application's own `testTopology()` under
 `TopologyTestDriver` — broker-less, so it runs in plain CI — with sample records you supply,
 at least one per source topic. `kafka-streams-test-utils` must be on the test classpath (it
-is an optional dependency of Parsley, so your test scope declares it, production classpaths
-never see it).
+is an optional dependency of Parsley, so your test scope declares it — the coordinates are in
+[getting started](getting-started.md#adding-the-dependency) — and production classpaths never
+see it).
 
 ```java
 @Test
@@ -2119,6 +2168,10 @@ headers (`CausalHeaders.CLOCK` and the sender tag, readable via `CausalHeaders.r
 A plain consumer that wants causal *observation* — so that records it later produces claim
 what it read — uses `observe` as above. A plain consumer that wants causal *delivery order*
 is, by definition, a causal stage: run it as one.
+
+An application that runs no stage reaches nothing under `org.apache.kafka.streams`, and can
+exclude `kafka-streams` from the Parsley dependency
+([getting started](getting-started.md#adding-the-dependency)).
 
 ---
 
@@ -2518,8 +2571,20 @@ acknowledgements, `stamp` outbound headers. Adoption is incremental: a producer 
 nothing claims nothing, so you stamp the producers whose ordering matters, one at a time,
 with no flag day.
 
-Requires Java 21 or later and brokers that serve topic IDs (Kafka 3.7+). Build from source
-with `mvn verify`.
+Requires Java 21 or later and brokers that serve topic IDs (Kafka 3.7+).
+
+```xml
+<dependency>
+    <groupId>io.github.tobyjamesclements</groupId>
+    <artifactId>parsley</artifactId>
+    <version>0.2.0-SNAPSHOT</version>
+</dependency>
+```
+
+Snapshots resolve from `https://central.sonatype.com/repository/maven-snapshots/`, which a
+consuming build declares for itself;
+[getting started](docs/guide/getting-started.md#adding-the-dependency) has that declaration
+and the Gradle equivalent. Build from source with `mvn verify`.
 
 ## Documentation
 

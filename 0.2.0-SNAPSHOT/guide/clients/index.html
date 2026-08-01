@@ -1332,6 +1332,9 @@ headers (<code>CausalHeaders.CLOCK</code> and the sender tag, readable via <code
 <p>A plain consumer that wants causal <em>observation</em> — so that records it later produces claim
 what it read — uses <code>observe</code> as above. A plain consumer that wants causal <em>delivery order</em>
 is, by definition, a causal stage: run it as one.</p>
+<p>An application that runs no stage reaches nothing under <code>org.apache.kafka.streams</code>, and can
+exclude <code>kafka-streams</code> from the Parsley dependency
+(<a href="../getting-started/#adding-the-dependency">getting started</a>).</p>
 
 
 

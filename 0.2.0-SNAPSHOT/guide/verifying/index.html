@@ -1318,8 +1318,9 @@ The docs describe, the probes verify. Nothing here replaces the runtime's fail-c
 <p><code>ContractProbes.probe</code> drives your application's own <code>testTopology()</code> under
 <code>TopologyTestDriver</code> — broker-less, so it runs in plain CI — with sample records you supply,
 at least one per source topic. <code>kafka-streams-test-utils</code> must be on the test classpath (it
-is an optional dependency of Parsley, so your test scope declares it, production classpaths
-never see it).</p>
+is an optional dependency of Parsley, so your test scope declares it — the coordinates are in
+<a href="../getting-started/#adding-the-dependency">getting started</a> — and production classpaths never
+see it).</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nd">@Test</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="kt">void</span><span class="w"> </span><span class="nf">applicationMeetsTheContract</span><span class="p">(</span><span class="nd">@TempDir</span><span class="w"> </span><span class="n">Path</span><span class="w"> </span><span class="n">stateDir</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="w">    </span><span class="n">ContractProbes</span><span class="p">.</span><span class="na">probe</span><span class="p">(</span>
