@@ -47,7 +47,19 @@
         <kafka.version>4.3.1</kafka.version>
         <pitest.threads>1</pitest.threads>
         <junit.version>5.11.4</junit.version>
-        <slf4j.version>2.0.18</slf4j.version>
+        <!-- The version kafka-clients already brings, deliberately. Parsley uses only the
+             classic slf4j API (getLogger, and debug/info/warn/error), nothing from 2.x, and
+             every consumer resolves kafka-clients by construction — so matching Kafka means
+             this library adds no node to the consumer's graph and the resolved slf4j is the
+             one they would have had anyway. Declaring 2.0.18 instead won mediation and moved
+             every consumer's API forward, which silently breaks a 1.7-era binding: slf4j 2.x
+             dropped the static binder for ServiceLoader providers, so logback 1.2.x stops
+             being found and logging falls back to the no-op logger (#59). Bump this only
+             together with kafka.version, and only to what Kafka itself declares; pinning
+             below Kafka would push the mirror-image downgrade. slf4j-simple below is the
+             test-only binding and must move with it, since a 2.x binding cannot bind a 1.7
+             API. -->
+        <slf4j.version>1.7.36</slf4j.version>
         <testcontainers.version>1.21.3</testcontainers.version>
         <!-- The broker smoke suite (-Pbroker-it) runs against the minimum supported broker,
              so the version floor stated in the docs is the one actually tested. -->

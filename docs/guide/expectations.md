@@ -150,8 +150,11 @@ pipeline — see [verifying your application](verifying.md).
   handle, and the members that duplicate scaling by instances because a minimal surface can
   grow compatibly. The per-member reasons and operational alternatives are on its Javadoc
   and in [getting started](getting-started.md#what-the-runtime-wires-for-you).
-- **Logging is metadata-only.** Parsley logs through SLF4J and ships no binding; logger
-  names are the class names under `io.github.tobyjamesclements.parsley`. INFO covers
+- **Logging is metadata-only.** Parsley logs through SLF4J and ships no binding, and it
+  declares the same `slf4j-api` version `kafka-clients` brings, so adding Parsley leaves an
+  application's SLF4J version wherever Kafka already put it. Only the classic API is called,
+  which every 1.7 and 2.x binding serves; an application wanting 2.x declares it and gets it.
+  Logger names are the class names under `io.github.tobyjamesclements.parsley`. INFO covers
   lifecycle: application assembly, task and node initialisation with the source-topic to
   channel mapping, restored hold queues, scope changes, and truncation on a destroyed
   topic. WARN covers a skipped truncation sweep, and a record that has gated its channel for
