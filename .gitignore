@@ -10,6 +10,9 @@ target/
 # MkDocs build output
 site/
 
+# MkDocs toolchain for scripts/docs-build.sh; not a build dependency of the library
+.venv/
+
 # Generated Javadoc staged into docs source for versioned builds
 docs/api/
 

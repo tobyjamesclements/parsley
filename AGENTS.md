@@ -59,6 +59,11 @@ https://tobyjamesclements.github.io/parsley/llms-full.txt.
   Streams' `TopologyTestDriver`. Use this to demonstrate or test causal gating end to end.
 - A broker smoke suite runs under `-Pbroker-it` (needs Docker; Testcontainers).
 - Simulator tests are seeded and deterministic; a failure reproduces from its seed.
+- `scripts/docs-build.sh` builds the docs site the way the Pages workflow does — Javadoc
+  staged into `docs/api`, `llms-full.txt` regenerated from `llms.txt`, then a strict MkDocs
+  build — so a bad page or a dead link fails here rather than after a push. `--serve` for
+  live reload, `--skip-api` to skip the Javadoc step. It creates its own `.venv` on first
+  run and never deploys.
 
 ## Using it from an application
 
