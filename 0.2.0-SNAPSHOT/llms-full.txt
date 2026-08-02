@@ -904,7 +904,7 @@ Two further boundaries are worth naming, because a scenario list reads as a cove
 
 Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/getting-started.md
 
-the coordinates, the snapshot repository, the inherited classpath with its licences and native binaries, and declaring topics, stages, and running an application
+the coordinates, the snapshot repository, what the published POM declares about itself, the inherited classpath with its licences and native binaries, and declaring topics, stages, and running an application
 
 # Getting started
 
@@ -967,11 +967,29 @@ everything on this page. An application with no stage, using only `CausalClock` 
 classpath — see [excluding kafka-streams](#excluding-kafka-streams) for the rest of what
 goes with it.
 
+## What the published POM declares
+
+`ContractProbes` ships in the library jar and compiles against `TopologyTestDriver`, so the
+published POM declares `kafka-streams-test-utils` at compile scope, marked optional. Optional
+is what holds the boundary: an application declaring only `parsley` does not resolve it, and
+declares it at test scope itself to use the probes — the coordinates are under [adding the
+dependency](#adding-the-dependency).
+
+The declaration is deliberate, and it is visible. A scanner reading the POM sees a
+`*-test-utils` artifact at compile scope on a production library, which is the shape
+supply-chain policies are written to flag, so expect to justify or suppress it once. What it
+admits is bounded: that artifact's own dependencies are `kafka-streams`, `kafka-clients`, and
+`slf4j-api`, every one of them already inherited below, and it carries no test framework, so
+it adds one node to your graph, not a subtree. Whole-program tooling is the other tell:
+`jdeps`, jlink image builds, and shading with class-retention analysis all report
+`ContractProbes` referencing classes that are not on a production classpath. Nothing fails at
+runtime; the class is never loaded unless a test suite calls it.
+
 ## What you inherit
 
 The two Kafka artifacts bring the rest of the classpath with them. Resolved from the
-coordinates above — `kafka-streams-test-utils` is optional and test-scope, so it is not part
-of this:
+coordinates above — `kafka-streams-test-utils` is declared optional, so it is not resolved
+from them and is not part of this:
 
 | artifact | scope | size | licence | bundled natives |
 |---|---|---|---|---|

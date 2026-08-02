@@ -860,6 +860,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#what-the-published-pom-declares" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What the published POM declares
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#what-you-inherit" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1489,10 +1500,25 @@ everything on this page. An application with no stage, using only <code>CausalCl
 <code>exclude(group = "org.apache.kafka", module = "kafka-streams")</code>, which takes 74 MiB off the
 classpath — see <a href="#excluding-kafka-streams">excluding kafka-streams</a> for the rest of what
 goes with it.</p>
+<h2 id="what-the-published-pom-declares">What the published POM declares</h2>
+<p><code>ContractProbes</code> ships in the library jar and compiles against <code>TopologyTestDriver</code>, so the
+published POM declares <code>kafka-streams-test-utils</code> at compile scope, marked optional. Optional
+is what holds the boundary: an application declaring only <code>parsley</code> does not resolve it, and
+declares it at test scope itself to use the probes — the coordinates are under <a href="#adding-the-dependency">adding the
+dependency</a>.</p>
+<p>The declaration is deliberate, and it is visible. A scanner reading the POM sees a
+<code>*-test-utils</code> artifact at compile scope on a production library, which is the shape
+supply-chain policies are written to flag, so expect to justify or suppress it once. What it
+admits is bounded: that artifact's own dependencies are <code>kafka-streams</code>, <code>kafka-clients</code>, and
+<code>slf4j-api</code>, every one of them already inherited below, and it carries no test framework, so
+it adds one node to your graph, not a subtree. Whole-program tooling is the other tell:
+<code>jdeps</code>, jlink image builds, and shading with class-retention analysis all report
+<code>ContractProbes</code> referencing classes that are not on a production classpath. Nothing fails at
+runtime; the class is never loaded unless a test suite calls it.</p>
 <h2 id="what-you-inherit">What you inherit</h2>
 <p>The two Kafka artifacts bring the rest of the classpath with them. Resolved from the
-coordinates above — <code>kafka-streams-test-utils</code> is optional and test-scope, so it is not part
-of this:</p>
+coordinates above — <code>kafka-streams-test-utils</code> is declared optional, so it is not resolved
+from them and is not part of this:</p>
 <table>
 <thead>
 <tr>

@@ -38,7 +38,7 @@ version number.
 
 ## Guide
 
-- [Getting started](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/getting-started.md): the coordinates, the snapshot repository, the inherited classpath with its licences and native binaries, and declaring topics, stages, and running an application
+- [Getting started](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/getting-started.md): the coordinates, the snapshot repository, what the published POM declares about itself, the inherited classpath with its licences and native binaries, and declaring topics, stages, and running an application
 - [Topology shapes](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/topologies.md): pipelines, fan-in, fan-out, and cycles
 - [Codecs and Avro](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/codecs.md): typed topics and schema integration
 - [Error handling](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/error-handling.md): the error model and the recovering decorators
