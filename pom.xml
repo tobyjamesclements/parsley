@@ -36,33 +36,14 @@
         <url>https://github.com/tobyjamesclements/parsley</url>
     </scm>
 
-    <!-- Snapshots publish to Sonatype Central via a separate deploy invocation rather than this
-         element (CI: .github/workflows/publish.yml). Real releases go through the release
-         profile's central-publishing-maven-plugin, which uploads via Central's bundle API rather
-         than a repository URL. Neither path needs <distributionManagement>, so there is none. -->
-
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <kafka.version>4.3.1</kafka.version>
         <pitest.threads>1</pitest.threads>
         <junit.version>5.11.4</junit.version>
-        <!-- The version kafka-clients already brings, deliberately. Parsley uses only the
-             classic slf4j API (getLogger, and debug/info/warn/error), nothing from 2.x, and
-             every consumer resolves kafka-clients by construction — so matching Kafka means
-             this library adds no node to the consumer's graph and the resolved slf4j is the
-             one they would have had anyway. Declaring 2.0.18 instead won mediation and moved
-             every consumer's API forward, which silently breaks a 1.7-era binding: slf4j 2.x
-             dropped the static binder for ServiceLoader providers, so logback 1.2.x stops
-             being found and logging falls back to the no-op logger (#59). Bump this only
-             together with kafka.version, and only to what Kafka itself declares; pinning
-             below Kafka would push the mirror-image downgrade. slf4j-simple below is the
-             test-only binding and must move with it, since a 2.x binding cannot bind a 1.7
-             API. -->
         <slf4j.version>1.7.36</slf4j.version>
-        <testcontainers.version>1.21.3</testcontainers.version>
-        <!-- The broker smoke suite (-Pbroker-it) runs against the minimum supported broker,
-             so the version floor stated in the docs is the one actually tested. -->
+        <testcontainers.version>2.0.5</testcontainers.version>
         <broker.image>apache/kafka:3.7.2</broker.image>
     </properties>
 
@@ -72,12 +53,6 @@
             <artifactId>kafka-clients</artifactId>
             <version>${kafka.version}</version>
         </dependency>
-        <!-- Inherited, though only the Streams adapter touches it: the documented runtime path
-             is Kafka Streams, so an application that resolved kafka-clients alone could not run
-             the getting-started example. Inheriting both from here also keeps them on one
-             ${kafka.version} by construction. An application using only the plain-client edge
-             (CausalClock, CausalHeaders) reaches nothing under org.apache.kafka.streams and can
-             exclude it, along with the RocksDB and Jackson trees it carries. -->
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-streams</artifactId>
@@ -95,9 +70,6 @@
             <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
-        <!-- Optional, like kafka-streams: ContractProbes drives TopologyTestDriver, and is
-             meant to run from an application's test suite where test-utils is present.
-             Production classpaths never need it. -->
         <dependency>
             <groupId>org.apache.kafka</groupId>
             <artifactId>kafka-streams-test-utils</artifactId>
@@ -112,13 +84,13 @@
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>kafka</artifactId>
+            <artifactId>testcontainers-kafka</artifactId>
             <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
             <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
@@ -131,20 +103,6 @@
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.5.6</version>
                 <configuration>
-                    <!-- Keep every temporary file the test JVMs create inside target/, where
-                         `mvn clean` sweeps it, instead of the OS temp directory, where nothing
-                         does. RocksDB extracts its 9 MB native library to a fresh temp file per
-                         JVM and relies on deleteOnExit to remove it; that hook only runs on a
-                         graceful shutdown, so every forcibly killed test JVM stranded a copy.
-                         2833 of them, 25 GB, had built up by 2026-08-01 (#64).
-
-                         ROCKSDB_SHAREDLIB_DIR would collapse this to one reused file, but it is
-                         unsafe: concurrent JVMs each delete and rewrite that one path on
-                         startup, and a thread whose load fails midway leaves RocksDB's static
-                         LibraryState stuck at LOADING, which every other thread in the JVM then
-                         spins on forever. Measured under -Dpitest.threads=4: minions hung in
-                         RocksDB.loadLibrary and the build never finished. Per-JVM temp files are
-                         what the loader is designed for; only their location needed fixing. -->
                     <argLine>-Djava.io.tmpdir=${project.build.directory}</argLine>
                 </configuration>
             </plugin>
@@ -154,15 +112,6 @@
                 <version>3.4.2</version>
                 <executions>
                     <execution>
-                        <!-- Name the automatic module the library jar becomes on a JPMS
-                             module path. Without this the name is derived from the filename,
-                             which makes every consumer's `requires` clause depend on how the
-                             jar happens to be called; the JDK documents that name as unstable
-                             and warns against binding to it. Declaring it commits to the one
-                             name, which is the package name, matching the single-package
-                             layout. Scoped to this execution rather than the plugin so the
-                             conformance-kit test-jar below does not claim the same module
-                             name. Changing it after a release breaks JPMS consumers. -->
                         <id>default-jar</id>
                         <configuration>
                             <archive>
@@ -173,11 +122,6 @@
                         </configuration>
                     </execution>
                     <execution>
-                        <!-- The conformance kit (docs/reference/conformance-kit.md): the
-                             simulator, oracle, and protocol tests as a consumable artifact, so
-                             a vendored copy or an alternative host can run the verification
-                             this library's own guarantees rest on. The broker *IT classes stay
-                             out: the kit must run without Docker or Testcontainers. -->
                         <id>conformance-kit</id>
                         <goals>
                             <goal>test-jar</goal>
@@ -205,22 +149,10 @@
                     <targetClasses>
                         <param>io.github.tobyjamesclements.parsley.*</param>
                     </targetClasses>
-                    <!-- The broker smoke suite needs Docker and runs under failsafe in the
-                         broker-it profile only; PIT's coverage run must not start containers. -->
                     <excludedTestClasses>
                         <param>*IT</param>
                     </excludedTestClasses>
-                    <!-- Serial. The only timing-sensitive verdict PIT produces is TIMED_OUT:
-                         a mutant slowed by CPU contention times out and is scored as a kill,
-                         so a threaded run can inflate the score under load. One thread removes
-                         that hazard outright instead of periodically re-checking for it, and
-                         costs little: measured on this suite at 506s serial against 402s at
-                         four threads, with all 738 verdicts identical between the two and
-                         across repeated runs of each. Raise it with -Dpitest.threads=N for
-                         local iteration; the gate stays at one. -->
                     <threads>${pitest.threads}</threads>
-                    <!-- Both floors guard against regression; the scores stand a few points
-                         above them so honest refactoring noise does not flake the build. -->
                     <mutationThreshold>75</mutationThreshold>
                     <coverageThreshold>80</coverageThreshold>
                     <outputFormats>
@@ -228,9 +160,6 @@
                         <param>XML</param>
                     </outputFormats>
                     <timestampedReports>false</timestampedReports>
-                    <!-- Minions are killed rather than shut down, so they stranded every one of
-                         the RocksDB libraries surefire's argLine above describes; surefire's own
-                         setting does not reach them. -->
                     <jvmArgs>
                         <param>-Djava.io.tmpdir=${project.build.directory}</param>
                     </jvmArgs>
@@ -249,9 +178,6 @@
     </build>
 
     <profiles>
-        <!-- The broker smoke suite: failsafe runs the *IT classes against a real broker in a
-             Docker container (Testcontainers). Kept out of the default gate so `mvn clean
-             verify` stays Docker-free; CI runs it as a separate non-gating workflow. -->
         <profile>
             <id>broker-it</id>
             <build>
@@ -264,7 +190,6 @@
                             <systemPropertyVariables>
                                 <parsley.broker.image>${broker.image}</parsley.broker.image>
                             </systemPropertyVariables>
-                            <!-- As surefire: keep temporary files out of the OS temp directory. -->
                             <argLine>-Djava.io.tmpdir=${project.build.directory}</argLine>
                         </configuration>
                         <executions>
@@ -281,7 +206,6 @@
             </build>
         </profile>
 
-        <!-- Central-release artifacts and signatures; activated by the release workflow only. -->
         <profile>
             <id>release</id>
             <build>
