@@ -1,7 +1,10 @@
 name: Claude Code Review
 
-# Reviews on request only, never on every push. Two ways to ask: comment `/code-review` on a
-# pull request, or add the `claude-review` label to it.
+# Reviews on request only, never on every push. Two ways to ask: open a comment on a pull
+# request with `/code-review`, or add the `claude-review` label to it.
+#
+# The phrase has to start the comment, so that discussing `/code-review` in passing does not
+# set one off. Expressions have no trim, so a leading space or blank line will not match.
 #
 # The trigger phrase deliberately omits `@claude`, because claude.yml fires on any comment
 # containing that string and both workflows would answer the same comment. A bot cannot be
@@ -22,7 +25,7 @@ jobs:
     if: |
       (github.event_name == 'issue_comment' &&
         github.event.issue.pull_request &&
-        contains(github.event.comment.body, '/code-review')) ||
+        startsWith(github.event.comment.body, '/code-review')) ||
       (github.event_name == 'pull_request' && github.event.label.name == 'claude-review')
     runs-on: ubuntu-latest
     permissions:
