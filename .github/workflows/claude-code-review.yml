@@ -7,6 +7,10 @@ name: Claude Code Review
 # containing that string and both workflows would answer the same comment. A bot cannot be
 # named as a reviewer or assignee -- GitHub allows only collaborators there -- so a comment
 # and a label are the two levers available.
+#
+# Java and the Maven cache are set up so the review can run the suite rather than reason from
+# the diff alone. PIT is left out of the allowed commands: the review already costs a full
+# verify, and mutation testing on top would dominate it.
 on:
   issue_comment:
     types: [created]
@@ -33,6 +37,12 @@ jobs:
         with:
           fetch-depth: 1
 
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '25'
+          distribution: 'temurin'
+          cache: 'maven'
+
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
@@ -41,3 +51,5 @@ jobs:
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
           prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.issue.number || github.event.pull_request.number }}'
+          claude_args: |
+            --allowedTools "Bash(./mvnw test:*),Bash(./mvnw verify -DskipPitest=true:*),Bash(./mvnw compile:*)"
