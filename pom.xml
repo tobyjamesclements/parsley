@@ -43,7 +43,7 @@
         <pitest.threads>1</pitest.threads>
         <junit.version>5.11.4</junit.version>
         <slf4j.version>1.7.36</slf4j.version>
-        <testcontainers.version>1.21.3</testcontainers.version>
+        <testcontainers.version>2.0.5</testcontainers.version>
         <broker.image>apache/kafka:3.7.2</broker.image>
     </properties>
 
@@ -84,13 +84,13 @@
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>kafka</artifactId>
+            <artifactId>testcontainers-kafka</artifactId>
             <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
-            <artifactId>junit-jupiter</artifactId>
+            <artifactId>testcontainers-junit-jupiter</artifactId>
             <version>${testcontainers.version}</version>
             <scope>test</scope>
         </dependency>
