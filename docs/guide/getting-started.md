@@ -53,8 +53,89 @@ dependencies {
 
 `kafka-clients` and `kafka-streams` are inherited and required; the coordinates alone run
 everything on this page. An application with no stage, using only `CausalClock` and
-`CausalHeaders` ([plain clients](clients.md)), is the one exception and may drop 74 MiB of
-RocksDB with `<exclusion>` / `exclude(group = "org.apache.kafka", module = "kafka-streams")`.
+`CausalHeaders` ([plain clients](clients.md)), is the one exception and may exclude
+`kafka-streams` with `<exclusion>` /
+`exclude(group = "org.apache.kafka", module = "kafka-streams")`, which takes 74 MiB off the
+classpath — see [excluding kafka-streams](#excluding-kafka-streams) for the rest of what
+goes with it.
+
+## What you inherit
+
+The two Kafka artifacts bring the rest of the classpath with them. Resolved from the
+coordinates above — `kafka-streams-test-utils` is optional and test-scope, so it is not part
+of this:
+
+| artifact | scope | size | licence | bundled natives |
+|---|---|---|---|---|
+| `io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT` | — | 0.1 MiB | MIT | — |
+| `org.apache.kafka:kafka-clients:4.3.1` | compile | 9.7 MiB | Apache-2.0 | — |
+| `com.github.luben:zstd-jni:1.5.6-10` | runtime | 7.0 MiB | BSD-2-Clause | 18 |
+| `at.yawk.lz4:lz4-java:1.10.2` | runtime | 1.0 MiB | Apache-2.0 | 8 |
+| `org.xerial.snappy:snappy-java:1.1.10.7` | runtime | 2.2 MiB | Apache-2.0 | 24 |
+| `org.apache.kafka:kafka-streams:4.3.1` | compile | 2.2 MiB | Apache-2.0 | — |
+| `org.rocksdb:rocksdbjni:10.1.3` | compile | 69.4 MiB | Apache-2.0 **or** GPL-2.0 | 12 |
+| `com.fasterxml.jackson.core:jackson-databind:2.21.2` | runtime | 1.6 MiB | Apache-2.0 | — |
+| `com.fasterxml.jackson.core:jackson-core:2.21.2` | runtime | 0.6 MiB | Apache-2.0 | — |
+| `com.fasterxml.jackson.core:jackson-annotations:2.21` | runtime | 0.1 MiB | Apache-2.0 | — |
+| `org.slf4j:slf4j-api:1.7.36` | compile | 40 KiB | MIT | — |
+
+93.8 MiB and 62 native binaries in total; native counts are the `.so`, `.dll`, and `.dylib`
+entries in each jar. `slf4j-api` is the version `kafka-clients` itself declares, so Parsley
+adds no node to that part of your graph. No logging binding is inherited; choosing one, and
+choosing one that binds the 1.7 API rather than 2.x, stays yours.
+
+Three of those rows carry something worth deciding once rather than rediscovering per
+project.
+
+### RocksDB is dual-licensed; elect Apache-2.0
+
+`rocksdbjni-10.1.3.pom` declares two licences — Apache-2.0 and "GNU General Public License,
+version 2" — and a consumer elects one. Elect Apache-2.0 and there is no copyleft obligation.
+It is the only non-permissive string anywhere in the tree, and a dual Apache/GPL entry is
+exactly what an automated licence scanner escalates for manual review, so it is worth
+recording the election in your own compliance notes rather than reaching it again each time
+the scanner runs.
+
+### The natives are inherited, and extracted at runtime
+
+The compression codecs and RocksDB ship a binary per supported platform inside their jars, and
+extract the one they need to a directory on disk before loading it:
+
+| library | extracts to | override |
+|---|---|---|
+| `zstd-jni` | `java.io.tmpdir` | `-DZstdTempFolder=…`, or `-DZstdNativePath=…` to load a pre-installed library instead |
+| `snappy-java` | `java.io.tmpdir` | `-Dorg.xerial.snappy.tempdir=…` |
+| `lz4-java` | `java.io.tmpdir` | — |
+| `rocksdbjni` | `java.io.tmpdir` | `ROCKSDB_SHAREDLIB_DIR` (environment variable) |
+
+Each loads on first use. RocksDB's is not conditional in a Parsley application: every stage
+keeps its protocol state in a persistent store, so the store opens and the binary loads as the
+application starts. The codecs load when their codec is used, which a consumer does not
+choose — reading a partition someone else wrote with zstd loads zstd, whatever this
+application produces.
+
+Three consequences. A hardened container that mounts the extraction directory `noexec` fails
+the load, so point the overrides above at a path that is both writable and executable. An
+audited or FIPS environment needs an owner for every native library on the host, and these
+arrive without being named in any build file. And the jars are multi-platform by
+construction, so an image built for one architecture still carries every other platform's
+binaries — the bulk of the 93.8 MiB, and not removable without repackaging the jars.
+
+### `at.yawk.lz4:lz4-java` is a fork coordinate
+
+Kafka 4.x moved off `org.lz4:lz4-java`, which is dormant, to a fork published from
+[github.com/yawkat/lz4-java](https://github.com/yawkat/lz4-java) under a personal-domain
+groupId. It is Apache-2.0 and it comes straight from `kafka-clients`, but a site running an
+artifact allowlist, a groupId policy, or a provenance check has to admit it, and it arrives
+through this library with nothing else explaining where it came from.
+
+### Excluding kafka-streams
+
+The plain-client exclusion above removes `kafka-streams`, and `rocksdbjni` and the Jackson
+tree with it: 73.8 MiB, the GPL-2.0 option, and 12 of the 62 natives. What remains is 20.0 MiB
+and the 50 codec natives, all of it under permissive licences. The exclusion is only available
+to an application with no stage; anything that runs the causal gate needs the state store, and
+so needs RocksDB.
 
 ## The shape: functional core, imperative edges
 
