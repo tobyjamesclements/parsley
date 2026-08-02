@@ -40,6 +40,5 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          show_full_output: true # TEMPORARY: diagnosing a first-turn auth rejection. Revert.
           claude_args: |
             --allowedTools "Bash(./mvnw test:*),Bash(./mvnw verify -DskipPitest=true:*),Bash(./mvnw compile:*)"
