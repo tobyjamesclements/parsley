@@ -2069,3 +2069,54 @@ integration suite rather than argued from the analyzer's output:
 
 If a future Kafka version moves a class the test kit needs into `kafka-metadata`'s test jar, the suite fails with a
 `NoClassDefFoundError` naming it. That is a clear failure, not a silent one.
+
+### D69 — Kafka 3.9.2 (supersedes D19's version pin)
+
+**Context**
+
+D19 pinned Kafka clients and Streams at 3.9.1. Kafka 3.9.2 fixes CVE-2026-35554: a buffer
+pool race in `kafka-clients` causing silent message corruption and cross-topic misrouting,
+affecting every version from 2.8.0 up to but excluding 3.9.2.
+
+That defect is squarely in this library's path. `kafka-clients` is a compile-scope dependency
+inherited by every consumer, and a message silently delivered to the wrong topic defeats the
+delivery guarantee from underneath, in a way no check in this repository could observe. A
+corrupted or misrouted record is not a record whose causes were mis-decided; it is a record
+that was never the one sent.
+
+**Decision**
+
+Move to 3.9.2. The suite is green at 418 tests, and the test-classifier artifacts the
+embedded broker needs all resolve at the new version.
+
+**What this does not fix**
+
+The open item this closes was recorded as a concern about the commons-compress CVEs, which
+drove the previous repository's Testcontainers bump. This bump does not touch them, and the
+tree does not need it to. Comparing the dependency tree either side of the change, every
+transitive version is identical:
+
+* `commons-compress` 1.26.2, unchanged, test scope
+* `commons-io` 2.14.0, unchanged, test scope
+* `snappy-java` 1.1.10.5, unchanged
+* `zstd-jni` 1.5.6-4, unchanged
+
+commons-compress 1.26.2 already carries the fixes for CVE-2024-25710 and CVE-2024-26308, both
+resolved in 1.26.0, which were the advisories behind that Testcontainers bump. It arrives here
+through the embedded broker's test artifacts rather than through Testcontainers, at test scope,
+so it reaches no consumer. The consumer-facing dependency set is `kafka-streams`,
+`kafka-clients`, `rocksdbjni` and `slf4j-api`, and nothing else.
+
+**Alternatives**
+
+* Move to 4.x, as the previous implementation had done, rather than take the patch release.
+  Rejected here as a separate question: 4.x is a major upgrade whose behaviour this tree has
+  never been run against, and taking a security patch should not be coupled to it. The
+  argument for 4.x stands on its own and is untouched by this entry.
+* Stay on 3.9.1 and treat CVE-2026-35554 as not applicable. Rejected: the affected component
+  ships to consumers, and the failure mode is silent.
+
+**Cost**
+
+The 3.9.x line is a maintenance branch. Whatever argument existed for moving to 4.x still
+applies, and this entry neither makes nor forecloses it.
