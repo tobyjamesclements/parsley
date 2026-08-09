@@ -2177,3 +2177,50 @@ The consumer-facing set stays four artifacts: `kafka-streams`, `kafka-clients`, 
 
 The broker floor rises with the client. `EVIDENCE.md` row 1 already records that no executable
 check distinguishes broker versions below the floor, and that remains true.
+
+### D71 — Avro dropped from the test dependencies (amends D70)
+
+**Context**
+
+`avro` 1.12.0 supported exactly one test, and carries CVE-2025-33042, a code-injection flaw
+fixed in 1.12.1. The exposure here was already nil: the dependency is test scope, so it
+reaches no consumer, and the vulnerable path is specific-record generation from untrusted
+schemas, where the test used a hardcoded schema and generic records.
+
+The dependency's real cost was elsewhere. Avro pins `jackson-core` 2.17.2 and, being a direct
+dependency, won on nearest-first over the 2.21.2 the embedded broker's Jackson stack expects.
+That is what broke the move to Kafka 4.x, presenting as a failure to initialise
+`kafka.utils.Log4jControllerRegistration$`, and it is why D70 added a `jackson-core` exclusion.
+One test dependency was setting the Jackson version for the whole build.
+
+**Decision**
+
+Remove `avro`. `AvroWireFormatTest` becomes `FramedPayloadWireFormatTest`, keeping every
+assertion and encoding its payload by hand in the Confluent Schema Registry layout: a zero
+magic byte, a four-byte big-endian schema id, then an opaque body.
+
+The `jackson-core` exclusion D70 added goes with it, since Avro was its only cause. The whole
+Jackson stack resolves at 2.21.2 unaided.
+
+**What this costs, plainly**
+
+Safety 5 names Avro. No test now drives a real Avro codec, so that leg of the criterion rests
+on the structure rather than on a demonstration: the topology carries bytes and applies
+application serdes only after the delivery decision, so no code path can distinguish Avro
+bytes from any others. The framing case still exercises the shape that would catch a
+regression, since a leading zero magic byte is what defeats naive wrapping and
+length-prefixing, and the test asserts that byte is present. A regression touching only
+Avro-encoded bodies would not be caught. `EVIDENCE.md` row 5 says so.
+
+**Alternatives**
+
+* Bump to 1.12.1, keeping a real codec and the realism it gives. Rejected: it keeps a
+  dependency that earns one test, keeps the Jackson exclusion, and keeps a CVE stream for a
+  library this project does not otherwise use.
+* Leave 1.12.0 in place, since the vulnerable path is unexercised. Rejected: true, and it
+  still leaves scanners flagging the build and Avro governing Jackson.
+
+**Cost**
+
+Recorded above. The dependency count for the test suite falls by one, and nothing outside the
+one test changed.
