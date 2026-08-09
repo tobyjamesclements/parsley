@@ -102,7 +102,7 @@ try (Parsley parsley = Parsley.start(config, shipper)) {
 }
 ```
 
-`README.md` carries the fuller version. `ProcessStatus` and `OrderingStateInspector` are the
+`docs/index.md` carries the fuller version. `ProcessStatus` and `OrderingStateInspector` are the
 diagnosis surface when a process is holding or has stopped.
 
 ## Conventions if you modify the code

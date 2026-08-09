@@ -1,5 +1,36 @@
 # Model
 
+## Terms
+
+Every term of art in this repository names the following.
+
+**Happened-before.** Lamport's irreflexive partial order over events: same-process
+precedence, plus send-to-receipt edges, closed transitively (Lamport, *Time, Clocks, and the
+Ordering of Events in a Distributed System*, CACM 1978).
+
+**Cause, causal delivery.** A causes B when a delivery of A happened before B was sent.
+Causal delivery means no process that delivers both delivers them inverted. This is the
+delivery discipline of causal broadcast (Birman and Joseph, *Reliable Communication in the
+Presence of Failures*, TOCS 1987), transplanted onto channels.
+
+**Causal frontier.** A map from channel to the highest position known causal. It plays the
+role a vector clock plays in process-indexed causal broadcast (Fidge 1988; Mattern 1989),
+indexed by channel because the metadata carries no process identity.
+
+**Hold-back buffer.** The causal-broadcast queue of received but not yet deliverable
+messages, here per channel and persistent.
+
+**Exactly-once, EOS.** Kafka's transactional processing, `exactly_once_v2` with
+`read_committed`: a step's state changes, sends and consumed read positions commit atomically
+or not at all.
+
+**LSO, last stable offset.** Kafka's barrier for `read_committed` readers. It is the first
+offset of the earliest still-open transaction on a partition, and the high watermark where
+none is open. Everything below it is settled as committed data, or as aborted and control
+positions that will never yield a message.
+
+**Fail closed.** Stop delivering rather than weaken the guarantee.
+
 ## Specification terms in Kafka
 
 | Term | Kafka realisation |
