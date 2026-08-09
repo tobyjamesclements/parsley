@@ -11,21 +11,23 @@ import java.util.TreeSet;
 import java.util.UUID;
 
 /**
- * Read-only interpretation of ordering-state entries, for the runtime's start-time checks. A declaration that
- * removes a channel with undelivered held messages must be refused (SPEC Structural 16) even when the removal
- * shrinks the task set so far that the task owning the held messages would never be instantiated to refuse it
- * itself — the runtime inspects the ordering store's changelog instead. The same view carries the name-to-identity
- * bindings (D33), so a topic recreated under a still-declared name is diagnosed as the identity change it is,
- * never as a declaration change (ASSESSMENT 1.3).
+ * Reads ordering state without an engine.
+ *
+ * <p>These are the questions a startup check asks of state left behind by a previous run, and
+ * that an operator asks of a stopped process: what is still held, and which topics has this
+ * process bound to an identity that no longer resolves.
+ *
+ * @see StoreCodec
  */
 public final class OrderingStateInspector {
-
     private OrderingStateInspector() {
     }
 
     /**
-     * The channels with live held-message entries, given the latest value per ordering-store key (a compacted view
-     * of the store's changelog: tombstoned keys must be absent or mapped to null).
+     * Finds the channels holding undelivered messages.
+     *
+     * @param latestPerKey the ordering state, as the latest value per key
+     * @return the channels with at least one held message, in {@link ChannelId} order
      */
     public static Set<ChannelId> heldChannels(Map<byte[], byte[]> latestPerKey) {
         Set<ChannelId> channels = new TreeSet<>();
@@ -39,9 +41,10 @@ public final class OrderingStateInspector {
     }
 
     /**
-     * The topic identity recorded for each declared name (D33), given the latest value per ordering-store key.
-     * Bindings are written per task, so partitions differ across entries of one name in an aggregated changelog
-     * view; the topic id — the identity that matters — is the same for all of them.
+     * Recovers which topic identity each topic name was bound to.
+     *
+     * @param latestPerKey the ordering state, as the latest value per key
+     * @return topic name to the identity this process recorded for it
      */
     public static Map<String, UUID> nameBindings(Map<byte[], byte[]> latestPerKey) {
         Map<String, UUID> bindings = new HashMap<>();
@@ -56,9 +59,14 @@ public final class OrderingStateInspector {
     }
 
     /**
-     * The declared topic names whose recorded identity no longer matches the current resolution: each was deleted
-     * and recreated under its name since this process's state was built, so its name-keyed read positions belong
-     * to a dead channel and its held entries carry the old identity (SPEC Assumption 2; D33).
+     * Finds topics that now resolve to a different identity than the one recorded.
+     *
+     * <p>A topic deleted and recreated under the same name resolves to a new identity, which
+     * makes every stored position for it meaningless.
+     *
+     * @param latestPerKey     the ordering state, as the latest value per key
+     * @param resolvedTopicIds topic name to the identity the broker reports now
+     * @return the names whose identity changed, sorted
      */
     public static List<String> identityChangedTopics(Map<byte[], byte[]> latestPerKey,
                                                      Map<String, UUID> resolvedTopicIds) {

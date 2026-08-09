@@ -5,12 +5,17 @@ import java.util.List;
 import io.github.tobyjamesclements.parsley.core.HeaderKV;
 
 /**
- * A delivered message: exactly what the seam passes to application logic, together with the process's application
- * state (SPEC Structural 3). The key and value are decoded with the channel's own serdes; the message's metadata —
- * channel, position, timestamp, headers — rides alongside, never inside, the key and value (SPEC Safety 4).
+ * One message, established as causally deliverable and handed to application logic.
+ *
+ * <p>Every cause of this message has already been delivered to this process. Reserved
+ * headers carrying causal metadata are removed before construction, so {@link #headers()}
+ * shows only what the application itself sent.
+ *
+ * @param <K> key type
+ * @param <V> value type
+ * @see Handler#handle(Delivery, StateReader)
  */
 public final class Delivery<K, V> {
-
     private final Channel<K, V> channel;
     private final int partition;
     private final long position;
@@ -31,40 +36,84 @@ public final class Delivery<K, V> {
                 .toList();
     }
 
+    /**
+     * Builds a delivery. Intended for tests driving a {@link Handler} directly.
+     *
+     * @param channel   the channel the message arrived on
+     * @param partition the partition within that channel
+     * @param position  the offset within that partition
+     * @param timestamp the message timestamp
+     * @param key       the message key
+     * @param value     the message value
+     * @param headers   the message headers, reserved entries included and filtered out here
+     * @param <K>       key type
+     * @param <V>       value type
+     * @return the delivery
+     */
     public static <K, V> Delivery<K, V> of(Channel<K, V> channel, int partition, long position, long timestamp,
                                            K key, V value, List<HeaderKV> headers) {
         return new Delivery<>(channel, partition, position, timestamp, key, value, headers);
     }
 
+    /**
+     * Returns the channel this message arrived on.
+     *
+     * @return the channel this message arrived on
+     */
     public Channel<K, V> channel() {
         return channel;
     }
 
+    /**
+     * Returns the partition within the channel.
+     *
+     * @return the partition within the channel
+     */
     public int partition() {
         return partition;
     }
 
-    /** The message's position on its channel: its offset. */
+    /**
+     * Returns the offset of this message within its partition.
+     *
+     * @return the offset of this message within its partition
+     */
     public long position() {
         return position;
     }
 
-    /** The record's timestamp. Data for the application; never an input to delivery order (SPEC Structural 7). */
+    /**
+     * Returns the message timestamp.
+     *
+     * @return the message timestamp
+     */
     public long timestamp() {
         return timestamp;
     }
 
+    /**
+     * Returns the message key.
+     *
+     * @return the message key
+     */
     public K key() {
         return key;
     }
 
+    /**
+     * Returns the message value.
+     *
+     * @return the message value
+     */
     public V value() {
         return value;
     }
 
-    /** The application headers the record carried. Headers under the reserved {@code parsley.} prefix are
-     * parsley's transport detail, not application data, and are filtered out — so forwarding these headers on an
-     * emission (a natural pattern) never trips the reserved-prefix refusal (D56). */
+    /**
+     * Returns the application's own headers, with reserved entries removed.
+     *
+     * @return the application's own headers, with reserved entries removed
+     */
     public List<HeaderKV> headers() {
         return headers;
     }

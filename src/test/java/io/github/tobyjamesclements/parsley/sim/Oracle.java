@@ -11,27 +11,12 @@ import java.util.Set;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
 
 /**
- * Ground-truth causality bookkeeping, entirely outside the engine. The simulator reports executions starting, feeds,
- * deliveries, sends, commits and rollbacks; the oracle maintains each process's true causal past (delivery adds the
- * message and its causes; a feed adds only its causes, since happened-before passes through receipt), snapshots it as
- * the true cause set of every sent message, and checks the safety criteria over committed history alone — an aborted
- * step's events have not occurred.
+ * Ground truth for the simulator, maintained outside the engine.
  *
- * <p>The oracle observes the <em>feed</em>, not the engine's acceptance: every message fed to the engine is a
- * delivery owed, whether or not the engine acknowledged it, unless the oracle's own bookkeeping shows its delivery is
- * no longer permitted — it was already delivered in a committed step, or it lay in the delivered causal past of the
- * execution that fed it (SPEC Structural 16 forbids re-entering that past; the exemption is computed from true
- * causes, never from expressed metadata, so an over-expressing engine cannot inflate its own excuse).</p>
+ * <p>Tracks happened-before independently and asserts causal order, absence of duplicates,
+ * FIFO per channel, and that everything received is eventually delivered.
  */
 public final class Oracle {
-
-    /** A committed send together with the world state snapshotted at the moment of sending: the expression upper
-     * bound (max position per channel among everything this process had delivered or seen expressed on fed
-     * messages), the highest assigned position per expressed channel, and which true causes were already
-     * discardable then (below their channel's earliest retained position, or on a dead channel). All are
-     * send-time snapshots: appends, kills and truncations between send and commit must neither excuse a
-     * genuinely-future or baseless expression nor retroactively excuse an under-expression that was a violation
-     * when the stamp was made. */
     record Sent(Instance instance, Map<ChannelId, Long> upperBoundAtSend, Map<ChannelId, Long> lastAssignedAtSend,
                 java.util.Set<Instance> excusedAtSend) {
     }
@@ -41,23 +26,16 @@ public final class Oracle {
         final Set<Instance> committedPast = new HashSet<>();
         final Set<Instance> committedFedOwed = new HashSet<>();
         final Map<ChannelId, Long> committedExpressible = new HashMap<>();
-        /** Per-channel maximum over committed deliveries and their true causes, maintained incrementally at each
-         * commit (the max only grows) so restarts do not recompute it from the full history. */
+
         final Map<ChannelId, Long> committedPastMax = new HashMap<>();
-        /** Every instance a committed step actually fed, owed or not: exact ground truth for obligations of the
-         * form "a committed step read this very message" (Safety 7) — no read-position proxy, so operator rewinds
-         * and repositions onto a truncated log start can neither erase nor fake it. */
+
         final Set<Instance> committedFed = new HashSet<>();
         final Set<Instance> deltaFed = new HashSet<>();
         final List<Instance> deltaDeliveries = new ArrayList<>();
         final Set<Instance> deltaPast = new HashSet<>();
         final Set<Instance> deltaFedOwed = new HashSet<>();
         final Map<ChannelId, Long> deltaExpressible = new HashMap<>();
-        /** The delivered causal past as of this execution's initialisation, summarized per channel as the maximum
-         * position over delivered instances and the true causes of delivered instances — the same per-channel-max
-         * summary D31 sanctions for the engine's join clamp, but computed from ground truth, never from expressed
-         * metadata. Positions at or below it are no longer owed here: delivering them would re-enter delivered
-         * causal past (SPEC Structural 16), or they were already delivered. */
+
         Map<ChannelId, Long> executionExemption = Map.of();
     }
 
@@ -68,22 +46,15 @@ public final class Oracle {
         return processes.computeIfAbsent(process, p -> new ProcState());
     }
 
-    /** A full initialisation began: snapshot the delivered causal past that this execution must not re-enter. */
     public void onStart(String process) {
         ProcState st = state(process);
         st.executionExemption = deliveredPastMax(process);
     }
 
-    /** The delivered causal past of a process right now, as the per-channel maximum over its committed deliveries
-     * and their true causes — the ground-truth counterpart of the engine's join clamp (D31). A snapshot copy: the
-     * underlying max is maintained incrementally at commit and keeps growing. */
     public Map<ChannelId, Long> deliveredPastMax(String process) {
         return new HashMap<>(state(process).committedPastMax);
     }
 
-    /** A message was fed to the engine. Its causes join the causal past regardless of what the engine does with it
-     * (happened-before passes through receipt, SPEC Structural 15 — a dropped message was still received), and its
-     * delivery is owed unless the delivered causal past at this execution's start already covered its position. */
     public void onFed(String process, Instance instance) {
         ProcState st = state(process);
         st.deltaFed.add(instance);
@@ -103,7 +74,6 @@ public final class Oracle {
         st.deltaExpressible.merge(instance.channel, instance.position, Math::max);
     }
 
-    /** The true cause set for a message this process sends right now. */
     public Set<Instance> causalPastSnapshot(String process) {
         ProcState st = state(process);
         Set<Instance> snapshot = new HashSet<>(st.committedPast);
@@ -111,8 +81,6 @@ public final class Oracle {
         return snapshot;
     }
 
-    /** The highest position per channel this process could legitimately express right now: everything it has
-     * delivered, and every pair expressed by the metadata of anything fed to it. Anything above is over-expression. */
     public Map<ChannelId, Long> expressionUpperBound(String process) {
         ProcState st = state(process);
         Map<ChannelId, Long> bound = new HashMap<>(st.committedExpressible);
@@ -149,13 +117,6 @@ public final class Oracle {
         st.deltaExpressible.clear();
     }
 
-    /**
-     * Checked the moment a send commits: the metadata must express every true cause still at or above its channel's
-     * earliest retained position (SPEC Structural 15), name no position that was unassigned at the moment of sending
-     * (Structural 12), never depend on the message's own position or above on its own channel (Structural 14), and
-     * express nothing above what the sender had delivered or seen expressed at the moment of sending — the upper
-     * bound that keeps downstream delivered-past clamps sound (Structural 16 via D31).
-     */
     private void checkExpression(Sent sent) {
         Instance instance = sent.instance();
         instance.meta.byChannel().forEach((channel, position) -> {
@@ -177,7 +138,7 @@ public final class Oracle {
         });
         for (Instance cause : instance.trueCauses) {
             if (sent.excusedAtSend().contains(cause)) {
-                continue; // discardable at the moment of sending (Structural 13) — judged then, never retroactively.
+                continue;
             }
             Long expressed = instance.meta.byChannel().get(cause.channel);
             if (expressed == null || expressed < cause.position) {
@@ -187,7 +148,6 @@ public final class Oracle {
         }
     }
 
-    /** Full-history checks, run at quiescence. */
     public void finalChecks() {
         processes.forEach((process, st) -> {
             Map<Instance, Integer> firstIndex = new HashMap<>();
@@ -220,9 +180,6 @@ public final class Oracle {
         });
     }
 
-    /** Liveness at quiescence: everything fed in a committed step and owed must have been delivered (SPEC
-     * Liveness 1, 5). Processes that failed closed are waived — their remaining holds are the specified trade —
-     * but their committed history was still checked for safety above. */
     public void checkAllReceivedDelivered() {
         checkAllReceivedDelivered(Set.of());
     }
@@ -244,12 +201,10 @@ public final class Oracle {
         return List.copyOf(state(process).committedDeliveries);
     }
 
-    /** Whether a committed step of this process actually fed this exact instance. */
     public boolean committedFeedOf(String process, Instance instance) {
         return state(process).committedFed.contains(instance);
     }
 
-    /** Committed-fed, owed, still-undelivered instances per channel — the custody a wedge never excuses. */
     public Map<ChannelId, List<Instance>> undeliveredOwedByChannel(String process) {
         ProcState st = state(process);
         Set<Instance> undelivered = new HashSet<>(st.committedFedOwed);

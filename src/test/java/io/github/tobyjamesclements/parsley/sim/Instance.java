@@ -8,12 +8,9 @@ import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.HeaderKV;
 
 /**
- * One concrete message on a channel, as the oracle sees it. Identity is (channel, position). {@code trueCauses} is the
- * ground-truth transitively-closed cause set, computed by the simulator outside the engine at the moment of sending;
- * {@code meta} is what the sender's metadata actually expressed. Comparing the two is how the oracle judges the engine.
+ * One execution of a simulated process, with the state it keeps across restarts.
  */
 public final class Instance {
-
     final ChannelId channel;
     final long position;
     final String uid;

@@ -1,70 +1,90 @@
 package io.github.tobyjamesclements.parsley.core;
 
 /**
- * Thrown to fail closed (SPEC Terminology): the process stops delivering rather than proceed with a weakened
- * guarantee. The adapter lets this propagate out of the processor, failing the step — the transaction aborts, nothing
- * is delivered past the failure, and the process re-fails on restart until an operator intervenes.
+ * Thrown where the delivery guarantee cannot be upheld.
+ *
+ * <p>Every throw stops delivery rather than weakening the guarantee. A process that fails
+ * closed stays down until an operator intervenes, so this is a diagnosis rather than a
+ * condition to retry.
+ *
+ * @see #reason()
+ * @see io.github.tobyjamesclements.parsley.api.ProcessStatus#refusalReason()
  */
 public final class ParsleyFailClosedException extends RuntimeException {
 
+    /** Why delivery stopped. */
     public enum Reason {
-        /** Causal metadata present but undecodable (SPEC Safety 7). */
+        /** Causal metadata was present but could not be decoded. */
         UNDECODABLE_METADATA,
-        /** Read position at or resuming below the channel's earliest retained position (SPEC Safety 8). */
+        /** Positions were discarded by retention before this process read them. */
         POSITIONS_DISCARDED_UNREAD,
-        /** The host fed a position already covered as fed-or-never-arriving within this execution (Host obligation 1/2 breach). */
+        /** The host fed a channel out of position order. */
         OUT_OF_ORDER_FEED,
-        /** Execution declared without a channel on which received messages remain undelivered (SPEC Structural 16). */
+        /** A channel left the received set while it still held undelivered messages. */
         CHANNEL_REMOVED_WITH_HELD_MESSAGES,
-        /** A declared topic's identity changed: the topic was deleted and recreated under the same name, so the
-         * group's read positions for that name belong to a dead channel (SPEC Assumption 2, Safety 8). */
+        /** A topic was recreated, so positions held against the old identity are meaningless. */
         CHANNEL_IDENTITY_CHANGED,
-        /** A received channel's topic no longer exists while this process still retains received-but-undelivered
-         * messages from it. Senders that delivered from that channel may already have discarded its causes from
-         * their metadata (SPEC Structural 13 permits that), so arriving effects can no longer be ordered against
-         * the held messages: their place in causal order cannot be preserved, and the process must stop rather
-         * than deliver past them (SPEC Safety 9; the deletion also breached Assumption 17's hygiene). */
+        /** A received topic was deleted while messages from it remained undelivered. */
         CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES,
-        /** The declaration's task width no longer matches the width the ordering state was built for; the
-         * ordering store's changelog cannot change partition count, so the execution is refused rather than left
-         * to die in the host's internal-topic validation with a state-destroying remedy (SPEC Structural 16). */
+        /** The task count changed, so ordering state no longer matches its partitioning. */
         TASK_WIDTH_CHANGED,
-        /** Persisted ordering state has a format this build does not understand. */
+        /** Stored ordering state carries a format version this build cannot read. */
         UNKNOWN_ORDERING_STATE_FORMAT,
-        /** Application logic emitted to a channel outside the declared send set (SPEC Structural 19). */
+        /** A handler emitted on a channel its process never declared. */
         EMISSION_TO_UNDECLARED_CHANNEL,
-        /** Application attached a header using the reserved parsley prefix (SPEC Structural 5). */
+        /** An application header used the prefix reserved for causal metadata. */
         RESERVED_HEADER_USED,
-        /** The application's own codec could not decode a delivered payload; delivering past it would break SPEC Safety 3. */
+        /** An application payload could not be decoded by its declared serde. */
         APPLICATION_PAYLOAD_UNDECODABLE,
-        /** The host or substrate configuration violates SPEC Substrate requirements (e.g. EOS override). */
+        /** The substrate is configured in a way the guarantee cannot survive. */
         SUBSTRATE_MISCONFIGURED,
-        /** Causal metadata reached the configured budget on receipt or emission: the process stops with its own
-         * diagnosis rather than running into the substrate's record-size wall, where the failure would be a
-         * permanent, unattributed production error (SPEC Operational 4). */
+        /** Causal metadata exceeded the configured budget. */
         METADATA_BUDGET_EXCEEDED
     }
 
+    /** Why delivery stopped. */
     private final Reason reason;
 
+    /**
+     * Builds a diagnosis.
+     *
+     * @param reason  why delivery stopped
+     * @param message the diagnosis, prefixed with {@code reason}
+     */
     public ParsleyFailClosedException(Reason reason, String message) {
         super(reason + ": " + message);
         this.reason = reason;
     }
 
+    /**
+     * Builds a diagnosis wrapping an underlying failure.
+     *
+     * @param reason  why delivery stopped
+     * @param message the diagnosis, prefixed with {@code reason}
+     * @param cause   the underlying failure
+     */
     public ParsleyFailClosedException(Reason reason, String message, Throwable cause) {
         super(reason + ": " + message, cause);
         this.reason = reason;
     }
 
+    /**
+     * Returns why delivery stopped.
+     *
+     * @return why delivery stopped
+     */
     public Reason reason() {
         return reason;
     }
 
     /**
-     * The outermost {@code ParsleyFailClosedException} in a failure's cause chain, or null. The walk is
-     * depth-capped: cause chains can legally be cyclic ({@code initCause} rejects only self-reference), and
-     * callers run this inside failure handlers where an unbounded walk would wedge them.
+     * Searches a failure's cause chain for a fail-closed diagnosis.
+     *
+     * <p>Kafka Streams wraps handler failures, so the diagnosis is rarely the outermost
+     * throwable. The search is bounded to guard against a cyclic chain.
+     *
+     * @param failure the throwable to search, which may be {@code null}
+     * @return the first fail-closed exception found, or {@code null} when there is none
      */
     public static ParsleyFailClosedException findIn(Throwable failure) {
         Throwable cause = failure;

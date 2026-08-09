@@ -4,12 +4,9 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Builds engines for tests, including deliberately broken ones. The sabotage modes exist so the suite can prove it
- * would catch each violation (EVIDENCE.md): a test that stays green against a sabotaged engine is worse than no test.
- * This factory lives in the test tree; the public API cannot construct a sabotaged engine.
+ * Builds engines and messages for the core tests.
  */
 public final class EngineTestFactory {
-
     public enum SabotageMode {
         NONE,
         IGNORE_CAUSES,

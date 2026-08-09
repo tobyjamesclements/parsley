@@ -11,13 +11,12 @@ import java.util.stream.Stream;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The protocol core must decide locally and purely (SPEC Structural 1, 7): no clocks, no network, no substrate
- * types. This scans the core package's sources — a build-time tripwire for anyone wiring I/O or time into the
- * decision path. The Kafka adapter lives outside this package on purpose.
+ * Establishes that the protocol core names no host facility.
+ *
+ * <p>Scans the core sources for any reference to a clock, the network or the substrate. This
+ * is what allows the same engine to run under a simulator and under Kafka Streams.
  */
 class CorePurityTest {
-
-    // Matched anywhere in the source, not just imports, so fully-qualified references cannot slip past the scan.
     private static final List<String> FORBIDDEN = List.of(
             "org.apache.kafka",
             "java.net.",
@@ -29,6 +28,7 @@ class CorePurityTest {
             "Instant.now",
             "Clock.");
 
+    /** Core sources touch neither clock nor network nor substrate. */
     @Test
     void coreSourcesTouchNeitherClockNorNetworkNorSubstrate() throws IOException {
         Path coreSources = Path.of("src", "main", "java", "io", "github", "tobyjamesclements", "parsley", "core");

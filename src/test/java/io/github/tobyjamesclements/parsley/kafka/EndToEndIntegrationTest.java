@@ -50,13 +50,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * The whole stack against a real KRaft broker: exactly-once Streams applications, causal headers on the wire, admin
- * position facts, restarts, aborted transactions, truncation. One broker, one partition per topic, real time.
- */
 @Timeout(value = 300, unit = TimeUnit.SECONDS)
+/**
+ * Establishes delivery order against a real broker under exactly-once semantics.
+ *
+ * <p>Covers causal chains, restart with held messages, causes on aborted positions, log
+ * truncation, and a crash part-way through a step.
+ */
 class EndToEndIntegrationTest {
-
     private static KafkaClusterTestKit cluster;
     private static Admin admin;
 
@@ -93,8 +94,6 @@ class EndToEndIntegrationTest {
         }
     }
 
-    // ------------------------------------------------------------------ helpers
-
     private static void createTopics(String... names) throws Exception {
         List<NewTopic> topics = new ArrayList<>();
         for (String name : names) {
@@ -123,7 +122,6 @@ class EndToEndIntegrationTest {
         }
     }
 
-    /** Produce into a transaction and abort it: the positions are assigned but will never yield messages. */
     private static void produceAborted(String topic, String value) {
         Properties props = new Properties();
         props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, cluster.bootstrapServers());
@@ -144,7 +142,7 @@ class EndToEndIntegrationTest {
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         props.put(ConsumerConfig.GROUP_ID_CONFIG, "reader-" + UUID.randomUUID());
         List<ConsumerRecord<String, String>> records = new ArrayList<>();
-        // A reader with no knowledge of parsley: the application's own codecs alone (SPEC Safety 5).
+
         try (var consumer = new KafkaConsumer<>(props, new StringDeserializer(), new StringDeserializer())) {
             consumer.subscribe(List.of(topic));
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
@@ -184,8 +182,7 @@ class EndToEndIntegrationTest {
         return new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(causes)));
     }
 
-    // ------------------------------------------------------------------ tests
-
+    /** Causal chain delivers in order and output decodes with plain codecs. */
     @Test
     void causalChainDeliversInOrderAndOutputDecodesWithPlainCodecs() throws Exception {
         createTopics("e2e-t0", "e2e-t1", "e2e-t2");
@@ -221,8 +218,6 @@ class EndToEndIntegrationTest {
             assertTrue(parsley.healthy());
         }
 
-        // A plain read_committed consumer with the application's codecs alone decodes the stream; the causal
-        // metadata rides in the reserved header, expressing A (e2e-t1@0) as a cause of B.
         List<ConsumerRecord<String, String>> t2Records = readAllCommitted("e2e-t2");
         assertEquals(1, t2Records.size());
         ConsumerRecord<String, String> b = t2Records.get(0);
@@ -233,6 +228,7 @@ class EndToEndIntegrationTest {
                 "the effect's metadata must express its cause on e2e-t1");
     }
 
+    /** Held message survives a real restart. */
     @Test
     void heldMessageSurvivesARealRestart() throws Exception {
         createTopics("hold-a", "hold-b");
@@ -250,7 +246,6 @@ class EndToEndIntegrationTest {
                 })
                 .build();
 
-        // B depends on hold-a@0, which has not been sent yet: B must be received and held.
         produce("hold-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("hold-a"), 0), 0L)));
 
         try (Parsley parsley = Parsley.start(config("hold"), ph)) {
@@ -258,7 +253,6 @@ class EndToEndIntegrationTest {
             assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
         }
 
-        // Full restart: the hold-back buffer must come back from committed state (SPEC Liveness 5, 2-safety 2).
         try (Parsley parsley = Parsley.start(config("hold"), ph)) {
             produce("hold-a", "k", "A");
             await("A then B after restart", () -> delivered.size() == 2, Duration.ofSeconds(120));
@@ -266,6 +260,7 @@ class EndToEndIntegrationTest {
         }
     }
 
+    /** Cause on aborted positions resolves from read position reports. */
     @Test
     void causeOnAbortedPositionsResolvesFromReadPositionReports() throws Exception {
         createTopics("gap-a", "gap-b");
@@ -284,11 +279,9 @@ class EndToEndIntegrationTest {
                 .build();
 
         try (Parsley parsley = Parsley.start(config("gap"), pg)) {
-            produce("gap-a", "k", "A0"); // gap-a@0
+            produce("gap-a", "k", "A0");
             await("A0 delivered", () -> delivered.contains("A0"), Duration.ofSeconds(120));
 
-            // gap-a@1 is the aborted record, gap-a@2 the abort marker: positions that will never yield messages,
-            // with nothing after them. Only the host's read-position report can cover them (SPEC Liveness 3).
             produceAborted("gap-a", "ghost");
             produce("gap-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("gap-a"), 0), 2L)));
 
@@ -298,11 +291,9 @@ class EndToEndIntegrationTest {
         }
     }
 
+    /** Cause on trailing aborted run resolves even after a restart. */
     @Test
     void causeOnTrailingAbortedRunResolvesEvenAfterARestart() throws Exception {
-        // The audit's Liveness 3 blocker: after a restart, Kafka Streams never commits a position advance for a
-        // partition with no processed record in the task's current lifetime, so the trailing aborted run below is
-        // invisible to the committed-offset report. Only the facts source's read_committed probe can settle it.
         createTopics("gapr-a", "gapr-b");
         Channel<String, String> a = Channel.of("gapr-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("gapr-b", Serdes.String(), Serdes.String());
@@ -323,7 +314,6 @@ class EndToEndIntegrationTest {
             await("A0 delivered", () -> delivered.contains("A0"), Duration.ofSeconds(120));
         }
 
-        // While the process is down: a trailing aborted run lands on gapr-a, and B arrives depending on it.
         produceAborted("gapr-a", "ghost");
         produce("gapr-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("gapr-a"), 0), 2L)));
 
@@ -334,6 +324,7 @@ class EndToEndIntegrationTest {
         }
     }
 
+    /** Truncation beyond the read position stops the process. */
     @Test
     void truncationBeyondTheReadPositionStopsTheProcess() throws Exception {
         createTopics("trunc-a");
@@ -353,8 +344,6 @@ class EndToEndIntegrationTest {
             await("first three delivered", () -> delivered.size() == 3, Duration.ofSeconds(120));
         }
 
-        // While the process is stopped, more messages arrive and are then discarded by retention before it ever
-        // reads them. Resuming below the earliest retained position must fail closed, not skip (SPEC Safety 8).
         produce("trunc-a", "k", "m3");
         produce("trunc-a", "k", "m4");
         admin.deleteRecords(Map.of(new TopicPartition("trunc-a", 0), RecordsToDelete.beforeOffset(5)))
@@ -371,6 +360,7 @@ class EndToEndIntegrationTest {
         }
     }
 
+    /** Crash mid step delivers effects exactly once. */
     @Test
     void crashMidStepDeliversEffectsExactlyOnce() throws Exception {
         createTopics("once-in", "once-out");
@@ -387,13 +377,11 @@ class EndToEndIntegrationTest {
                 .sends(out)
                 .build();
 
-        // First run: the handler crashes mid-step; the step aborts, so the delivery has not occurred.
         Parsley first = Parsley.start(config("once"), po);
         produce("once-in", "k", "boom");
         await("the process to stop after the injected crash", () -> !first.healthy(), Duration.ofSeconds(120));
         first.close();
 
-        // Second run: the host re-feeds the message, it is delivered (not a duplicate), and the effect commits.
         try (Parsley second = Parsley.start(config("once"), po)) {
             List<ConsumerRecord<String, String>> outRecords = new ArrayList<>();
             await("exactly one committed effect", () -> {

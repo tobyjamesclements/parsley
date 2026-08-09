@@ -34,14 +34,18 @@ import io.github.tobyjamesclements.parsley.core.ProcessEngine;
 import io.github.tobyjamesclements.parsley.core.ReceivedMessage;
 
 /**
- * The Kafka Streams face of one process. Byte-level in and out: the application's serdes are applied only at the seam
- * (SPEC Structural 3), so record keys and values are exactly the application's bytes (SPEC Safety 4, 5). All ordering
- * belongs to the {@link ProcessEngine}; this class feeds it records, position facts from the punctuator, and carries
- * out deliveries and emissions within the step. A {@link ParsleyFailClosedException} propagates out of {@code process},
- * aborting the step and stopping the process: failing closed (SPEC Safety 7, 8).
+ * The Kafka Streams processor driving one {@link ProcessEngine}.
+ *
+ * <p>Each record is fed to the engine, then every message the engine declares deliverable is
+ * decoded, handed to its handler, and the handler's effects are written and forwarded. State
+ * writes, sends and consumed positions commit together under {@code exactly_once_v2}.
+ *
+ * <p>Broker facts are refreshed on a separate executor, so a slow query cannot stall
+ * delivery. The result is picked up on the next record or punctuation.
+ *
+ * @see ProcessTopology
  */
 final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]> {
-
     private static final Logger LOG = LoggerFactory.getLogger(ParsleyProcessor.class);
 
     private final ProcessDefinition definition;
@@ -50,9 +54,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private final Duration factsInterval;
     private final java.util.concurrent.Executor factsExecutor;
     private final int metadataBudgetBytes;
-    /** A gathered-but-unapplied facts round. Written by the facts executor, taken (exactly once — a completed
-     * round is never reused) and applied on the stream thread. Every fact is a per-position lower bound, so
-     * applying a round one interval late is always safe; only the copying discipline matters (D54). */
+
     private final java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.core.PositionFacts> gathered =
             new java.util.concurrent.atomic.AtomicReference<>();
     private final java.util.concurrent.atomic.AtomicBoolean gatherInFlight =
@@ -66,6 +68,14 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private final Map<String, KeyValueStore<Bytes, byte[]>> appStores = new HashMap<>();
     private StateReader stateReader;
 
+    /**
+     * @param definition          the process this instance runs
+     * @param topics              resolved identity and width for every topic it uses
+     * @param factsSource         where broker facts come from
+     * @param factsInterval       how often to refresh them
+     * @param factsExecutor       where the refresh runs
+     * @param metadataBudgetBytes the largest causal metadata a message may carry
+     */
     ParsleyProcessor(ProcessDefinition definition, Map<String, TopicInfo> topics,
                      FactsSource factsSource, Duration factsInterval,
                      java.util.concurrent.Executor factsExecutor, int metadataBudgetBytes) {
@@ -77,6 +87,13 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         this.metadataBudgetBytes = metadataBudgetBytes;
     }
 
+    /**
+     * Builds the engine for this task and restores its ordering state.
+     *
+     * @param context the task context
+     * @throws ParsleyFailClosedException if restored state cannot be read, or if the task
+     *         width changed so that state no longer matches its partitioning
+     */
     @Override
     public void init(ProcessorContext<byte[], byte[]> context) {
         this.context = context;
@@ -104,26 +121,16 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         stateReader = new StoreStateReader();
 
         context.schedule(factsInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
-            // Start (or continue) a background round first, then apply whichever round has completed — with a
-            // synchronous executor that is this round; with the shared background thread it is the previous one,
-            // one interval late, which lower-bound facts make always safe (D54).
             startGatherIfIdle();
             applyGatheredFacts();
             drain();
             engine.flushHolds();
             observeFrontier();
         });
-        // Seed read-position baselines now rather than waiting a full interval; failures here are liveness-only
-        // (a fact source outage), except the engine itself refusing, which must propagate. Deliveries deliberately
-        // wait for process() or the first punctuation: forwarding from within Processor#init is an unexercised host
-        // path, and nothing is lost by deferring at most one facts interval. Gathering here is synchronous by
-        // design — initialisation is one-time and off the per-record path.
+
         ingestFacts();
     }
 
-    /** Apply a completed background round, exactly once. Every fact is a per-position lower bound (D54), so a
-     * round applied one interval after it was gathered releases and prunes exactly what a fresh round would —
-     * later, never wrongly. */
     private void applyGatheredFacts() {
         io.github.tobyjamesclements.parsley.core.PositionFacts facts = gathered.getAndSet(null);
         if (facts != null) {
@@ -131,8 +138,6 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         }
     }
 
-    /** Start a background facts round unless one is already running. Inputs are snapshotted on the stream thread
-     * — the gather never touches engine-owned collections (D54). */
     private void startGatherIfIdle() {
         if (!gatherInFlight.compareAndSet(false, true)) {
             return;
@@ -145,7 +150,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                 try {
                     gathered.set(factsSource.gather(received, hints, frontier));
                 } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt(); // the runtime is closing; stand down quietly
+                    Thread.currentThread().interrupt();
                 } catch (Exception e) {
                     LOG.warn("{}: position facts unavailable, retrying next round", definition.name(), e);
                 } finally {
@@ -153,31 +158,30 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                 }
             });
         } catch (java.util.concurrent.RejectedExecutionException e) {
-            // The runtime is closing and has shut the facts executor down while this task's punctuator is still
-            // winding down: not a failure of the process — do not let it kill the stream thread and be recorded
-            // as one during an intended close.
             gatherInFlight.set(false);
         }
     }
 
-    /** SPEC Operational 5: the size of this process's causal metadata, observable in operation. */
     private void observeFrontier() {
         int bytes = engine.frontierBytes();
         if (!budgetWarned && bytes >= metadataBudgetBytes * 0.8) {
             budgetWarned = true;
-            LOG.warn("{}: causal metadata at {} bytes ({} channels) — at 80% of the {}-byte budget, the process"
-                            + " will fail closed on reaching it; see docs/DESIGN.md §2 for the growth law",
+            LOG.warn("{}: causal metadata at {} bytes ({} channels), at 80% of the {}-byte budget, the process"
+                            + " will fail closed on reaching it; see docs/model.md for the growth law",
                     definition.name(), bytes, engine.frontierSize(), metadataBudgetBytes);
         }
         LOG.debug("{}: causal frontier {} channels, {} bytes", definition.name(), engine.frontierSize(), bytes);
     }
 
+    /**
+     * Feeds one record to the engine and delivers whatever that makes deliverable.
+     *
+     * @param record the record, as raw bytes
+     * @throws ParsleyFailClosedException if the guarantee cannot be upheld, which stops this
+     *         process
+     */
     @Override
     public void process(Record<byte[], byte[]> record) {
-        // A completed background round may carry a stop signal (a recreated channel; a dead channel with holds);
-        // apply it before feeding rather than letting it sit until the next punctuation — facts are per-position
-        // lower bounds, safe to apply at any point on the stream thread (D54), and the stop signals inside them
-        // should not wait a full extra interval while records keep being delivered.
         if (gathered.get() != null) {
             applyGatheredFacts();
         }
@@ -197,9 +201,6 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         engine.flushHolds();
     }
 
-    /** Hints invite the facts source to probe never-yielding runs just above the covered frontier; only worth
-     * the round trips while something is actually held (SPEC Liveness 3). One builder feeds both the synchronous
-     * seed round and every background round, so the hint policy cannot silently diverge between the two paths. */
     private Map<ChannelId, Long> probeHints() {
         Map<ChannelId, Long> hints = new java.util.TreeMap<>();
         if (engine.heldCountTotal() > 0) {
@@ -217,7 +218,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             facts = factsSource.gather(engine.receivedChannelSet(), hints,
                     engine.frontierSnapshot().byChannel().keySet());
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt(); // an embedder cancelled startup: keep the signal, skip the round
+            Thread.currentThread().interrupt();
             return;
         } catch (Exception e) {
             LOG.warn("{}: position facts unavailable, retrying next round", definition.name(), e);
@@ -250,7 +251,6 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             value = message.value() == null
                     ? null : channel.valueSerde().deserializer().deserialize(topic, receivedHeaders, message.value());
         } catch (RuntimeException e) {
-            // Delivering nothing and moving on would deliver past the message (SPEC Safety 3): fail closed instead.
             throw new ParsleyFailClosedException(
                     ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
                     definition.name() + ": " + topic + "@" + message.position(), e);
@@ -289,7 +289,6 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private <K, V> void send(Effects.Emission<K, V> emission, long timestamp) {
         String topic = emission.channel().topic();
         if (definition.sendChannel(topic) == null) {
-            // SPEC Structural 19: an emission naming a channel outside the declared send set fails the step.
             throw new ParsleyFailClosedException(
                     ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL,
                     definition.name() + " emitted to undeclared channel " + topic);

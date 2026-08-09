@@ -10,13 +10,9 @@ import java.util.UUID;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
 
 /**
- * The simulated substrate: channels are append-only logs of slots. A slot is a committed message, a pending
- * transactional append (invisible below the LSO barrier, like read_committed), or dead — a position that will never
- * yield a message (aborted transaction, control record, compacted away). Offsets are assigned at append, so aborted
- * transactions leave gaps, exactly as in Kafka.
+ * The simulated substrate: channels, positions, transactions and their failure modes.
  */
 public final class SimWorld {
-
     public static final class SimChannel {
         final ChannelId id;
         final String name;
@@ -49,8 +45,7 @@ public final class SimWorld {
     }
 
     private final Map<ChannelId, SimChannel> channels = new LinkedHashMap<>();
-    /** The channel currently answering to each channel-level name, as the substrate's name lookup would: after a
-     * topic is recreated, its names denote the new incarnation's channels. */
+
     private final Map<String, SimChannel> currentByName = new LinkedHashMap<>();
     private final Random rng;
 
@@ -62,8 +57,6 @@ public final class SimWorld {
         return createTopic(name, 1).get(0);
     }
 
-    /** Create one topic with the given partition count: one channel per partition, sharing a topic ID, exactly as
-     * Kafka assigns one UUID per topic. Distinct partitions of one topic are distinct, independently ordered channels. */
     public List<SimChannel> createTopic(String name, int partitions) {
         UUID topicId = new UUID(rng.nextLong(), rng.nextLong() & Long.MAX_VALUE);
         List<SimChannel> created = new ArrayList<>();
@@ -77,8 +70,6 @@ public final class SimWorld {
         return created;
     }
 
-    /** Delete the topic and recreate it under the same name: the old incarnation's channels are dead, and the name
-     * now denotes a fresh topic with a new ID and empty logs (SPEC Assumption 2: a different channel). */
     public List<SimChannel> recreateTopic(SimChannel channel) {
         int partitions = 0;
         for (SimChannel candidate : channels.values()) {
@@ -90,7 +81,6 @@ public final class SimWorld {
         return createTopic(channel.topicName, partitions);
     }
 
-    /** The channel this channel-level name currently denotes, or null if its topic no longer exists. */
     public SimChannel currentByName(String name) {
         SimChannel current = currentByName.get(name);
         return current == null || current.dead ? null : current;
@@ -104,7 +94,6 @@ public final class SimWorld {
         return channels.values();
     }
 
-    /** Append a message inside an open transaction; it becomes readable only if the transaction commits. */
     long appendPending(SimChannel channel, Object txn, InstanceFactory factory) {
         long position = channel.slots.size();
         Instance instance = factory.at(channel.id, position);
@@ -112,7 +101,6 @@ public final class SimWorld {
         return position;
     }
 
-    /** Append a committed message immediately, as a non-transactional external producer would. */
     public Instance appendExternal(SimChannel channel, InstanceFactory factory) {
         long position = channel.slots.size();
         Instance instance = factory.at(channel.id, position);
@@ -120,7 +108,6 @@ public final class SimWorld {
         return instance;
     }
 
-    /** Append a position that will never yield a message: a foreign aborted transaction or control record. */
     public void appendDead(SimChannel channel) {
         channel.slots.add(new DeadSlot());
     }
@@ -147,12 +134,10 @@ public final class SimWorld {
         }
     }
 
-    /** Discard everything below {@code newLogStart}: retention or explicit deletion advancing the earliest retained position. */
     public void truncate(SimChannel channel, long newLogStart) {
         channel.logStart = Math.max(channel.logStart, newLogStart);
     }
 
-    /** Delete the topic — every partition of it, as Kafka topic deletion does. Terminal: topic IDs are never reused. */
     public void killChannel(SimChannel channel) {
         for (SimChannel candidate : channels.values()) {
             if (candidate.id.topicId().equals(channel.id.topicId())) {
@@ -161,7 +146,6 @@ public final class SimWorld {
         }
     }
 
-    /** The first position a read_committed consumer may not pass: the earliest open-transaction slot, else the end. */
     public long lso(SimChannel channel) {
         for (int i = (int) channel.logStart; i < channel.slots.size(); i++) {
             if (channel.slots.get(i) instanceof PendingSlot) {

@@ -1,11 +1,22 @@
 package io.github.tobyjamesclements.parsley.api;
 
 /**
- * Read access to the process's declared application state, as of the start of the current delivery — the other half
- * of what the seam passes to application logic (SPEC Structural 3, 8). Writes return through {@link Effects}.
+ * Read access to the stores a process declared, scoped to the key range of the step in
+ * progress.
+ *
+ * @see Handler
+ * @see Effects
  */
 public interface StateReader {
-
-    /** The value under {@code key} in {@code store}, or null when absent. */
+    /**
+     * Reads one value.
+     *
+     * @param store the store to read, which the process must have declared
+     * @param key   the key to read
+     * @param <K>   key type
+     * @param <V>   value type
+     * @return the stored value, or {@code null} when the key is absent
+     * @throws IllegalArgumentException if the process did not declare {@code store}
+     */
     <K, V> V get(StoreDef<K, V> store, K key);
 }

@@ -6,17 +6,26 @@ import java.util.Map;
 import java.util.TreeMap;
 
 /**
- * The stable wire representation of causal metadata (SPEC Structural 5, 11), carried in a single Kafka record header
- * named {@link #HEADER_KEY}. The format is documented in {@code docs/METADATA.md} and is strict: any deviation —
- * unknown version, truncation, trailing bytes, unsorted or duplicate channels, negative positions — is undecodable,
- * and undecodable metadata fails closed (SPEC Safety 7). An absent header means no causes (SPEC Safety 6).
+ * The wire representation of a causal frontier.
+ *
+ * <p>The format is frozen. Any change to the grammar requires a new {@link #FORMAT_VERSION}
+ * and a documented migration, because a frontier written by one process is read by another.
+ *
+ * <p>Decoding is strict: a header that is truncated, miscounted, negatively positioned or not
+ * in strictly ascending channel order is rejected rather than salvaged. Metadata that cannot
+ * be trusted is treated as a reason to stop, so a corrupted frontier cannot silently become a
+ * weaker one.
+ *
+ * @see Causes
  */
 public final class CausesCodec {
-
-    /** Reserved header key. Application headers may not use the {@code parsley.} prefix. */
+    /** The header carrying the encoded frontier. */
     public static final String HEADER_KEY = "parsley.causes";
+
+    /** Header prefix reserved for Parsley, which application headers may not use. */
     public static final String RESERVED_HEADER_PREFIX = "parsley.";
 
+    /** Version byte leading every encoded frontier. */
     public static final byte FORMAT_VERSION = 1;
 
     private static final int ENTRY_LENGTH = ChannelId.ENCODED_LENGTH + Long.BYTES;
@@ -24,19 +33,38 @@ public final class CausesCodec {
     private CausesCodec() {
     }
 
-    /** Thrown when a causes header is present but not decodable. The receiver must fail closed, never deliver. */
+    /** Signals metadata that was present and could not be trusted. */
     public static final class UndecodableMetadataException extends Exception {
+        /**
+         * Builds the exception.
+         *
+         * @param message what was wrong with the encoding
+         */
         public UndecodableMetadataException(String message) {
             super(message);
         }
     }
 
-    /** The encoded size of a causes set with this many entries — exact by construction of the format, so callers
-     * can bound metadata without paying for an encode. */
+    /**
+     * The exact encoded width of a frontier.
+     *
+     * @param entries how many channels the frontier names
+     * @return the byte count, used to test a frontier against the metadata budget before
+     *         encoding it
+     */
     public static int encodedSize(int entries) {
         return 1 + Integer.BYTES + entries * ENTRY_LENGTH;
     }
 
+    /**
+     * Encodes a frontier.
+     *
+     * <p>Channels are written in {@link ChannelId} order, so the same frontier always yields
+     * the same bytes.
+     *
+     * @param causes the frontier to encode
+     * @return the header value
+     */
     public static byte[] encode(Causes causes) {
         ByteBuffer buffer = ByteBuffer.allocate(encodedSize(causes.size()));
         buffer.put(FORMAT_VERSION);
@@ -48,6 +76,15 @@ public final class CausesCodec {
         return buffer.array();
     }
 
+    /**
+     * Decodes a frontier.
+     *
+     * @param headerValue the header value, which may be {@code null}
+     * @return the frontier
+     * @throws UndecodableMetadataException if the value is null, carries an unknown version,
+     *         is truncated, miscounts its entries, names a negative position, or lists
+     *         channels out of strictly ascending order
+     */
     public static Causes decode(byte[] headerValue) throws UndecodableMetadataException {
         if (headerValue == null) {
             throw new UndecodableMetadataException("causes header present with null value");
@@ -88,7 +125,13 @@ public final class CausesCodec {
         }
     }
 
-    /** Convenience for building a {@link Causes} in tests and adapters. */
+    /**
+     * Builds a frontier from a plain map.
+     *
+     * @param byChannel per channel, the highest causal position
+     * @return the frontier
+     * @see Causes#of(Map)
+     */
     public static Causes causes(Map<ChannelId, Long> byChannel) {
         return Causes.of(byChannel);
     }

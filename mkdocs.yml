@@ -65,26 +65,14 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Foundations:
-    - The causal model: foundations/causal-model.md
-    - The delivery gate: foundations/delivery-gate.md
-    - Liveness: foundations/liveness.md
-  - Design:
-    - Architecture: design/architecture.md
-    - State and recovery: design/state.md
-    - Verification: design/verification.md
-  - Using Parsley:
-    - Getting started: guide/getting-started.md
-    - Topology shapes: guide/topologies.md
-    - Codecs and Avro: guide/codecs.md
-    - Error handling: guide/error-handling.md
-    - Ticks: guide/ticks.md
-    - The contract: guide/expectations.md
-    - Diagnosing held records: guide/diagnosing-holds.md
-    - Verifying your application: guide/verifying.md
-    - Plain clients: guide/clients.md
+  - Protocol:
+    - Model: model.md
+    - Delivery: delivery.md
+    - State: state.md
+    - Wire format: wire-format.md
+  - Operation:
+    - Failing closed: failing-closed.md
+    - Runtime: runtime.md
   - Reference:
-    - Wire format: reference/wire-format.md
-    - Conformance kit: reference/conformance-kit.md
-    - Metrics: reference/metrics.md
-    - API reference: reference/api.md
+    - Verification: verification.md
+    - API: api.md

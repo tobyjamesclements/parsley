@@ -12,11 +12,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * The decision unit, exercised in isolation with no host, no engine, no store: exactly the separately callable pure
- * function SPEC Structural 7 requires. Its inputs are complete — there is nothing else it could consult.
+ * Establishes the delivery decision as a table of cases.
+ *
+ * <p>The decision is a pure function, so every case is stated in terms of its arguments
+ * alone.
  */
 class DeliverabilityTest {
-
     private static final ChannelId RECEIVED_A = new ChannelId(new UUID(0, 1), 0);
     private static final ChannelId RECEIVED_B = new ChannelId(new UUID(0, 2), 0);
     private static final ChannelId ELSEWHERE = new ChannelId(new UUID(0, 3), 0);
@@ -28,17 +29,20 @@ class DeliverabilityTest {
                 : OptionalLong.empty();
     }
 
+    /** No causes is deliverable. */
     @Test
     void noCausesIsDeliverable() {
         assertTrue(Deliverability.decide(Causes.none(), RECEIVED, settled(Map.of())).isDeliverable());
     }
 
+    /** Cause on unreceived channel is vacuously satisfied. */
     @Test
     void causeOnUnreceivedChannelIsVacuouslySatisfied() {
         Causes causes = Causes.of(Map.of(ELSEWHERE, 100L));
         assertTrue(Deliverability.decide(causes, RECEIVED, settled(Map.of())).isDeliverable());
     }
 
+    /** Cause at or below settled is satisfied. */
     @Test
     void causeAtOrBelowSettledIsSatisfied() {
         Causes causes = Causes.of(Map.of(RECEIVED_A, 5L));
@@ -46,6 +50,7 @@ class DeliverabilityTest {
         assertTrue(Deliverability.decide(causes, RECEIVED, settled(Map.of(RECEIVED_A, 9L))).isDeliverable());
     }
 
+    /** Cause above settled holds. */
     @Test
     void causeAboveSettledHolds() {
         Causes causes = Causes.of(Map.of(RECEIVED_A, 5L));
@@ -58,6 +63,7 @@ class DeliverabilityTest {
         assertEquals(OptionalLong.of(4L), held.blockers().get(0).settledPosition());
     }
 
+    /** Unknown channel state holds. */
     @Test
     void unknownChannelStateHolds() {
         Causes causes = Causes.of(Map.of(RECEIVED_A, 0L));
@@ -67,6 +73,7 @@ class DeliverabilityTest {
                 ((Deliverability.Held) verdict).blockers().get(0).settledPosition());
     }
 
+    /** Mixed causes report every blocker. */
     @Test
     void mixedCausesReportEveryBlocker() {
         Causes causes = Causes.of(Map.of(RECEIVED_A, 5L, RECEIVED_B, 2L, ELSEWHERE, 50L));

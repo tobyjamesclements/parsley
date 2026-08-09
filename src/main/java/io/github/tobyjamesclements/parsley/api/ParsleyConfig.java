@@ -6,10 +6,13 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Runtime configuration. Parsley owns the Kafka Streams lifecycle and its critical configuration: the processing
- * guarantee is exactly-once and the isolation level read_committed, neither overridable, and the consumer never
- * auto-resets past discarded positions (SPEC Substrate 3, Safety 8). Attempting to override any of these fails fast:
- * no documented use of this API can weaken a safety criterion (SPEC Structural 9).
+ * Broker connection, application identity and the tuning Parsley leaves open.
+ *
+ * <p>Configuration that carries the delivery guarantee is fixed by the runtime and cannot be
+ * set here. {@link Builder#streamsProperty} rejects those keys rather than silently ignoring
+ * them, so a configuration that would weaken the guarantee fails at construction.
+ *
+ * @see Parsley#start(ParsleyConfig, ProcessDefinition...)
  */
 public final class ParsleyConfig {
 
@@ -19,13 +22,7 @@ public final class ParsleyConfig {
             "processing.guarantee",
             "enable.auto.commit",
             "transactional.id");
-    // Suffix-matched so prefixed variants (consumer., main.consumer., producer., ...) are equally refused. The
-    // exception handlers are guarantee-bearing: a continue-style handler converts failing closed into dropping a
-    // message or an emission and committing anyway (SPEC Safety 3/7, Structural 19). Client interceptors and the
-    // timestamp extractor are equally owned (D51): a producer interceptor's documented purpose is mutating records
-    // in onSend — one that strips or replaces the causes header makes every emission read cause-free downstream,
-    // below every criterion that rides on the header — and a log-and-skip timestamp extractor converts a received
-    // message into a documented silent drop whose read position still advances.
+
     private static final Set<String> FORBIDDEN_SUFFIXES = Set.of(
             "isolation.level",
             "auto.offset.reset",
@@ -55,39 +52,74 @@ public final class ParsleyConfig {
         this.extraProperties = Map.copyOf(builder.extraProperties);
     }
 
+    /**
+     * Begins a configuration.
+     *
+     * @param bootstrapServers    Kafka bootstrap servers
+     * @param applicationIdPrefix prefix for each process's Kafka application id, which
+     *                            identifies its committed state across restarts
+     * @return a builder
+     * @throws IllegalArgumentException if either argument is null or blank
+     */
     public static Builder builder(String bootstrapServers, String applicationIdPrefix) {
         return new Builder(bootstrapServers, applicationIdPrefix);
     }
 
+    /**
+     * Returns the Kafka bootstrap servers.
+     *
+     * @return the Kafka bootstrap servers
+     */
     public String bootstrapServers() {
         return bootstrapServers;
     }
 
-    /** Each process runs as its own Streams application named {@code <prefix>-<processName>}. */
+    /**
+     * Returns the prefix for each process's application id.
+     *
+     * @return the prefix for each process's application id
+     */
     public String applicationIdPrefix() {
         return applicationIdPrefix;
     }
 
+    /**
+     * Returns the local state directory, or {@code null} for the Kafka Streams default.
+     *
+     * @return the local state directory, or {@code null} for the Kafka Streams default
+     */
     public String stateDir() {
         return stateDir;
     }
 
-    /** How often position facts (read positions, log starts, topic existence) are refreshed. Liveness pacing only:
-     * never an input to the deliverability decision (SPEC Structural 7, Liveness 3). */
+    /**
+     * Returns how often broker position facts are refreshed.
+     *
+     * @return how often broker position facts are refreshed
+     */
     public Duration factsInterval() {
         return factsInterval;
     }
 
-    /** The bound on encoded causal metadata accepted on receipt or expressed on send; reaching it fails closed
-     * with parsley's own diagnosis instead of the substrate's record-size wall (SPEC Operational 4). */
+    /**
+     * Returns the largest causal metadata a message may carry, in bytes.
+     *
+     * @return the largest causal metadata a message may carry, in bytes
+     */
     public int metadataBudgetBytes() {
         return metadataBudgetBytes;
     }
 
+    /**
+     * Returns additional Kafka Streams properties, none of them safety-bearing.
+     *
+     * @return additional Kafka Streams properties, none of them safety-bearing
+     */
     public Map<String, Object> extraProperties() {
         return extraProperties;
     }
 
+    /** Accumulates configuration, rejecting anything that would weaken the guarantee. */
     public static final class Builder {
         private final String bootstrapServers;
         private final String applicationIdPrefix;
@@ -107,11 +139,28 @@ public final class ParsleyConfig {
             this.applicationIdPrefix = applicationIdPrefix;
         }
 
+        /**
+         * Sets the local directory holding process state.
+         *
+         * @param stateDir a directory path, or {@code null} for the Kafka Streams default
+         * @return this builder
+         */
         public Builder stateDir(String stateDir) {
             this.stateDir = stateDir;
             return this;
         }
 
+        /**
+         * Sets how often broker position facts are refreshed.
+         *
+         * <p>Position facts are what let a process distinguish a cause that has not arrived
+         * yet from one that will never arrive, so this interval bounds how long a settled
+         * frontier takes to advance while a channel is idle.
+         *
+         * @param factsInterval a positive duration
+         * @return this builder
+         * @throws IllegalArgumentException if {@code factsInterval} is zero or negative
+         */
         public Builder factsInterval(Duration factsInterval) {
             if (factsInterval.isNegative() || factsInterval.isZero()) {
                 throw new IllegalArgumentException("factsInterval must be positive");
@@ -120,9 +169,17 @@ public final class ParsleyConfig {
             return this;
         }
 
-        /** Bound on encoded causal metadata per message, on receipt and on send. The frontier's size follows the
-         * causal graph, not this process's declaration (docs/DESIGN.md §2), so the ceiling is a deployment
-         * decision; reaching it fails closed with a parsley diagnosis (SPEC Operational 4). */
+        /**
+         * Sets the largest causal metadata a message may carry.
+         *
+         * <p>A process refuses metadata beyond this size on receipt and refuses to send
+         * beyond it, both with Parsley's own diagnosis, in place of reaching the broker's
+         * record-size limit.
+         *
+         * @param metadataBudgetBytes a positive byte count
+         * @return this builder
+         * @throws IllegalArgumentException if {@code metadataBudgetBytes} is not positive
+         */
         public Builder metadataBudgetBytes(int metadataBudgetBytes) {
             if (metadataBudgetBytes <= 0) {
                 throw new IllegalArgumentException("metadataBudgetBytes must be positive");
@@ -132,8 +189,13 @@ public final class ParsleyConfig {
         }
 
         /**
-         * An additional Kafka Streams property (tuning, security, and so on). Properties that would weaken the
-         * guarantees — processing guarantee, isolation level, offset reset, group identity — are refused.
+         * Sets an additional Kafka Streams property.
+         *
+         * @param key   the property name
+         * @param value the property value
+         * @return this builder
+         * @throws IllegalArgumentException if {@code key} is one Parsley owns, such as
+         *         {@code processing.guarantee} or {@code isolation.level}
          */
         public Builder streamsProperty(String key, Object value) {
             if (FORBIDDEN_KEYS.contains(key) || FORBIDDEN_SUFFIXES.stream().anyMatch(key::endsWith)) {
@@ -143,6 +205,11 @@ public final class ParsleyConfig {
             return this;
         }
 
+        /**
+         * Returns the configuration.
+         *
+         * @return the configuration
+         */
         public ParsleyConfig build() {
             return new ParsleyConfig(this);
         }

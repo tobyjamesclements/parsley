@@ -1,14 +1,27 @@
 package io.github.tobyjamesclements.parsley.api;
 
 /**
- * The seam through which the implementation invokes application logic (SPEC Structural 3): the delivered message and
- * the process's application state in; the messages to send and the state to persist out, as the returned
- * {@link Effects}. Nothing else crosses — no context, no producer, no clock, no timers. Logic should be a pure
- * function of its two arguments (SPEC Assumption 16): the host may re-invoke it for the same delivery after an
- * aborted step, and only the committed invocation's effects ever happen.
+ * Application logic for one channel of one process.
+ *
+ * <p>A handler receives the delivered message and a read view of application state, and
+ * returns everything it wishes to change. It is given no producer, no timer and no clock, so
+ * a handler cannot emit outside the transaction that commits its state.
+ *
+ * <p>Implementations must be pure functions of their arguments. The runtime may invoke a
+ * handler again for the same message after a failure, and the effects must be identical.
+ *
+ * @param <K> delivered key type
+ * @param <V> delivered value type
+ * @see Effects
  */
 @FunctionalInterface
 public interface Handler<K, V> {
-
+    /**
+     * Computes the effects of one delivery.
+     *
+     * @param delivery the message, already established as causally deliverable
+     * @param state    read access to the stores this process declared
+     * @return the state changes and sends to commit with this step, never {@code null}
+     */
     Effects handle(Delivery<K, V> delivery, StateReader state);
 }

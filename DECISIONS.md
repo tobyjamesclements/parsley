@@ -98,7 +98,7 @@ pairs (Structural 11).
 
 A single Kafka record header, key `parsley.causes`, value: version byte `0x01`, entry count (int32), then per entry
 topic ID (16 bytes), partition (int32), position (int64), big-endian, entries strictly ascending by channel. The
-format is frozen in `docs/METADATA.md`. Decoding is strict: unknown version, truncation, trailing bytes, disorder,
+format is frozen in `docs/wire-format.md`. Decoding is strict: unknown version, truncation, trailing bytes, disorder,
 duplicates or negative values are undecodable and fail closed (Safety 7). The header is attached to every emission,
 including when the cause set is empty. Application headers using the `parsley.` prefix are refused.
 
@@ -1572,7 +1572,7 @@ stops attributably before its persisted frontier balloons.
 **Cost**
 
 A frontier legitimately larger than the budget stops the process; the operator raises the budget consciously,
-against the growth law now documented in docs/DESIGN.md §2 (Operational 5).
+against the growth law now documented in docs/model.md (Operational 5).
 
 ### D53 — Frontier size is logged every facts round and surfaced at 80% of budget
 
@@ -1584,7 +1584,7 @@ terminal stop (or slowing facts rounds).
 **Decision**
 
 The engine exposes `frontierSize()` and `frontierBytes()`; the processor logs both at DEBUG every facts round and
-warns once when the encoded size crosses 80% of the budget, pointing at the growth law in docs/DESIGN.md §2. The
+warns once when the encoded size crosses 80% of the budget, pointing at the growth law in docs/model.md. The
 richer per-process status surface (ASSESSMENT 1.10) will carry the same numbers when it lands.
 
 **Alternatives**
@@ -1686,7 +1686,7 @@ the reserved namespace is now invisible in both directions (this also closes ASS
 **Cost**
 
 An application that decoded `parsley.causes` at the seam loses that view; decoding wire metadata is a consumer's
-job (docs/METADATA.md), not the seam's.
+job (docs/wire-format.md), not the seam's.
 
 ### D57 — The ordering store's changelog requests logging and compaction explicitly
 

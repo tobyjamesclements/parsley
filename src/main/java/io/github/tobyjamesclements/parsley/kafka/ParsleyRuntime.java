@@ -32,14 +32,18 @@ import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
 import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
 
 /**
- * Owns the substrate wiring for a declared application: one Kafka Streams application per declared process — its own
- * consumer group, so any arrangement of processes and channels is supported, including several processes receiving
- * the same channel (SPEC Structural 2). Owning the {@link KafkaStreams} lifecycle is what makes the guarantees
- * non-overridable: exactly-once processing, read_committed isolation, and no offset auto-reset ever leave this class
- * (SPEC Substrate 3, Safety 8, Structural 9).
+ * Owns the Kafka Streams application behind each running process.
+ *
+ * <p>Topic identity and partition width are resolved once at start, so a process runs against
+ * a fixed view of the topics it uses. A change to that view after start is a reason to refuse
+ * rather than to adapt.
+ *
+ * <p>Configuration carrying the guarantee is set here and cannot be overridden:
+ * {@code exactly_once_v2}, {@code read_committed}, and no automatic offset reset.
+ *
+ * @see io.github.tobyjamesclements.parsley.api.Parsley
  */
 public final class ParsleyRuntime implements AutoCloseable {
-
     private static final Logger LOG = LoggerFactory.getLogger(ParsleyRuntime.class);
     private static final long TIMEOUT_SECONDS = 30;
 
@@ -49,8 +53,7 @@ public final class ParsleyRuntime implements AutoCloseable {
             new java.util.concurrent.ConcurrentHashMap<>();
     private final List<KafkaStreams> streams = new ArrayList<>();
     private final List<AdminFactsSource> factsSources = new ArrayList<>();
-    /** One background thread gathers position facts for every process, off the stream threads (D54): the facts
-     * source serialises rounds anyway, and a slow round must cost liveness latency, not poll-interval headroom. */
+
     private final java.util.concurrent.ExecutorService factsExecutor =
             java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
                 Thread thread = new Thread(runnable, "parsley-facts");
@@ -62,6 +65,17 @@ public final class ParsleyRuntime implements AutoCloseable {
         this.admin = admin;
     }
 
+    /**
+     * Resolves topics, builds a topology per process, and starts each one.
+     *
+     * @param config      broker connection, identity and metadata budget
+     * @param definitions the processes to run, with distinct names
+     * @return the running runtime
+     * @throws ParsleyFailClosedException if a process cannot start without breaching the
+     *         guarantee, for example when messages remain held on a channel it no longer
+     *         receives, or when a topic was recreated under a name it has state for
+     * @throws IllegalArgumentException if names collide or a topic uses a reserved name
+     */
     public static ParsleyRuntime start(ParsleyConfig config, List<ProcessDefinition> definitions) {
         validateDistinctNames(definitions);
         refuseReservedTopicNames(config, definitions);
@@ -71,28 +85,20 @@ public final class ParsleyRuntime implements AutoCloseable {
         ParsleyRuntime runtime = new ParsleyRuntime(admin);
         try {
             Map<String, TopicInfo> topics = runtime.resolveTopics(declaredTopics(definitions));
-            // One origin for every facts clock: readings are differenced against it in raw nanos before scaling
-            // to millis, because nanoTime values are comparable only by difference — dividing absolute readings
-            // would break the debounce and eviction comparisons at the wrap.
+
             long factsClockOrigin = System.nanoTime();
             for (ProcessDefinition definition : definitions) {
                 String applicationId = config.applicationIdPrefix() + "-" + definition.name();
                 java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> changelog =
                         runtime.describeChangelog(applicationId);
                 boolean priorState = changelog.isPresent();
-                // The stranded-holds scan runs first because its identity check must precede the width
-                // comparison: a topic recreated with a different partition count is an identity change, and must
-                // be diagnosed as one (ASSESSMENT 1.3) — a width refusal would prescribe restoring a partition
-                // count that cannot bring the old channel back.
+
                 runtime.refuseStrandedHeldMessages(applicationId, definition, topics, priorState, adminProps);
                 runtime.refuseWidthChange(applicationId, definition, topics, changelog);
                 runtime.commitInitialPositions(applicationId, definition, topics, priorState, adminProps);
                 Map<UUID, String> namesById = new HashMap<>();
                 topics.forEach((name, info) -> namesById.put(info.topicId(), name));
-                // The debounce clock is monotonic: a stepped wall clock (NTP) must never collapse the
-                // dead-confirmation window into a premature, persisted verdict. The window also has an absolute
-                // floor: it debounces broker metadata propagation, whose latency does not shrink with the facts
-                // interval, so a small (or sub-millisecond) interval must not collapse it toward zero.
+
                 AdminFactsSource factsSource = new AdminFactsSource(admin, applicationId, namesById, adminProps,
                         Math.max(config.factsInterval().toMillis() * 3, 3_000L),
                         () -> (System.nanoTime() - factsClockOrigin) / 1_000_000L);
@@ -116,19 +122,10 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    /** The process failed; record why, and give known foreign failures a parsley diagnosis (SPEC Operational 6).
-     * A mid-run partition-count change surfaces as the consumer's NoOffsetForPartitionException (a new partition
-     * was never pre-committed) or the assignor's invalid-partitions error — neither names a parsley concept, so
-     * the remedy is stated here (D59): a full restart re-resolves and pre-commits new partitions, or refuses with
-     * TASK_WIDTH_CHANGED where the width moved. */
     private void recordFailure(String process, Throwable exception) {
-        // A deliberate refusal is the diagnosis worth keeping: with several stream threads (or racing failure
-        // paths) a foreign secondary failure can land first, and first-wins would shadow the refusal an operator
-        // needs (SPEC Operational 6). Refusals outrank foreign failures; the first refusal wins among refusals.
         failuresByProcess.merge(process, exception, (existing, latest) ->
                 ParsleyFailClosedException.findIn(existing) == null && ParsleyFailClosedException.findIn(latest) != null ? latest : existing);
-        // Depth-capped for the same reason findIn is: cause chains can legally be cyclic, and this runs inside
-        // the uncaught-exception handler, where an unbounded walk would wedge the shutdown response.
+
         Throwable cause = exception;
         for (int depth = 0; cause != null && depth < 64; depth++, cause = cause.getCause()) {
             if (cause instanceof org.apache.kafka.clients.consumer.NoOffsetForPartitionException
@@ -143,7 +140,12 @@ public final class ParsleyRuntime implements AutoCloseable {
         LOG.error("process {} failed; shutting its application down (failing closed)", process, exception);
     }
 
-    /** SPEC Operational 1: per-process state and stop reason, distinguishable as deliberate or transient. */
+    /**
+     * Reports the state of every process.
+     *
+     * @return the current state of every process, keyed by name, with a refusal reason where
+     *         one stopped to preserve the guarantee
+     */
     public Map<String, io.github.tobyjamesclements.parsley.api.ProcessStatus> status() {
         Map<String, io.github.tobyjamesclements.parsley.api.ProcessStatus> statuses = new LinkedHashMap<>();
         streamsByProcess.forEach((process, kafkaStreams) -> {
@@ -163,9 +165,6 @@ public final class ParsleyRuntime implements AutoCloseable {
         return statuses;
     }
 
-    /** Declared topic names must stay clear of the runtime's own namespace (SPEC Structural 5's spirit for
-     * topics): a declared topic colliding with an induced internal name would corrupt the ordering state's
-     * transport (D58). */
     private static void refuseReservedTopicNames(ParsleyConfig config, List<ProcessDefinition> definitions) {
         Set<String> internal = new HashSet<>();
         for (ProcessDefinition definition : definitions) {
@@ -209,12 +208,10 @@ public final class ParsleyRuntime implements AutoCloseable {
             Map<String, TopicInfo> topics = new LinkedHashMap<>();
             descriptions.forEach((name, description) -> {
                 if (org.apache.kafka.common.Uuid.ZERO_UUID.equals(description.topicId())) {
-                    // Brokers without topic IDs report the zero UUID; adopting it would conflate every channel's
-                    // identity (SPEC Assumption 2). Such brokers are below the mandated 3.7.0 floor.
                     throw new ParsleyFailClosedException(
                             ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
                             "topic '" + name + "' has no topic ID; brokers below the supported 3.7.0 floor cannot"
-                                    + " provide channel identity (SPEC Substrate 1, Assumption 2) — refusing to start");
+                                    + " provide channel identity (SPEC Substrate 1, Assumption 2); refusing to start");
                 }
                 topics.put(name, new TopicInfo(
                         TopicInfo.toJavaUuid(description.topicId()), description.partitions().size()));
@@ -227,14 +224,10 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    /** The Kafka Streams changelog topic induced by a store of this application — the single owner of the naming
-     * rule every guard in this class inspects (it must match Streams' actual internal-topic naming). */
     private static String changelogName(String applicationId, String storeName) {
         return applicationId + "-" + storeName + "-changelog";
     }
 
-    /** This process's ordering-store changelog, when it exists: evidence of prior executions, and the stored task
-     * width, from one describe. */
     private java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelog(String applicationId) {
         String changelog = changelogName(applicationId, ProcessTopology.ORDERING_STORE);
         try {
@@ -248,16 +241,6 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    /**
-     * The ordering store's changelog is created with one partition per task and Kafka can never change that count,
-     * while the task count follows the declaration's widest topic. A width-changing restart therefore cannot run:
-     * Kafka Streams' internal-topic validation (an unspecified behaviour this guard names and pins — see D49)
-     * kills the application mid-rebalance with advice to run StreamsResetter, a remedy that would destroy the
-     * ordering store — the state Structural 16 exists to protect (ASSESSMENT 1.6). Refuse at start instead, with
-     * the accurate condition and remedy. Refusing every width change also keeps the stranded-holds scan sound: the
-     * application never runs at a shrunken width against prior state, so entries committed after the scan's
-     * snapshot are always caught by the next start's fresh scan.
-     */
     private void refuseWidthChange(String applicationId, ProcessDefinition definition,
                                    Map<String, TopicInfo> topics,
                                    java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> changelog) {
@@ -280,12 +263,6 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    /**
-     * SPEC Structural 16: an execution whose declaration removes a channel on which received messages remain
-     * undelivered must be refused. The engine refuses at task initialisation, but a removal can shrink the task set
-     * so far that the holding task is never instantiated — so the runtime reads the ordering store's changelog and
-     * refuses here when a live held entry names a channel outside the new declaration.
-     */
     private void refuseStrandedHeldMessages(String applicationId, ProcessDefinition definition,
                                             Map<String, TopicInfo> topics, boolean priorState,
                                             Map<String, Object> clientProps) {
@@ -306,13 +283,12 @@ public final class ParsleyRuntime implements AutoCloseable {
             consumer.assign(parts);
             consumer.seekToBeginning(parts);
             Map<TopicPartition, Long> ends = consumer.endOffsets(parts);
-            // Bounded, with a diagnosis (SPEC Operational 2): a broker becoming unreachable mid-scan must not
-            // block startup indefinitely. Progress resets the clock, so a large backlog is fine; stalls are not.
+
             long stallDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
             while (parts.stream().anyMatch(tp -> consumer.position(tp) < ends.get(tp))) {
                 var polled = consumer.poll(java.time.Duration.ofMillis(500));
                 if (polled.isEmpty()) {
-                    if (System.nanoTime() - stallDeadline > 0) { // by difference: nanoTime may wrap
+                    if (System.nanoTime() - stallDeadline > 0) {
                         throw new IllegalStateException("no progress reading " + changelog + " for "
                                 + TIMEOUT_SECONDS + "s while verifying held messages");
                     }
@@ -325,11 +301,7 @@ public final class ParsleyRuntime implements AutoCloseable {
             throw new IllegalStateException(
                     applicationId + ": could not verify held messages against the declaration; refusing to start", e);
         }
-        // A declared name whose recorded identity no longer matches the current resolution means the topic was
-        // deleted and recreated under the name (D33): its group offsets and held entries belong to a dead channel.
-        // Diagnosing this *before* the stranded-holds comparison matters — the held entries carry the old identity,
-        // and reading their channel ids against the new resolution would misreport an identity change as a
-        // declaration change, prescribing the wrong remedy (ASSESSMENT 1.3).
+
         Map<String, UUID> resolvedIds = new HashMap<>();
         definition.receivedTopics().forEach(topic -> resolvedIds.put(topic, topics.get(topic).topicId()));
         List<String> identityChanged = io.github.tobyjamesclements.parsley.core.OrderingStateInspector
@@ -359,22 +331,9 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    /**
-     * For received topic-partitions the group has never committed, commit an initial position while the group is
-     * empty. Together with {@code auto.offset.reset=none} this pins down Safety 8: the consumer never silently
-     * repositions, and the first receipt baseline is explicit (SPEC Structural 12). The *declared* initial position
-     * applies only to a genuinely first start: when prior state exists, a missing offset means group-offset expiry,
-     * and the only safe restart is earliest — re-fed already-delivered messages are dropped by the engine's session
-     * floor, while LATEST would silently skip retained unread messages.
-     */
     private void commitInitialPositions(String applicationId, ProcessDefinition definition,
                                         Map<String, TopicInfo> topics, boolean priorState,
                                         Map<String, Object> clientProps) {
-        // Fast path, read-only: when every received partition already has a committed offset there is nothing to
-        // write, so no group membership is needed — a closed Streams application's members linger in the group
-        // until their session times out (Streams does not leave on close), and joining beside them would fail on
-        // the assignor protocol. This admin read gates nothing but the join; the authoritative read happens again
-        // inside the membership below.
         try {
             Map<TopicPartition, OffsetAndMetadata> preCheck =
                     admin.listConsumerGroupOffsets(applicationId).partitionsToOffsetAndMetadata()
@@ -386,17 +345,8 @@ public final class ParsleyRuntime implements AutoCloseable {
             throw new IllegalStateException(
                     applicationId + ": committed read positions could not be listed; refusing to start", e);
         }
-        // The read-compute-commit sequence runs inside one group membership (ASSESSMENT 1.5): an admin alter
-        // succeeds against any empty group, so a bootstrap paused for an arbitrary duration could overwrite a
-        // newer lifetime's offsets. Membership commits are generation-fenced by the broker — a pause long enough
-        // for another lifetime to interleave gets this member fenced out, and the stale commit throws instead of
-        // landing. Every future pre-commit site must inherit this mechanism (GroupMembershipCommitter).
+
         try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, applicationId)) {
-            // The deadline must outlast a closed lifetime's lingering Streams members, who hold the group for
-            // their session timeout — 45 s by consumer default, but legally raised through extraProperties, so
-            // it is derived from the effective value rather than hardcoding the default: twice the session
-            // timeout, so a quick restart with missing offsets waits the lingerers out instead of
-            // deterministically timing out.
             committer.join(definition.receivedTopics(), streamsSessionTimeout(clientProps).multipliedBy(2));
             java.util.Set<TopicPartition> all = receivedPartitions(definition, topics);
             Map<TopicPartition, OffsetAndMetadata> committed = committer.committed(all);
@@ -425,7 +375,6 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    /** Every partition of every received topic, as resolved at start. */
     private static java.util.Set<TopicPartition> receivedPartitions(ProcessDefinition definition,
                                                                     Map<String, TopicInfo> topics) {
         java.util.Set<TopicPartition> all = new java.util.HashSet<>();
@@ -437,8 +386,6 @@ public final class ParsleyRuntime implements AutoCloseable {
         return all;
     }
 
-    /** The session timeout the application's Streams consumers effectively use: the most specific of the Streams
-     * property spellings present in the configuration, or the consumer default. */
     private static java.time.Duration streamsSessionTimeout(Map<String, Object> clientProps) {
         for (String key : new String[] {
                 StreamsConfig.mainConsumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
@@ -457,9 +404,9 @@ public final class ParsleyRuntime implements AutoCloseable {
         props.putAll(config.extraProperties());
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, applicationId);
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers());
-        // SPEC Substrate 3: exactly-once, read_committed; ParsleyConfig refuses user overrides of either.
+
         props.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE_V2);
-        // SPEC Safety 8: a read position outside the retained range must kill the task, never silently reset.
+
         props.put(StreamsConfig.mainConsumerPrefix(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG), "none");
         if (config.stateDir() != null) {
             props.put(StreamsConfig.STATE_DIR_CONFIG, config.stateDir());
@@ -467,22 +414,26 @@ public final class ParsleyRuntime implements AutoCloseable {
         return props;
     }
 
-    /** True while every process's application is running and none has recorded a failure. A stream thread's death
-     * is recorded before the client's state machine winds down, so a process cannot report healthy while its
-     * threads are already gone (the rebalance-limbo lie of ASSESSMENT 1.10). */
+    /**
+     * Returns {@code true} while every process is running or rebalancing.
+     *
+     * @return {@code true} while every process is running or rebalancing
+     */
     public boolean healthy() {
         return failuresByProcess.isEmpty() && streams.stream().allMatch(ks -> ks.state().isRunningOrRebalancing());
     }
 
+    /**
+     * Closes every process and releases every resource.
+     *
+     * <p>Each release runs independently, so one failure cannot strand the rest, and the
+     * streams close is bounded in time. A wedged application may outlive this call, and
+     * process exit reaps it.
+     */
     @Override
     public void close() {
-        // Failure to release one resource must not prevent release of the others (SPEC Operational 3) — and
-        // start()'s failure path calls this same method, so a failed startup must not leak what it was releasing.
         for (KafkaStreams kafkaStreams : streams) {
             try {
-                // Bounded (SPEC Operational 3): an application wedged in shutdown — observed when a stream thread
-                // died failing closed while its topics were being deleted — must not hold the remaining resources
-                // hostage; an unbounded close is itself a failure to release.
                 if (!kafkaStreams.close(java.time.Duration.ofSeconds(TIMEOUT_SECONDS))) {
                     LOG.warn("a streams application did not close within {}s; continuing with the remaining"
                             + " resources", TIMEOUT_SECONDS);

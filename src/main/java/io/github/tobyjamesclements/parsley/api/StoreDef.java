@@ -3,12 +3,19 @@ package io.github.tobyjamesclements.parsley.api;
 import org.apache.kafka.common.serialization.Serde;
 
 /**
- * A typed application state store declaration. Stores are ordinary Kafka Streams persistent key-value stores — host
- * state facilities, not exclusively owned by this implementation (SPEC Structural 8, 18). Names with the reserved
- * {@code __parsley.} prefix are refused so application state can never alias ordering state.
+ * A typed key-value store a process reads and writes.
+ *
+ * <p>Stores declared here hold application state. Parsley keeps its own ordering state in
+ * separate stores under {@link #RESERVED_PREFIX}, which application names may not use.
+ *
+ * @param <K> key type
+ * @param <V> value type
+ * @see ProcessDefinition.Builder#stores(StoreDef...)
+ * @see StateReader
  */
 public final class StoreDef<K, V> {
 
+    /** Name prefix Parsley reserves for its own stores. */
     public static final String RESERVED_PREFIX = "__parsley.";
 
     private final String name;
@@ -27,22 +34,54 @@ public final class StoreDef<K, V> {
         this.valueSerde = valueSerde;
     }
 
+    /**
+     * Defines a store.
+     *
+     * @param name       the store name
+     * @param keySerde   serde for keys
+     * @param valueSerde serde for values
+     * @param <K>        key type
+     * @param <V>        value type
+     * @return the store definition
+     * @throws IllegalArgumentException if {@code name} is null, blank, or begins with
+     *                                  {@link #RESERVED_PREFIX}
+     */
     public static <K, V> StoreDef<K, V> of(String name, Serde<K> keySerde, Serde<V> valueSerde) {
         return new StoreDef<>(name, keySerde, valueSerde);
     }
 
+    /**
+     * Returns the store name.
+     *
+     * @return the store name
+     */
     public String name() {
         return name;
     }
 
+    /**
+     * Returns the serde for keys.
+     *
+     * @return the serde for keys
+     */
     public Serde<K> keySerde() {
         return keySerde;
     }
 
+    /**
+     * Returns the serde for values.
+     *
+     * @return the serde for values
+     */
     public Serde<V> valueSerde() {
         return valueSerde;
     }
 
+    /**
+     * Returns the store name, wrapped for diagnostics.
+     *
+     * @return the store name, wrapped for diagnostics
+     */
     @Override
     public String toString() {
         return "StoreDef(" + name + ")";

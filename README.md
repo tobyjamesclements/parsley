@@ -65,8 +65,8 @@ state, and accepts effects only through the returned value — no timers, no pro
 | `io.github.tobyjamesclements.parsley.core` | Host-independent protocol: the causal frontier, hold-back buffer, and the pure deliverability decision (`Deliverability.decide`, SPEC Structural 7) |
 | `io.github.tobyjamesclements.parsley.api` | The public, statically-typed declaration surface |
 | `io.github.tobyjamesclements.parsley.kafka` | The Kafka Streams adapter: byte topologies, position facts from the admin client, EOS lifecycle |
-| `docs/DESIGN.md` | How the pieces satisfy the spec, and why |
-| `docs/METADATA.md` | The frozen wire format of the causal metadata |
+| `docs/model.md` | How the pieces satisfy the spec, and why |
+| `docs/wire-format.md` | The frozen wire format of the causal metadata |
 | `DECISIONS.md` | Every choice the spec left open, with the alternatives rejected |
 | `EVIDENCE.md` | Per criterion: what would catch a violation |
 

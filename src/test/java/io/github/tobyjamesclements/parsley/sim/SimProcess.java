@@ -23,18 +23,9 @@ import io.github.tobyjamesclements.parsley.sim.SimWorld.SimChannel;
 import io.github.tobyjamesclements.parsley.core.EngineTestFactory;
 
 /**
- * One process under a simulated host that honours the Host obligations: feeds each channel in position order below
- * the LSO barrier, commits state + sends + read positions atomically, aborts and re-feeds on crash, restarts through
- * full initialisation, and reports read positions as committed offsets. Drives a real {@link ProcessEngine}.
- *
- * <p>Every message fed is reported to the oracle before the engine sees it, so an engine that consumes a position
- * and discards its message cannot erase the evidence of the loss. Engine operations still throw
- * {@link ParsleyFailClosedException} out of these methods — targeted tests assert on that directly; the scenario
- * harness converts the throw into {@link #failClosed}, which aborts the step exactly as the real host's transaction
- * abort would and leaves the process stopped with its refusal recorded.</p>
+ * A simulated process: its declaration, its engine, and its lifecycle.
  */
 public final class SimProcess {
-
     public enum FeedResult { FED, NOTHING, STALLED }
 
     final String name;
@@ -53,17 +44,13 @@ public final class SimProcess {
     private final List<Oracle.Sent> stepAppends = new ArrayList<>();
     private final Map<ChannelId, Long> committedNextRead = new HashMap<>();
     private final Map<ChannelId, Long> workingNextRead = new HashMap<>();
-    /** The read position first established when each channel entered the declaration — the pre-committed initial
-     * position of docs/DESIGN.md §7. Messages below it were never this process's to read. */
+
     private final Map<ChannelId, Long> initialNextRead = new HashMap<>();
-    /** The highest read position ever committed per channel: host-side truth of what this process has covered,
-     * unaffected by operator rewinds. What the substrate discards below it was not lost unread. */
+
     private final Map<ChannelId, Long> highWaterNextRead = new HashMap<>();
-    /** Ids this process has seen recreated: sticky, exactly as the production facts source's confirmedRecreated
-     * set — a later death of the new incarnation must not downgrade the verdict back to plain dead. */
+
     private final java.util.Set<ChannelId> confirmedRecreated = new java.util.TreeSet<>();
 
-    /** Application logic in the simulation: a pure function of the delivered message (SPEC Assumption 16). */
     @FunctionalInterface
     public interface SimLogic {
         List<SimChannel> emitTargets(Instance delivered);
@@ -81,18 +68,14 @@ public final class SimProcess {
         workingNextRead.putAll(committedNextRead);
     }
 
-    /** Change the declaration; takes effect at the next {@link #start()} (SPEC Structural 16). */
     public void redeclare(List<SimChannel> newReceived) {
         this.received = newReceived.stream()
                 .collect(Collectors.toMap(SimChannel::id, c -> c, (a, b) -> a, LinkedHashMap::new));
         for (SimChannel channel : newReceived) {
-            // The runtime pre-commits an initial read position for channels never read before (docs/DESIGN.md §7).
             committedNextRead.putIfAbsent(channel.id(), channel.logStart);
             workingNextRead.putIfAbsent(channel.id(), channel.logStart);
             initialNextRead.putIfAbsent(channel.id(), channel.logStart);
-            // putIfAbsent, never a bump: on a REJOIN the process's coverage is its old committed read, and
-            // crediting it with the current log start would excuse exactly the truncation-while-away gap the
-            // Safety 8 obligation exists to catch (review finding S10: the bump masked seeds the sweep owns).
+
             highWaterNextRead.putIfAbsent(channel.id(), channel.logStart);
         }
     }
@@ -101,7 +84,6 @@ public final class SimProcess {
         this.sendChannels = List.copyOf(channels);
     }
 
-    /** Full initialisation, as after a restart: a fresh engine over the last committed state (Host obligation 4/5). */
     public void start() {
         if (engine != null) {
             throw new IllegalStateException(name + " already started");
@@ -112,8 +94,6 @@ public final class SimProcess {
         try {
             engine = EngineTestFactory.create(name, names, store, sabotage);
         } catch (ParsleyFailClosedException e) {
-            // The refusal aborts initialisation: nothing it wrote may survive, as on the real host where the
-            // task's transaction never commits.
             store.rollback();
             throw e;
         }
@@ -121,11 +101,6 @@ public final class SimProcess {
         ingestFacts();
     }
 
-    /**
-     * Crash: the open step aborts and the process stops. There is deliberately no way to abort a step and carry on
-     * with the same initialisation — the host must restart a process through its full initialisation (Host
-     * obligation 4), and the engine's in-memory state is entitled to that.
-     */
     public void crash() {
         if (openTxn != null) {
             world.abortTxn(openTxn);
@@ -139,7 +114,6 @@ public final class SimProcess {
         engine = null;
     }
 
-    /** A fail-closed refusal surfaced: abort the step (its events have not occurred) and stop, keeping the reason. */
     public void failClosed(ParsleyFailClosedException e) {
         crash();
         failure = e;
@@ -175,7 +149,6 @@ public final class SimProcess {
         }
     }
 
-    /** Commit the open step: sends become visible, state and read positions become durable, atomically. */
     public void commitStep() {
         if (openTxn == null) {
             return;
@@ -191,37 +164,33 @@ public final class SimProcess {
         openTxn = null;
     }
 
-
-    /** Feed the next message of one channel, advancing the read position past dead slots as a Kafka fetch would. */
     public FeedResult feedOne(SimChannel channel) {
         ensureTxn();
         ChannelId id = channel.id();
         if (channel.dead) {
-            return FeedResult.NOTHING; // a deleted topic feeds nothing, ever again.
+            return FeedResult.NOTHING;
         }
         long position = workingNextRead.get(id);
         if (position < channel.logStart) {
-            return FeedResult.STALLED; // out of range: the host cannot read here; facts ingestion fails closed.
+            return FeedResult.STALLED;
         }
         long lso = world.lso(channel);
         while (position < lso && world.slot(channel, position) instanceof SimWorld.DeadSlot) {
             position++;
         }
         if (position >= lso) {
-            workingNextRead.put(id, position); // the read position still advances past a trailing dead run.
+            workingNextRead.put(id, position);
             return FeedResult.NOTHING;
         }
         SimWorld.MessageSlot slot = (SimWorld.MessageSlot) world.slot(channel, position);
         workingNextRead.put(id, position + 1);
         Instance instance = slot.instance();
-        // The oracle observes the feed itself, not the engine's acceptance: from here the delivery is owed unless
-        // the oracle's own bookkeeping excuses it. If the engine throws, the step's abort rolls this back too.
+
         oracle.onFed(name, instance);
         engine.onReceive(new ReceivedMessage(id, position, position, instance.key, instance.value, instance.headers));
         return FeedResult.FED;
     }
 
-    /** Deliver everything deliverable, invoking logic and sending its emissions within the step. */
     public int drain() {
         ensureTxn();
         int delivered = 0;
@@ -243,9 +212,6 @@ public final class SimProcess {
         }
     }
 
-    /** What reaches application logic must be exactly what was received — key, value, headers and timestamp — no
-     * matter whether the message was delivered in its arrival step or restored from the ordering store after a
-     * restart (SPEC Safety 4; Host obligation 5's state fidelity). */
     private void assertContentFidelity(DeliverableMessage delivered, Instance instance) {
         if (!Arrays.equals(delivered.key(), instance.key)
                 || !Arrays.equals(delivered.value(), instance.value)
@@ -273,8 +239,7 @@ public final class SimProcess {
         byte[] causesHeader = engine.causesHeaderForEmission();
         Set<Instance> trueCauses = oracle.causalPastSnapshot(name);
         Map<ChannelId, Long> upperBound = oracle.expressionUpperBound(name);
-        // Which causes were already discardable (SPEC Structural 13) at this moment: judged now, not at commit,
-        // so a kill or truncation landing between send and commit cannot retroactively excuse under-expression.
+
         Set<Instance> excused = new java.util.HashSet<>();
         for (Instance cause : trueCauses) {
             SimChannel causeChannel = world.channel(cause.channel);
@@ -283,8 +248,7 @@ public final class SimProcess {
             }
         }
         io.github.tobyjamesclements.parsley.core.Causes meta = decodeMeta(causesHeader);
-        // Snapshot, per expressed channel, the highest position assigned at this moment — before this send's own
-        // append — so the Structural 12 check judges the send against the world it was stamped in.
+
         Map<ChannelId, Long> lastAssigned = new TreeMap<>();
         meta.byChannel().keySet().forEach(channelId -> {
             SimChannel simChannel = world.channel(channelId);
@@ -308,8 +272,6 @@ public final class SimProcess {
         }
     }
 
-    /** Ingest position facts, as the runtime's punctuator does: committed offsets, log starts, dead topics, and
-     * channels whose name now denotes a different topic (recreation — affirmative identity evidence). */
     public void ingestFacts() {
         ensureTxn();
         Map<ChannelId, Long> committed = new TreeMap<>();
@@ -322,12 +284,9 @@ public final class SimProcess {
                 if (current != null && !current.id().equals(channel.id())) {
                     confirmedRecreated.add(channel.id());
                 }
-                // The verdict is sticky, exactly as the production facts source's: a recreated id stays
-                // recreated even after the new incarnation's own death — never downgraded to plain dead —
-                // and the sweep must certify margins against the fact shape production produces.
+
                 (confirmedRecreated.contains(channel.id()) ? recreated : dead).add(channel.id());
-                // Production gather reports no offsets for a dead or recreated id (its name no longer denotes
-                // it, so there is nothing to safely query): neither committedNextRead nor logStart is emitted.
+
                 continue;
             }
             logStarts.put(channel.id(), channel.logStart);
@@ -339,7 +298,6 @@ public final class SimProcess {
         engine.onFacts(new PositionFacts(committed, logStarts, dead, recreated));
     }
 
-    /** An operator offset rewind while the process is stopped: the host will re-feed already-committed positions. */
     public void rewindCommitted(SimChannel channel, int back) {
         if (engine != null) {
             throw new IllegalStateException(name + " must be stopped to rewind offsets");

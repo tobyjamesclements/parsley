@@ -7,12 +7,10 @@ import java.util.TreeMap;
 import io.github.tobyjamesclements.parsley.core.OrderingStore;
 
 /**
- * In-memory {@link OrderingStore} with transactional semantics mirroring a Streams store under EOS: writes go to a
- * working copy; {@link #commit()} makes them durable, {@link #rollback()} discards them, exactly as an aborted step
- * discards uncommitted state.
+ * An {@link io.github.tobyjamesclements.parsley.core.OrderingStore} in memory, with commit
+ * and rollback, standing in for a transactional store.
  */
 public final class MemoryOrderingStore implements OrderingStore {
-
     private static final java.util.Comparator<byte[]> UNSIGNED = Arrays::compareUnsigned;
 
     private TreeMap<byte[], byte[]> committed = new TreeMap<>(UNSIGNED);

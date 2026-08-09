@@ -41,20 +41,18 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
- * SPEC Safety 5 names Avro with the Confluent Schema Registry wire format explicitly: a reader with the
- * application's codecs alone must decode parsley-sent messages. This test runs an Avro serde producing exactly that
- * wire format — magic byte 0x0, schema id int32, Avro binary body — through a parsley process and asserts the output
- * value is byte-for-byte what the serde produces, decodable with the serde alone, headers ignored.
+ * Establishes that Schema Registry framed payloads pass through byte for byte.
+ *
+ * <p>Causal metadata travels in a header, so a plain consumer decodes key and value with the
+ * application's own serdes alone.
  */
 class AvroWireFormatTest {
-
     private static final Schema SCHEMA = SchemaBuilder.record("Order").fields()
             .requiredString("item")
             .requiredInt("qty")
             .endRecord();
     private static final int SCHEMA_ID = 7;
 
-    /** The Confluent wire format: 1 magic byte (0), 4-byte big-endian schema id, then Avro binary encoding. */
     static final class SchemaRegistryFormatSerde implements Serde<GenericRecord> {
         @Override
         public Serializer<GenericRecord> serializer() {
@@ -111,6 +109,7 @@ class AvroWireFormatTest {
         }
     }
 
+    /** Avro schema registry format passes through byte exact. */
     @Test
     void avroSchemaRegistryFormatPassesThroughByteExact() {
         Serde<GenericRecord> avro = new SchemaRegistryFormatSerde();
@@ -147,8 +146,6 @@ class AvroWireFormatTest {
         TestRecord<byte[], byte[]> record = driver.createOutputTopic(
                 "avro-out", new ByteArrayDeserializer(), new ByteArrayDeserializer()).readRecord();
 
-        // The wire value is exactly what the application's serde produces for the emitted record: a reader with the
-        // serde alone — no knowledge of parsley — decodes it; the causal metadata rides in a header it never reads.
         GenericRecord expected = new GenericData.Record(SCHEMA);
         expected.put("item", "widget");
         expected.put("qty", 6);

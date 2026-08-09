@@ -3,41 +3,62 @@ package io.github.tobyjamesclements.parsley.core;
 import java.util.Set;
 
 /**
- * Test-only fault injection: each mode disables one guarantee so the test suite can prove it would catch the
- * resulting violation (see EVIDENCE.md). Package-private on purpose — the public API offers no way to construct an
- * engine with any of these enabled (SPEC Structural 9).
+ * Deliberate faults, each disabling one guarantee.
+ *
+ * <p>This exists so the suite can demonstrate that it catches every violation class, rather
+ * than asserting that it would. Package-private on purpose: the public API offers no way to
+ * construct an engine with a mode enabled.
+ *
+ * @param modes the faults to enable
  */
 record Sabotage(Set<Mode> modes) {
 
+    /** One disabled guarantee. */
     enum Mode {
-        /** Deliver regardless of expressed causes (breaks SPEC Safety 1). */
+        /** Deliver regardless of the causes a message expressed. */
         IGNORE_CAUSES,
-        /** Offer every held message to the decision, not just the channel head (breaks SPEC Safety 3). */
+
+        /** Offer every held message to the decision rather than the channel head. */
         NO_FIFO,
-        /** Do not drop re-fed, already-delivered messages (breaks SPEC Safety 2). */
+
+        /** Deliver a re-fed message that was already delivered. */
         REDELIVER_REFEEDS,
-        /** Treat undecodable causal metadata as absent (breaks SPEC Safety 7). */
+
+        /** Treat metadata that cannot be decoded as metadata that was absent. */
         UNDECODABLE_AS_ABSENT,
-        /** Do not merge causes from received-but-undelivered metadata into the frontier (breaks SPEC Structural 15). */
+
+        /** Skip merging causes carried by a message that was received and not delivered. */
         SKIP_RECEIPT_MERGE,
-        /** Do not persist held messages (breaks SPEC Liveness 5). */
+
+        /** Hold messages in memory without persisting them. */
         DROP_HELD,
-        /** Treat positions discarded below the earliest retained position as never-carried (breaks SPEC Safety 8). */
+
+        /** Treat positions discarded by retention as positions never carried. */
         IGNORE_TRUNCATION,
-        /** Start an execution even when a removed channel still holds undelivered messages (breaks SPEC Structural 16). */
+
+        /** Start even where a removed channel still holds undelivered messages. */
         IGNORE_REMOVED_CHANNELS,
-        /** Silently discard the message received at position 3 of any channel as a duplicate (breaks SPEC Liveness 1). */
+
+        /** Discard the message at position 3 of any channel as a duplicate. */
         SILENT_DROP,
-        /** Merge fedUpTo — assigned positions that are not causes — into every emission stamp (over-expression). */
+
+        /** Stamp emissions with assigned positions that are not causes. */
         OVEREXPRESS,
-        /** Ignore the fact that a received channel's topic was recreated under its name (breaks SPEC Assumption 2). */
+
+        /** Ignore a received channel whose topic was recreated under its name. */
         IGNORE_RECREATION,
-        /** Settle a dead received channel even while messages from it remain held undelivered (breaks SPEC Safety 9). */
+
+        /** Settle a dead channel while messages from it remain held. */
         DELIVER_PAST_DEAD_HOLDS
     }
 
+    /** No faults enabled. */
     static final Sabotage NONE = new Sabotage(Set.of());
 
+    /**
+     * @param mode the fault to test for
+     * @return {@code true} when {@code mode} is enabled
+     */
     boolean has(Mode mode) {
         return modes.contains(mode);
     }

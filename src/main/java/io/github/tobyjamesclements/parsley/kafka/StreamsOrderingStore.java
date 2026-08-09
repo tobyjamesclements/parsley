@@ -9,12 +9,16 @@ import java.util.Arrays;
 import io.github.tobyjamesclements.parsley.core.OrderingStore;
 
 /**
- * Ordering state over a Kafka Streams persistent key-value store. Under exactly-once, writes here commit atomically
- * with the read positions consumed and the messages sent (SPEC Host obligation 3), and restore after restart reflects
- * exactly the last committed step (Host obligation 5).
+ * An {@link OrderingStore} over a Kafka Streams key-value store.
+ *
+ * <p>Writes land in the store the processor owns, so they commit in the same transaction as
+ * the step that made them.
+ *
+ * <p>Streams offers no prefix scan, so {@link #scanPrefix} is a range query between the
+ * prefix and its successor, with a comparison to reject anything the range admits that the
+ * prefix does not.
  */
 final class StreamsOrderingStore implements OrderingStore {
-
     private final KeyValueStore<Bytes, byte[]> store;
 
     StreamsOrderingStore(KeyValueStore<Bytes, byte[]> store) {
@@ -54,7 +58,13 @@ final class StreamsOrderingStore implements OrderingStore {
         }
     }
 
-    /** The smallest key strictly greater than every key with this prefix, or null when none exists. */
+    /**
+     * The exclusive end of a prefix range.
+     *
+     * @param prefix the prefix to bound
+     * @return the next key after every key with this prefix, or {@code null} where the prefix
+     *         is all {@code 0xFF} bytes and no such key exists
+     */
     private static Bytes upperBound(byte[] prefix) {
         byte[] bound = Arrays.copyOf(prefix, prefix.length);
         for (int i = bound.length - 1; i >= 0; i--) {

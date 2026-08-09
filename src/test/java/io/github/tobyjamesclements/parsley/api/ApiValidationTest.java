@@ -11,12 +11,13 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * The public API must offer no operation whose documented use can violate a safety criterion (SPEC Structural 9):
- * reserved names are unconstructible and owned configuration is unoverridable, at build time, with attributable
- * errors.
+ * Establishes that the declaration surface refuses what would weaken the guarantee.
+ *
+ * <p>Reserved names, reserved headers and owned configuration keys are rejected at
+ * construction, before any broker is contacted.
  */
 class ApiValidationTest {
-
+    /** Reserved store names are unconstructible. */
     @Test
     void reservedStoreNamesAreUnconstructible() {
         assertThrows(IllegalArgumentException.class,
@@ -24,6 +25,7 @@ class ApiValidationTest {
                 "application state may never alias ordering state (SPEC Structural 8)");
     }
 
+    /** Reserved headers are unconstructible. */
     @Test
     void reservedHeadersAreUnconstructible() {
         Channel<String, String> channel = Channel.of("t", Serdes.String(), Serdes.String());
@@ -36,6 +38,7 @@ class ApiValidationTest {
                 "the refusal names its condition (SPEC Operational 6) and fails the step through the seam");
     }
 
+    /** Reserved topic names are refused before any broker contact. */
     @Test
     void reservedTopicNamesAreRefusedBeforeAnyBrokerContact() {
         Channel<String, String> internal = Channel.of("x-p-__parsley.ordering-changelog",
@@ -49,6 +52,7 @@ class ApiValidationTest {
                 "a declared topic inside parsley's internal namespace is refused at declaration time (D58)");
     }
 
+    /** Guarantee bearing configuration is unoverridable. */
     @Test
     void guaranteeBearingConfigurationIsUnoverridable() {
         ParsleyConfig.Builder builder = ParsleyConfig.builder("broker:9092", "app");
@@ -60,17 +64,14 @@ class ApiValidationTest {
                 () -> builder.streamsProperty("main.consumer.auto.offset.reset", "latest"));
         assertThrows(IllegalArgumentException.class,
                 () -> builder.streamsProperty("group.id", "other"));
-        // Continue-style exception handlers would convert failing closed into dropping and committing
-        // (SPEC Safety 3/7, Structural 19): equally unoverridable, under any prefix.
+
         assertThrows(IllegalArgumentException.class,
                 () -> builder.streamsProperty("processing.exception.handler", "continue"));
         assertThrows(IllegalArgumentException.class,
                 () -> builder.streamsProperty("default.production.exception.handler", "continue"));
         assertThrows(IllegalArgumentException.class,
                 () -> builder.streamsProperty("default.deserialization.exception.handler", "continue"));
-        // Client interceptors mutate records on the wire by documented design — one that strips the causes header
-        // makes every emission read cause-free downstream (SPEC Structural 9 via Safety 1/3/4/7) — and a
-        // log-and-skip timestamp extractor is a documented silent drop. Both owned, under any prefix (D51).
+
         assertThrows(IllegalArgumentException.class,
                 () -> builder.streamsProperty("producer.interceptor.classes", "com.example.HeaderStripper"));
         assertThrows(IllegalArgumentException.class,
@@ -79,6 +80,7 @@ class ApiValidationTest {
                 () -> builder.streamsProperty("default.timestamp.extractor", "LogAndSkipOnInvalidTimestamp"));
     }
 
+    /** Processes must receive something. */
     @Test
     void processesMustReceiveSomething() {
         assertThrows(IllegalArgumentException.class, () -> ProcessDefinition.named("p").build(),

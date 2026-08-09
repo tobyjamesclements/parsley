@@ -1,25 +1,57 @@
 package io.github.tobyjamesclements.parsley.core;
 
 /**
- * Durable ordering state, keyed and valued in bytes. The engine is host-independent: the Kafka Streams adapter backs
- * this with a Streams {@code KeyValueStore} whose writes commit atomically with the step (SPEC Host obligation 3);
- * the test simulator backs it with a rollbackable map to simulate aborted steps and restarts.
+ * The byte-level key-value store holding a process's ordering state.
  *
- * <p>Keys are compared unsigned-lexicographically; {@link #scanPrefix} must yield entries in ascending key order.</p>
+ * <p>This is the engine's only route to durable storage, and the seam a host implements. It
+ * names no host type, so the engine can be driven by a simulator as readily as by Kafka
+ * Streams.
+ *
+ * <p>Writes are expected to commit atomically with the step that made them.
+ *
+ * @see StoreCodec
  */
 public interface OrderingStore {
-
+    /**
+     * Reads one entry.
+     *
+     * @param key the key to read
+     * @return the stored bytes, or {@code null} when the key is absent
+     */
     byte[] get(byte[] key);
 
+    /**
+     * Writes one entry.
+     *
+     * @param key   the key to write
+     * @param value the bytes to store
+     */
     void put(byte[] key, byte[] value);
 
+    /**
+     * Removes one entry.
+     *
+     * @param key the key to remove
+     */
     void delete(byte[] key);
 
-    /** Streams all entries whose key starts with {@code prefix}, in ascending unsigned-lexicographic key order. */
+    /**
+     * Visits every entry whose key begins with {@code prefix}.
+     *
+     * @param prefix   the key prefix to match
+     * @param consumer invoked once per matching entry
+     */
     void scanPrefix(byte[] prefix, EntryConsumer consumer);
 
+    /** Receives one entry during a prefix scan. */
     @FunctionalInterface
     interface EntryConsumer {
+        /**
+         * Receives one entry.
+         *
+         * @param key   the entry key
+         * @param value the entry value
+         */
         void accept(byte[] key, byte[] value);
     }
 }

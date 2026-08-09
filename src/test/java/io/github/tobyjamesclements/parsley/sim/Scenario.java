@@ -10,7 +10,6 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.UUID;
 
-
 import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
@@ -20,19 +19,9 @@ import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
 import io.github.tobyjamesclements.parsley.sim.SimWorld.SimChannel;
 
 /**
- * Seeded, deterministic random scenarios: a random arrangement of processes and channels (multi-channel receivers,
- * fan-out, cycles, and multi-partition topics), driven through random interleavings of feeds, deliveries, fact
- * ingestion, commits, aborts, crashes, restarts, offset rewinds, external producers (some expressing truthful causes,
- * as a compliant foreign implementation would; some undecodable), foreign aborted transactions leaving dead
- * positions, log truncation, topic deletion and declaration changes. A fail-closed refusal stops that process — the
- * step aborts, exactly as the real host's transaction abort — and the run continues; the refusal waives only that
- * process's liveness checks, never any safety check. At quiescence the oracle checks the full committed history, and
- * the scenario checks the refusal obligations the world's own truth imposes (truncation past a committed read
- * position and committed reads past undecodable metadata must have failed closed). The same scenarios run against
- * sabotaged engines to prove they catch violations.
+ * Builds and runs one simulated scenario from a seed.
  */
 public final class Scenario {
-
     public record Result(List<String> violations, Oracle oracle, Throwable failure, List<String> journal) {
         public boolean clean() {
             return violations.isEmpty() && failure == null;
@@ -50,10 +39,6 @@ public final class Scenario {
     private record CorruptSpot(SimChannel channel, long position, Instance instance) {
     }
 
-    /** Which refusal families the world's own events have made possible, and the violations for refusals no event
-     * justifies: the run's over-refusal detector. On main any refusal failed the seed; now that world events
-     * legitimately cause refusals, a refusal is instead checked against the event classes that occurred — a
-     * compliant engine can only refuse for a condition some event actually created. */
     private static final class RefusalLedger {
         final java.util.EnumSet<ParsleyFailClosedException.Reason> justifiable =
                 java.util.EnumSet.noneOf(ParsleyFailClosedException.Reason.class);
@@ -113,8 +98,6 @@ public final class Scenario {
             SimProcess p = processes.get(rng.nextInt(processCount));
             int roll = rng.nextInt(100);
             if (!p.isRunning()) {
-                // A downed process: usually retry the start (a refusal recurs identically until something changes;
-                // a crash restart succeeds), sometimes change the declaration first — the operator's remedies.
                 if (roll < 70) {
                     journal.add(p.name + " restart attempt");
                     guard(p, p::start, journal, ledger);
@@ -180,10 +163,7 @@ public final class Scenario {
         quiesce(processes, ledger);
 
         oracle.finalChecks();
-        // Liveness is waived for a process that failed closed (its refusal is the point) and for a process with a
-        // received channel wedged below the earliest retained position — there the host cannot read (the liveness
-        // premise "channels remain readable" is unmet), so stalls are the premise's failure, not the engine's.
-        // Safety checks and the refusal obligations below are never waived.
+
         Set<String> waived = new HashSet<>();
         for (SimProcess p : processes) {
             if (p.failedClosed() || wedged(p)) {
@@ -199,9 +179,7 @@ public final class Scenario {
                         + " messages at quiescence");
             }
         }
-        // A wedge waives delivery liveness, never custody: every owed, committed-fed, undelivered message of a
-        // wedged process must still be physically held (SPEC Liveness 5) — a silent drop on a healthy channel is
-        // not excused by a wedge on another channel of the same process.
+
         for (SimProcess p : processes) {
             if (p.failedClosed() || !p.isRunning() || !wedged(p)) {
                 continue;
@@ -214,13 +192,10 @@ public final class Scenario {
                 }
             });
         }
-        // Refusal obligations, judged from the world's own truth — never from what the engine reported. A process
-        // covers a position by committing a read past it (host truth, immune to operator rewinds) or by having it
-        // at or below its delivered causal past (the join clamp's ground truth, per D31). Positions discarded
-        // beyond that coverage were lost unread: the process must have failed closed (SPEC Safety 8).
+
         for (SimProcess p : processes) {
             if (p.failedClosed()) {
-                continue; // stopped delivering with a recorded refusal: the obligation is met.
+                continue;
             }
             Map<ChannelId, Long> deliveredPast = oracle.deliveredPastMax(p.name);
             for (SimChannel channel : iterate(p.receivedChannels())) {
@@ -235,21 +210,13 @@ public final class Scenario {
         }
         for (CorruptSpot spot : corrupted) {
             for (SimProcess p : processes) {
-                // Judged by exact committed-feed membership, not any read-position proxy: a compliant engine
-                // refuses at the very feed of the corrupt spot (even a replay — decoding precedes the duplicate
-                // drop), so no committed step can contain it. Proxies leak both ways here: an operator rewind
-                // lowers committedNextRead below the spot (erasing the violation), while a rewind clamped up to
-                // a truncated channel's log start repositions the committed read past a spot that was never fed
-                // (faking one).
                 if (oracle.committedFeedOf(p.name, spot.instance())) {
                     violations.add("Safety 7: " + p.name + " committed a step that read undecodable metadata"
                             + " at " + spot.channel().name + "@" + spot.position() + " without failing closed");
                 }
             }
         }
-        // A process still declaring a channel whose topic was recreated under its name must have failed closed:
-        // its feed path can no longer be trusted to carry the old channel (SPEC Assumption 2). Judged from world
-        // truth; a process that redeclared away from the old incarnation is legitimately alive.
+
         for (SimProcess p : processes) {
             if (p.failedClosed()) {
                 continue;
@@ -265,9 +232,6 @@ public final class Scenario {
         return new Result(List.copyOf(violations), oracle, null, List.copyOf(journal));
     }
 
-    /** A received channel readable at no position: its earliest retained position has passed the process's read
-     * position, but everything discarded was already covered, so there is nothing to refuse over — the host simply
-     * cannot read on (with {@code auto.offset.reset=none} the real runtime stops here; the engine has no duty). */
     private static boolean wedged(SimProcess p) {
         for (SimChannel channel : iterate(p.receivedChannels())) {
             if (!channel.dead && p.workingNextRead(channel) < channel.logStart) {
@@ -277,8 +241,6 @@ public final class Scenario {
         return false;
     }
 
-    /** Run one engine-driving operation; a fail-closed refusal aborts the step and stops the process, keeping the
-     * run alive. Any other throwable propagates — it is a harness or engine bug, not a refusal. */
     private static boolean guard(SimProcess p, Runnable op, List<String> journal, RefusalLedger ledger) {
         return guarded(p, () -> {
             op.run();
@@ -286,8 +248,6 @@ public final class Scenario {
         }, journal, ledger) != null;
     }
 
-    /** Value-returning guard: null means the operation refused and the process is now down. A refusal whose
-     * reason no world event of this run made possible is an over-refusal and recorded as a violation. */
     private static <T> T guarded(SimProcess p, java.util.function.Supplier<T> op, List<String> journal,
                                  RefusalLedger ledger) {
         try {
@@ -305,7 +265,6 @@ public final class Scenario {
         }
     }
 
-    /** An operator offset rewind while the process is stopped: the host re-feeds already-committed positions. */
     private static void rewind(SimProcess p, SimWorld world, Random rng, List<String> journal, RefusalLedger ledger) {
         p.stopCleanly();
         List<SimChannel> received = iterate(p.receivedChannels());
@@ -314,8 +273,6 @@ public final class Scenario {
         guard(p, p::start, journal, ledger);
     }
 
-    /** Retention or deletion advances a channel's earliest retained position, biased toward the boundaries where
-     * the one-past case must refuse (SPEC Safety 8) and the exact-cover case must not. */
     private static void truncateEvent(SimWorld world, List<SimProcess> processes, List<SimChannel> channels,
                                       Random rng, List<String> journal, RefusalLedger ledger) {
         SimChannel channel = channels.get(rng.nextInt(channels.size()));
@@ -327,8 +284,7 @@ public final class Scenario {
         int shape = rng.nextInt(4);
         if (shape <= 1 && !readers.isEmpty()) {
             SimProcess reader = readers.get(rng.nextInt(readers.size()));
-            // Exactly the reader's committed read position (retention: nothing unread discarded), or one past it
-            // (exactly one unread position discarded: the smallest violation, SPEC Safety 8).
+
             target = reader.committedNextRead(channel) + (shape == 0 ? 0 : 1);
         } else if (shape == 2) {
             target = lso;
@@ -341,8 +297,6 @@ public final class Scenario {
         world.truncate(channel, target);
     }
 
-    /** Channels eligible for destruction: alive, and belonging to a topic no process sends to (a deletion under
-     * live producers would fail their sends, which is the runtime's concern, not the protocol's). */
     private static List<SimChannel> destructibleChannels(List<SimProcess> processes, List<SimChannel> channels) {
         Set<UUID> sendTopics = new HashSet<>();
         for (SimProcess p : processes) {
@@ -355,15 +309,13 @@ public final class Scenario {
                 .toList();
     }
 
-    /** Delete a topic no process sends to. Kills every partition; topic IDs are never reused. */
     private static void killEvent(SimWorld world, List<SimProcess> processes, List<SimChannel> channels,
                                   Random rng, List<String> journal, RefusalLedger ledger) {
         List<SimChannel> eligible = destructibleChannels(processes, channels);
         if (eligible.isEmpty()) {
             return;
         }
-        // Prefer a channel some process is currently holding messages from: deleting it is the deletion-hygiene
-        // breach (SPEC Assumption 17) whose Safety 9 duty the engine must discharge — the shape worth reaching.
+
         List<SimChannel> heldFrom = eligible.stream()
                 .filter(c -> processes.stream().anyMatch(p ->
                         p.isRunning() && p.engine().receivedChannelSet().contains(c.id())
@@ -376,17 +328,13 @@ public final class Scenario {
         world.killChannel(victim);
     }
 
-    /** Delete a topic and recreate it under the same name (SPEC Assumption 2: a different channel). Restricted to
-     * topics no process sends to, like {@link #killEvent}. The fresh incarnation replaces the old one in the channel
-     * pool, so later events produce to and declare the new channel — processes still declaring the old one must
-     * fail closed at their next facts round. */
     private static void recreateEvent(SimWorld world, List<SimProcess> processes, List<SimChannel> channels,
                                       Random rng, List<String> journal, RefusalLedger ledger) {
         List<SimChannel> eligible = destructibleChannels(processes, channels);
         if (eligible.isEmpty()) {
             return;
         }
-        // Prefer topics some process currently receives: recreating an unwatched topic exercises nothing.
+
         Set<ChannelId> receivedNow = new HashSet<>();
         for (SimProcess p : processes) {
             for (SimChannel channel : p.receivedChannels()) {
@@ -398,16 +346,13 @@ public final class Scenario {
         SimChannel victim = pool.get(rng.nextInt(pool.size()));
         journal.add("recreate topic of " + victim.name);
         ledger.justifiable.add(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED);
-        // A recreation is also a deletion of the old incarnation, so the deletion-family refusal is equally
-        // legitimate from here on (a process may see the death before the name's new binding).
+
         ledger.justifiable.add(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES);
         List<SimChannel> fresh = world.recreateTopic(victim);
         channels.removeIf(c -> c.id().topicId().equals(victim.id().topicId()));
         channels.addAll(fresh);
     }
 
-    /** A declaration change: remove one received channel or add one, then attempt the new execution — which may be
-     * refused (SPEC Structural 16), leaving the process down until a later event changes the declaration back. */
     private static void redeclareEvent(SimProcess p, List<SimChannel> channels, Random rng, List<String> journal,
                                        RefusalLedger ledger) {
         if (p.isRunning()) {
@@ -435,12 +380,10 @@ public final class Scenario {
 
     private static void produceExternal(SimWorld world, SimChannel target, Random rng, String uid) {
         if (rng.nextBoolean()) {
-            // A message from a producer with no knowledge of causal metadata (SPEC Safety 6).
             world.appendExternal(target, (channelId, pos) -> new Instance(
                     channelId, pos, uid, rng.nextBoolean() ? uid.getBytes() : null, uid.getBytes(),
                     List.of(new HeaderKV("app.header", new byte[] {1})), Causes.none(), java.util.Set.of()));
         } else {
-            // A compliant foreign sender that delivered some committed message and truthfully expresses its causes.
             Instance observed = randomCommitted(world, rng);
             if (observed == null) {
                 produceExternalPlain(world, target, uid);
@@ -457,8 +400,6 @@ public final class Scenario {
         }
     }
 
-    /** A sender attaching a causes header that fails the grammar: present but undecodable metadata, which every
-     * receiver must fail closed on rather than treat as absent (SPEC Safety 7). */
     private static CorruptSpot produceCorrupt(SimWorld world, SimChannel target, String uid) {
         Instance appended = world.appendExternal(target, (channelId, pos) -> new Instance(
                 channelId, pos, uid, uid.getBytes(), uid.getBytes(),
@@ -484,7 +425,6 @@ public final class Scenario {
         return committed.isEmpty() ? null : committed.get(rng.nextInt(committed.size()));
     }
 
-    /** Deterministic application logic: pure in the delivered message, bounded fan-out depth so runs terminate. */
     private static List<SimChannel> emitTargets(Instance delivered, List<SimChannel> sends) {
         long depth = delivered.uid.chars().filter(c -> c == '>').count() / 2;
         if (depth >= 3 || sends.isEmpty()) {
@@ -499,9 +439,6 @@ public final class Scenario {
         return targets;
     }
 
-    /** Run every live process to fixpoint: feed all, deliver all, commit, report facts, repeat until nothing moves.
-     * Failed-closed processes stay down — a deliberate refusal recurs identically on restart, so retrying it here
-     * would loop; their liveness checks are waived by the caller, their safety checks never. */
     static void quiesce(List<SimProcess> processes) {
         quiesce(processes, null);
     }

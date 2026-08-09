@@ -50,15 +50,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * The bootstrap against a real KRaft broker (ASSESSMENT 1.5, 1.6, 3.5, 3.6): initial positions committed through
- * generation-fenced group membership; the declared-LATEST-only-on-first-start rule under offset expiry (D36); the
- * stranded-holds scan refusing at {@code start()}; width-changing restarts refused with the accurate diagnosis;
- * and multi-partition, multi-task operation.
- */
 @Timeout(value = 300, unit = TimeUnit.SECONDS)
+/**
+ * Establishes the start sequence against a real broker.
+ *
+ * <p>Covers position pre-commit under group fencing, expired positions, refusal where held
+ * messages are stranded, the dead-channel confirmation window, and a width-changing restart.
+ */
 class BootstrapIntegrationTest {
-
     private static KafkaClusterTestKit cluster;
     private static Admin admin;
 
@@ -94,8 +93,6 @@ class BootstrapIntegrationTest {
             cluster.close();
         }
     }
-
-    // ------------------------------------------------------------------ helpers
 
     private static void createTopics(NewTopic... topics) throws Exception {
         admin.createTopics(List.of(topics)).all().get(30, TimeUnit.SECONDS);
@@ -159,12 +156,7 @@ class BootstrapIntegrationTest {
         return new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(causes)));
     }
 
-    // ------------------------------------------------------------------ tests
-
-    /** ASSESSMENT 1.5: an admin offset alter succeeds against any empty group, so a stale, paused bootstrap could
-     * overwrite a newer lifetime's offsets. The membership committer performs read-compute-commit inside one group
-     * membership: a generation change between the read and the commit — a newer lifetime interleaving — makes the
-     * stale commit throw, and the newer offsets stand. */
+    /** Stale bootstrap commit is fenced by group membership. */
     @Test
     void staleBootstrapCommitIsFencedByGroupMembership() throws Exception {
         createTopics(new NewTopic("fence-in", 1, (short) 1));
@@ -177,9 +169,8 @@ class BootstrapIntegrationTest {
 
         try (GroupMembershipCommitter stale = new GroupMembershipCommitter(clientProps, "fence-group")) {
             stale.join(Set.of("fence-in"), Duration.ofSeconds(30));
-            stale.committed(Set.of(tp)); // the stale lifetime reads, then pauses (we simply stop polling)
+            stale.committed(Set.of(tp));
 
-            // A newer lifetime interleaves: joins the group, commits its own position, leaves.
             Map<String, Object> newerProps = new HashMap<>(clientProps);
             newerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "fence-group");
             newerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
@@ -193,7 +184,6 @@ class BootstrapIntegrationTest {
                 newer.commitSync(Map.of(tp, new OffsetAndMetadata(7)));
             }
 
-            // The stale lifetime wakes and tries to commit what it computed before the pause: fenced.
             assertThrows(CommitFailedException.class,
                     () -> stale.commit(Map.of(tp, new OffsetAndMetadata(0))),
                     "a stale membership's commit must be rejected by the broker's generation fencing");
@@ -203,12 +193,11 @@ class BootstrapIntegrationTest {
         assertEquals(7, committed.get(tp).offset(), "the newer lifetime's offsets stand untouched");
     }
 
-    /** D36 under real offset expiry (ASSESSMENT 3.5): with prior state, a missing offset restarts from earliest —
-     * never the declared LATEST, which would silently skip messages produced while the process was stopped. */
+    /** Expired offsets restart from earliest not the declared latest. */
     @Test
     void expiredOffsetsRestartFromEarliestNotTheDeclaredLatest() throws Exception {
         createTopics(new NewTopic("ex-in", 1, (short) 1));
-        produce("ex-in", null, "k", "early");   // before the first start: LATEST skips it, by declaration
+        produce("ex-in", null, "k", "early");
         Channel<String, String> in = Channel.of("ex-in", Serdes.String(), Serdes.String())
                 .startingAt(Channel.InitialPosition.LATEST);
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
@@ -226,8 +215,6 @@ class BootstrapIntegrationTest {
             awaitCommitted("ex-ex", "ex-in", 2);
         }
 
-        // The group's offsets expire while the process is stopped; a record arrives meanwhile. (The group
-        // empties asynchronously after close, so the delete retries until the coordinator allows it.)
         await("the group's offsets to be deletable", () -> {
             try {
                 admin.deleteConsumerGroupOffsets("ex-ex", Set.of(new TopicPartition("ex-in", 0)))
@@ -249,9 +236,7 @@ class BootstrapIntegrationTest {
         }
     }
 
-    /** ASSESSMENT 3.5: the runtime's stranded-holds scan must refuse at start() — before any task runs — when the
-     * new declaration removes a channel with undelivered held messages. A disabled scan would let start() return
-     * and fail only asynchronously at task initialisation, which this test's assertThrows would miss green. */
+    /** Stranded held messages refuse at start. */
     @Test
     void strandedHeldMessagesRefuseAtStart() throws Exception {
         createTopics(new NewTopic("st-a", 1, (short) 1), new NewTopic("st-b", 1, (short) 1));
@@ -264,7 +249,6 @@ class BootstrapIntegrationTest {
                 .build();
 
         try (Parsley parsley = Parsley.start(config("st"), both)) {
-            // Held on st-b: its cause names st-a@9, which never arrives. Its read position still commits.
             produce("st-b", null, "k", "H", causesHeader(Map.of(new ChannelId(aId, 0), 9L)));
             awaitCommitted("st-st", "st-b", 1);
         }
@@ -277,10 +261,7 @@ class BootstrapIntegrationTest {
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES, e.reason());
     }
 
-    /** ASSESSMENT 3.5: the dead-channel debounce, driven deterministically through the injected clock (D44's
-     * seam). A deleted topic's id must stay unreported while the corroborated-unknown run is younger than the
-     * confirmation window — metadata staleness must not prune a cause — and report dead once it ages past it. A
-     * shortened or removed debounce reports dead on the first round and fails the first assertion. */
+    /** Dead verdict waits out the confirmation window. */
     @Test
     void deadVerdictWaitsOutTheConfirmationWindow() throws Exception {
         createTopics(new NewTopic("db-x", 1, (short) 1));
@@ -312,10 +293,7 @@ class BootstrapIntegrationTest {
         facts.close();
     }
 
-    /** ASSESSMENT 3.5 / D22: a log start is attributed to a topic id only when a describe *after* the offsets
-     * query still maps the name to the same id. This test lies on exactly that confirming describe — simulating a
-     * recreation in the race window — and the round must attribute nothing; a facts source that skips the
-     * confirming describe attributes the log start and fails the assertion. */
+    /** Log start is not attributed across an unconfirmed identity. */
     @Test
     void logStartIsNotAttributedAcrossAnUnconfirmedIdentity() throws Exception {
         createTopics(new NewTopic("cf-x", 1, (short) 1));
@@ -337,8 +315,7 @@ class BootstrapIntegrationTest {
             @Override
             Map<UUID, String> describeByIds(Set<UUID> topicIds) throws Exception {
                 Map<UUID, String> real = super.describeByIds(topicIds);
-                // The second describe of a round is the confirming one: pretend the topic was deleted and
-                // recreated between the offsets query and this confirmation — the id no longer resolves.
+
                 return ++describes % 2 == 0 ? Map.of() : real;
             }
         };
@@ -347,10 +324,7 @@ class BootstrapIntegrationTest {
         racedByRecreation.close();
     }
 
-    /** ASSESSMENT 1.6 (and 3.6's multi-task half): a three-partition topic runs three tasks, each delivering its
-     * partition; a restart that shrinks the declaration to the one-partition topic used to start "healthy", deliver
-     * nothing for ~42 s, then die in Streams' width validation advising StreamsResetter — a remedy that destroys
-     * the ordering store. It must instead refuse at start(), naming the width change and the deliberate remedy. */
+    /** Width changing restart is refused with the accurate diagnosis. */
     @Test
     void widthChangingRestartIsRefusedWithTheAccurateDiagnosis() throws Exception {
         createTopics(new NewTopic("mp-in", 3, (short) 1), new NewTopic("mp-single", 1, (short) 1));

@@ -28,34 +28,31 @@ import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.PositionFacts;
 
 /**
- * Position facts from the cluster (SPEC Assumption 15): the group's committed offsets are the host's read-position
- * report (SPEC Host obligation 2 — a committed position covers exactly what was fed or will never arrive, because the
- * host commits it atomically with the step that consumed it); log-start offsets are earliest retained positions; and
- * topic existence is checked by topic ID, so a recreated topic never impersonates a dead channel. Every fact is a
- * lower bound, so a stale answer is always safe. Errors surface to the caller, which skips the round.
+ * Gathers broker position facts through the admin client.
  *
- * <p>Identity race guard: log starts are queried by topic name, but attributed to a topic ID only when a describe
- * *after* the offset query still maps that name to the same ID — discarding a cause requires certainty
- * (SPEC Structural 13).</p>
+ * <p>Two questions are asked of each channel: how far the log is readable under
+ * {@code read_committed}, and how far retention has discarded. The first lets a channel
+ * settle past positions no message will ever occupy, such as those consumed by an aborted
+ * transaction. The second distinguishes positions this process chose not to read from
+ * positions it can no longer read.
+ *
+ * <p>A topic that cannot be described is treated as unavailable rather than gone. Absence of
+ * evidence is not evidence of deletion, and treating it as such would settle a channel that
+ * still has messages to yield.
  */
 class AdminFactsSource implements FactsSource {
-
     private static final Logger LOG = LoggerFactory.getLogger(AdminFactsSource.class);
     private static final long TIMEOUT_SECONDS = 10;
 
-    /** What describing an id's last-known name established about the id (D44). */
     private enum NameVerdict {
-        /** The name resolves to this very id: the topic is alive, whatever the by-id describe said. */
         SAME_ID,
-        /** The name resolves to a different id: this id's topic is definitively gone — ids are never reused, and
-         * a stale metadata view can serve an old binding but cannot invent a new one. */
+
         RECREATED,
-        /** The name no longer exists either: consistent with deletion; still debounced against stale metadata. */
+
         NAME_GONE,
-        /** Describe on the name was denied. The broker masks denied by-id describes as unknown-topic to avoid
-         * leaking existence, so an unknown id with a denied name is evidence of denial, not of death. */
+
         DENIED,
-        /** The name query failed some other way this round: no evidence either way. */
+
         UNAVAILABLE
     }
 
@@ -63,35 +60,22 @@ class AdminFactsSource implements FactsSource {
     private final String groupId;
     private final Map<String, Object> probeConsumerProperties;
     private final Map<UUID, String> topicNamesById = new HashMap<>();
-    /** Monotonic-clock instant an id's corroborated-unknown run began. Time-based rather than round-based: one
-     * facts source serves every task of the application, so counting rounds would shrink the debounce window as
-     * task count grows, while any task's live sighting rightly resets the shared timer (D44). The clock must be
-     * monotonic — a stepped wall clock would collapse the window into a premature, persisted dead verdict. */
+
     private final Map<UUID, Long> unknownSince = new HashMap<>();
-    /** Ids confirmed dead: terminal (ids are never reused). */
+
     private final Set<UUID> confirmedDead = new HashSet<>();
-    /** Ids confirmed recreated: terminal, and sticky — every round reports them until callers stop asking, so
-     * every task's engine sees the identity change no matter which round first detected it, and a round lost in
-     * a handoff loses nothing. */
+
     private final Set<UUID> confirmedRecreated = new HashSet<>();
-    /** When each id was last asked about, by any task. Tracking state is evicted only when *no* task has asked
-     * for a generous horizon — never against a single caller's set, which would let tasks with differing
-     * frontiers erase each other's timers and verdicts. Bounds growth from injected foreign ids. */
+
     private final Map<UUID, Long> lastAsked = new HashMap<>();
-    /** The ids this application declared (its own topics, seeded at construction): never evicted. Their name
-     * bindings are the only evidence that can classify a later recreation as RECREATED rather than plain death,
-     * and a task stalled in rebalance or restore must not lose that evidence to a sibling's eviction sweep. The
-     * set is bounded by the declaration, so pinning costs nothing. */
+
     private final Set<UUID> pinnedIds;
     private final long deadConfirmationMillis;
-    /** Eviction is a memory bound for injected foreign ids, not a correctness mechanism, so its horizon has an
-     * absolute floor: at small facts intervals a purely interval-derived horizon would shrink to seconds and a
-     * routine rebalance stall would erase a live debounce timer. */
+
     private final long evictionMillis;
     private final java.util.function.LongSupplier clock;
     private org.apache.kafka.clients.consumer.KafkaConsumer<byte[], byte[]> probe;
-    /** Set by {@link #close()}: a gather that starts after close (a straggling task init during a torn-down
-     * runtime) must report nothing rather than lazily resurrect the probe consumer, which would leak. */
+
     private boolean closed;
 
     AdminFactsSource(Admin admin, String groupId, Map<UUID, String> knownTopicNames,
@@ -107,11 +91,17 @@ class AdminFactsSource implements FactsSource {
         this.clock = clock;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Synchronized because one instance serves every task of a process, and the admin
+     * client is queried in batches.
+     */
     @Override
     public synchronized PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
                                              Set<ChannelId> frontierChannels) throws Exception {
         if (closed) {
-            return PositionFacts.EMPTY; // the runtime is closing: report nothing rather than resurrect the probe
+            return PositionFacts.EMPTY;
         }
         Set<UUID> topicIds = new HashSet<>();
         for (ChannelId channel : receivedChannels) {
@@ -140,9 +130,6 @@ class AdminFactsSource implements FactsSource {
         undescribed.removeAll(confirmedRecreated);
         Map<UUID, String> liveNames = describeByIds(undescribed);
 
-        // Corroborate every unknown id against its last-known name before concluding anything (D44): the broker
-        // masks authorization denials on by-id describes as unknown-topic, and metadata answers can be stale — but
-        // a name bound to a *different* id is affirmative evidence the old topic is gone, with no debounce needed.
         Set<UUID> unknownIds = new HashSet<>(undescribed);
         unknownIds.removeAll(liveNames.keySet());
         Set<String> namesToCheck = new HashSet<>();
@@ -152,10 +139,7 @@ class AdminFactsSource implements FactsSource {
                 namesToCheck.add(lastKnown);
             }
         }
-        // Dead-confirmed declared ids keep their name binding, and the name is re-checked every round: the name
-        // resolving to a *different* id is the only evidence that can reclassify the death as the recreation it
-        // became, and every task's engine must see that identity change (CHANNEL_IDENTITY_CHANGED, with its reset
-        // remedy) rather than fail on the next feed with a feed-order diagnosis.
+
         Set<UUID> deadIdsToRecheck = new HashSet<>();
         for (UUID id : topicIds) {
             String lastKnown = topicNamesById.get(id);
@@ -171,37 +155,30 @@ class AdminFactsSource implements FactsSource {
             String lastKnown = topicNamesById.get(id);
             NameVerdict verdict = classifyName(byNameOutcome, lastKnown, id);
             switch (verdict) {
-                case SAME_ID -> unknownSince.remove(id);     // alive: the by-id answer was a metadata blip
-                case RECREATED -> markRecreated(id);         // definitive: the name moved on, this id is dead
+                case SAME_ID -> unknownSince.remove(id);
+                case RECREATED -> markRecreated(id);
                 case DENIED -> {
-                    unknownSince.remove(id);                 // denial explains the mask; not evidence of death
+                    unknownSince.remove(id);
                     LOG.warn("{}: describe denied for topic '{}' ({}); treating as denied, not dead",
                             groupId, lastKnown, id);
                 }
                 case NAME_GONE, UNAVAILABLE -> {
                     if (verdict == NameVerdict.NAME_GONE || lastKnown == null) {
-                        // NAME_GONE is corroborated unknown: the standard debounce covers stale metadata. An id
-                        // with no known name cannot be corroborated at all — it may be foreign injection, but it
-                        // may equally be a legitimately new topic whose id reached this process through upstream
-                        // metadata before this admin client's view caught up — so it gets a far longer window:
-                        // wrongly killing a live cause is a safety-adjacent loss, while a genuinely foreign id
-                        // merely lingers a little longer before it is discarded.
                         long window = lastKnown == null ? 4 * deadConfirmationMillis : deadConfirmationMillis;
                         long since = unknownSince.computeIfAbsent(id, i -> now);
                         if (now - since >= window) {
                             markDead(id);
                         }
                     }
-                    // UNAVAILABLE with a known name: no evidence this round; the timer neither starts nor resets.
                 }
             }
         }
         for (UUID id : deadIdsToRecheck) {
             if (classifyName(byNameOutcome, topicNamesById.get(id), id) == NameVerdict.RECREATED) {
-                markRecreated(id); // the name moved on after death was confirmed: upgrade the verdict
+                markRecreated(id);
             }
         }
-        // Built once, after the verdict loop: the sticky sets are the single source of this round's report.
+
         Set<UUID> deadTopicIds = new HashSet<>(confirmedDead);
         Set<UUID> recreatedTopicIds = new HashSet<>(confirmedRecreated);
         for (UUID id : liveNames.keySet()) {
@@ -225,8 +202,6 @@ class AdminFactsSource implements FactsSource {
                     .forEach((tp, info) -> logStartByPartition.put(tp, info.offset()));
         }
 
-        // Re-describe by ID after the offset query: only attribute a log start to a channel whose topic name still
-        // resolves to the same topic ID, so a recreation between the two queries can never mis-prune a cause.
         Map<UUID, String> confirmedNames = describeByIds(liveNames.keySet());
 
         Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> committed =
@@ -248,7 +223,7 @@ class AdminFactsSource implements FactsSource {
             }
             TopicPartition tp = partitionsByChannel.get(channel);
             if (tp == null || !tp.topic().equals(confirmedNames.get(channel.topicId()))) {
-                continue; // identity unconfirmed this round: report nothing rather than guess
+                continue;
             }
             Long start = logStartByPartition.get(tp);
             if (start != null) {
@@ -265,36 +240,26 @@ class AdminFactsSource implements FactsSource {
         return new PositionFacts(committedNextRead, logStart, deadChannels, recreatedChannels);
     }
 
-    /** Topic IDs are never reused, so death is sticky — but not final: a declared id keeps its name binding, and
-     * a later round observing the name bound to a different id upgrades the verdict to recreated. Eviction happens
-     * only when no caller has asked about the id within the eviction horizon (and never for declared ids). */
     private void markDead(UUID id) {
         confirmedDead.add(id);
         unknownSince.remove(id);
-        // Declared ids keep their name binding past death: it is the only evidence that can later reclassify
-        // this death as a recreation, and the pinned set is bounded by the declaration.
+
         if (!pinnedIds.contains(id)) {
             topicNamesById.remove(id);
         }
     }
 
-    /** Terminal and sticky — and reported as recreation every round, so every task's engine performs its own
-     * identity refusal rather than one task silently settling a channel another task saw recreated. */
     private void markRecreated(UUID id) {
         confirmedRecreated.add(id);
-        confirmedDead.remove(id); // a recreation observed after death-confirmation upgrades the verdict
+        confirmedDead.remove(id);
         forget(id);
     }
 
-    /** Drop every per-id evidence entry (markDead deliberately keeps a pinned id's name binding instead — the
-     * dead-to-recreated upgrade needs it). Adding a new evidence map means adding it here and deciding there. */
     private void forget(UUID id) {
         unknownSince.remove(id);
         topicNamesById.remove(id);
     }
 
-    /** Describe topics by name, classifying each outcome. A name maps to the {@link UUID} it currently resolves
-     * to, or to a {@link NameVerdict} explaining why it could not be resolved. */
     private Map<String, Object> describeByNames(Set<String> names) {
         Map<String, Object> outcome = new HashMap<>();
         if (names.isEmpty()) {
@@ -314,7 +279,7 @@ class AdminFactsSource implements FactsSource {
                     outcome.put(entry.getKey(), NameVerdict.UNAVAILABLE);
                 }
             } catch (InterruptedException e) {
-                Thread.currentThread().interrupt(); // shutting down: stop classifying, report nothing this round
+                Thread.currentThread().interrupt();
                 outcome.put(entry.getKey(), NameVerdict.UNAVAILABLE);
                 return outcome;
             } catch (Exception e) {
@@ -338,20 +303,6 @@ class AdminFactsSource implements FactsSource {
         return (NameVerdict) result;
     }
 
-    /**
-     * The host's committed offsets never advance for a partition without a processed record in the current task
-     * lifetime, so a trailing run of never-yielding positions (aborted transactions, control records) can stall a
-     * held message forever after a restart (SPEC Liveness 3). A read_committed probe seeked just above the caller's
-     * fed-or-never frontier settles the question from the substrate itself (SPEC Assumption 15): the first real
-     * record's offset — or, when the poll returns nothing, the consumer position having advanced past aborted
-     * batches — bounds a run of positions that will never yield a message this process receives. Probe failures are
-     * skipped; the next round retries.
-     *
-     * <p>The probe is itself a name-based query, so its answers obey the same rule as the log starts (D22): a
-     * probed offset is attributed to a channel id only when the round's confirming describe bound the name to that
-     * very id before the probe, and a describe *after* the probe still does — a recreation interleaved anywhere
-     * around the probe must never settle the old channel's positions with the new incarnation's offsets.</p>
-     */
     private void probeTrailingRuns(Map<ChannelId, Long> fedUpToHints,
                                    Map<ChannelId, TopicPartition> partitionsByChannel,
                                    Map<UUID, String> confirmedNames,
@@ -367,23 +318,21 @@ class AdminFactsSource implements FactsSource {
             Long committedOffset = committedNextRead.get(channel);
             if (tp == null || !tp.topic().equals(confirmedNames.get(channel.topicId()))
                     || (committedOffset != null && committedOffset > fed + 1)) {
-                continue; // identity unconfirmed this round, or the host's own report already passes the hint
+                continue;
             }
             try {
                 var consumer = probeConsumer();
                 consumer.assign(java.util.List.of(tp));
                 consumer.seek(tp, fed + 1);
                 long report = fed + 1;
-                // A poll can return before its fetch response is processed; retry within the round until the
-                // position moves or a real record arrives, so one facts round usually settles the question. A real
-                // record ends the round immediately — its offset is the bound, and polling on would walk past it.
+
                 for (int attempt = 0; attempt < 4; attempt++) {
                     var polled = consumer.poll(java.time.Duration.ofMillis(250));
                     if (!polled.isEmpty()) {
-                        report = polled.records(tp).get(0).offset(); // positions below the first real record never yield
+                        report = polled.records(tp).get(0).offset();
                         break;
                     }
-                    report = consumer.position(tp);                  // advanced past aborted batches it fetched, if any
+                    report = consumer.position(tp);
                     if (report > fed + 1) {
                         break;
                     }
@@ -392,9 +341,6 @@ class AdminFactsSource implements FactsSource {
                     probed.put(channel, report);
                 }
             } catch (org.apache.kafka.common.errors.InterruptException e) {
-                // The runtime is closing and interrupted this thread (the exception has re-set the flag): stop
-                // probing altogether — recreating a consumer per remaining hint would just thrash through the
-                // same interrupt.
                 closeProbe();
                 return;
             } catch (RuntimeException e) {
@@ -405,9 +351,7 @@ class AdminFactsSource implements FactsSource {
         if (probed.isEmpty()) {
             return;
         }
-        // D22 for the probe itself: re-describe the probed ids and attribute a probed offset only where the name
-        // still binds to the same id — discarding the round's probes on failure loses liveness for one round,
-        // never correctness.
+
         Map<UUID, String> namesAfterProbe;
         try {
             Set<UUID> probedIds = new HashSet<>();
@@ -444,10 +388,6 @@ class AdminFactsSource implements FactsSource {
         return probe;
     }
 
-    /** The one place the probe is discarded. Runs with the interrupt flag cleared: KafkaConsumer.close() throws
-     * InterruptException when the calling thread is interrupted — and shutdown, which interrupts the facts
-     * thread, is exactly when this cleanup runs — which would skip the null-out and leave a closed consumer
-     * behind for the next round. The flag is restored, so the shutdown signal itself is never swallowed. */
     private void closeProbe() {
         if (probe == null) {
             return;
@@ -470,9 +410,6 @@ class AdminFactsSource implements FactsSource {
         closeProbe();
     }
 
-    /** Topic names for the ids that still exist; ids that definitively no longer exist are simply absent.
-     * Package-visible and overridable as the test seam for the identity race guard (D22, D50): interleaving a
-     * recreation between the offsets query and the confirming describe needs control of this call's answers. */
     Map<UUID, String> describeByIds(Set<UUID> topicIds) throws Exception {
         Map<UUID, String> names = new HashMap<>();
         if (topicIds.isEmpty()) {
@@ -490,7 +427,6 @@ class AdminFactsSource implements FactsSource {
             } catch (ExecutionException e) {
                 if (e.getCause() instanceof UnknownTopicIdException
                         || e.getCause() instanceof UnknownTopicOrPartitionException) {
-                    // Definitive: the topic no longer exists. Topic IDs are never reused.
                     continue;
                 }
                 throw e;

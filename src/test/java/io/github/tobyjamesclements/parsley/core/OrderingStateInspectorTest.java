@@ -10,9 +10,13 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** The runtime's stranded-held check reads the changelog through this interpretation (SPEC Structural 16). */
+/**
+ * Establishes that ordering state can be read without an engine.
+ *
+ * <p>These are the questions a startup check asks of state left by a previous run.
+ */
 class OrderingStateInspectorTest {
-
+    /** Finds live held entries, ignoring tombstones and other key classes. */
     @Test
     void findsLiveHeldEntriesAndIgnoresTombstonesAndOtherTags() {
         ChannelId held = new ChannelId(new UUID(4, 1), 2);
@@ -26,11 +30,12 @@ class OrderingStateInspectorTest {
         assertEquals(Set.of(held), OrderingStateInspector.heldChannels(latest));
     }
 
+    /** Reads name bindings across tasks by topic id. */
     @Test
     void readsNameBindingsAcrossTasksByTopicId() {
         UUID topicId = new UUID(4, 9);
         Map<byte[], byte[]> latest = new TreeMap<>(Arrays::compareUnsigned);
-        // Bindings are written per task: several partitions of one topic bind the same name; the topic id agrees.
+
         latest.put(StoreCodec.channelNameKey("orders"), new ChannelId(topicId, 2).toBytes());
         latest.put(StoreCodec.channelNameKey("tombstoned"), null);
         latest.put(StoreCodec.versionKey(), new byte[] {1});
@@ -38,12 +43,7 @@ class OrderingStateInspectorTest {
         assertEquals(Map.of("orders", topicId), OrderingStateInspector.nameBindings(latest));
     }
 
-    /**
-     * A topic deleted and recreated under a still-declared name must be diagnosed as the identity change it is —
-     * with D33's deliberate-reset remedy — not as a declaration change (ASSESSMENT 1.3: the held entries carry the
-     * old identity, so a naive held-versus-declared comparison misreports "channel removed" though nothing was
-     * removed).
-     */
+    /** Recreation under a still declared name is an identity change not a removal. */
     @Test
     void recreationUnderAStillDeclaredNameIsAnIdentityChangeNotARemoval() {
         UUID oldId = new UUID(4, 10);

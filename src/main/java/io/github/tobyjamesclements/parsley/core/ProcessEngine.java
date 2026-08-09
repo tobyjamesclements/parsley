@@ -15,37 +15,35 @@ import java.util.TreeSet;
 import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.Reason;
 
 /**
- * The ordering engine for one process (SPEC: one unit that receives, delivers and sends on channels; on Kafka, one
- * Streams task). Host-independent: the Kafka Streams adapter and the test simulator drive this same class.
+ * The protocol, driven by a host.
  *
- * <p>See {@code docs/DESIGN.md}. Per received channel the engine tracks {@code fedUpTo} — the highest position such
- * that every position at or below it was either fed to this process or will never arrive as a message — and a
- * hold-back buffer of received-but-undelivered messages in position order. The settled frontier derived from these
- * feeds the pure decision unit {@link Deliverability#decide}, which the engine invokes for every delivery. The causal
- * frontier accumulates causes from deliveries and from the metadata of everything received (SPEC Structural 15), and
- * stamps every emission.</p>
+ * <p>The engine holds a causal frontier, a per-channel hold-back buffer, and the record of
+ * what it has already delivered. A host feeds it messages and broker position facts, asks it
+ * what is deliverable, and tells it what was delivered. It names no host type, consults no
+ * clock and opens no connection, so the same engine runs under a simulator and under Kafka
+ * Streams.
  *
- * <p>All mutations are written through to the {@link OrderingStore}; under Kafka Streams they commit atomically with
- * the step, so an aborted step rolls the engine's durable state back with everything else. One instance serves one
- * execution: the host constructs a fresh engine over the restored store at each initialisation.</p>
+ * <p>The delivery rule itself lives in {@link Deliverability#decide}, which is a pure
+ * function. This class holds the state that rule reads.
  *
- * <p>Not thread-safe; a process is single-threaded by definition of the host.</p>
+ * <p>Instances are not thread-safe. A host drives one engine from one thread.
+ *
+ * @see Deliverability
+ * @see OrderingStore
  */
 public final class ProcessEngine {
 
+    /** What became of a message the host fed in. */
     public enum ReceiveOutcome {
-        /** Accepted into the hold-back buffer (possibly immediately deliverable). */
+        /** Taken into the hold-back buffer, or immediately deliverable. */
         ACCEPTED,
-        /** A re-feed of a position already covered by a committed step of an earlier execution; already delivered, dropped (SPEC Safety 2). */
+        /** Already delivered in a previous execution, so ignored. */
         DUPLICATE_DROPPED
     }
 
-    /** Marks a channel whose topic no longer exists: every remaining position will never yield a message. */
     private static final long FED_TO_END_OF_CHANNEL = Long.MAX_VALUE;
 
-    /** Default bound on encoded causal metadata, well under Kafka's default 1 MiB record-size wall: reaching the
-     * wall is a permanent stop inside the producer with no parsley diagnosis (SPEC Operational 4; ASSESSMENT 2.4),
-     * so the budget fails closed attributably first. 256 KiB ≈ 9,300 frontier entries. */
+    /** Metadata budget applied where a configuration names none. */
     public static final int DEFAULT_METADATA_BUDGET_BYTES = 256 * 1024;
 
     private final String processName;
@@ -56,16 +54,12 @@ public final class ProcessEngine {
 
     private final Map<ChannelId, Long> fedUpTo = new HashMap<>();
     private final TreeMap<ChannelId, Long> frontier = new TreeMap<>();
-    /** Per channel, the highest position in the *delivered* causal past: delivered positions and the expressed causes
-     * of delivered messages — never causes learned only from still-held metadata. This is what a joining channel must
-     * not re-enter (SPEC Structural 16). */
+
     private final Map<ChannelId, Long> deliveredPast = new HashMap<>();
     private final Map<ChannelId, ArrayDeque<Hold>> held = new HashMap<>();
-    /** fedUpTo as restored at initialisation: the boundary between this execution's feed and re-feeds of the past. */
+
     private final Map<ChannelId, Long> sessionFloor;
-    /** The highest position the host has fed on each channel within this execution (in-memory by design: an
-     * execution's feed order is the thing being checked). Within one execution the host must feed each channel in
-     * increasing position order (Host obligation 1); a regression is a breach, never a replay. */
+
     private final Map<ChannelId, Long> fedThisExecution = new HashMap<>();
 
     private static final class Hold {
@@ -89,10 +83,29 @@ public final class ProcessEngine {
         }
     }
 
+    /**
+     * Builds an engine with the default metadata budget.
+     *
+     * @param processName      the process name, used in diagnostics
+     * @param receivedChannels the channels this process receives, mapped to their topic names
+     * @param store            durable ordering state, which may already hold a previous run's
+     * @throws ParsleyFailClosedException if the store carries a format version this build
+     *         cannot read
+     */
     public ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store) {
         this(processName, receivedChannels, store, DEFAULT_METADATA_BUDGET_BYTES, Sabotage.NONE);
     }
 
+    /**
+     * Builds an engine with an explicit metadata budget.
+     *
+     * @param processName         the process name, used in diagnostics
+     * @param receivedChannels    the channels this process receives, mapped to topic names
+     * @param store               durable ordering state
+     * @param metadataBudgetBytes the largest causal metadata a message may carry
+     * @throws ParsleyFailClosedException if the store carries a format version this build
+     *         cannot read
+     */
     public ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,
                          int metadataBudgetBytes) {
         this(processName, receivedChannels, store, metadataBudgetBytes, Sabotage.NONE);
@@ -118,10 +131,6 @@ public final class ProcessEngine {
                     "process " + processName + ": ordering store format not understood by this build");
         }
 
-        // SPEC Assumption 2 / Safety 8: a topic deleted and recreated under the same name is a different channel,
-        // but the group's committed read positions are keyed by name and would be silently adopted for the new
-        // incarnation. Bind each declared name to the channel identity first seen under it; a changed binding means
-        // the name's read positions belong to a dead channel, so refuse rather than resume mid-log.
         receivedChannels.forEach((channel, topicName) -> {
             byte[] nameKey = StoreCodec.channelNameKey(topicName);
             byte[] bound = store.get(nameKey);
@@ -146,22 +155,16 @@ public final class ProcessEngine {
             ChannelId channel = StoreCodec.channelOfKey(key);
             long position = StoreCodec.positionOfHeldKey(key);
             if (!this.receivedChannels.contains(channel) && !sabotage.has(Sabotage.Mode.IGNORE_REMOVED_CHANNELS)) {
-                // SPEC Structural 16: refuse an execution whose declaration removes a channel with undelivered
-                // received messages. Bodies stay in the store; nothing is lost by refusing.
                 throw new ParsleyFailClosedException(Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES,
                         "process " + processName + ": held message at " + channel + "@" + position
                                 + " but the channel is no longer in the declared received-channel set");
             }
             StoreCodec.HeldBlob blob = StoreCodec.decodeHeld(value);
-            // Bodies are lazily reloaded from the store at delivery; only the ordering facts stay in memory.
+
             held.computeIfAbsent(channel, c -> new ArrayDeque<>())
                     .addLast(new Hold(position, blob.timestamp(), blob.causes(), true, null, null, null));
         });
 
-        // SPEC Structural 16: causal past already delivered must not be re-entered when a channel joins the
-        // received-channel set. Positions at or below the delivered causal past on a joining channel were causes of
-        // messages this process has already delivered; delivering them now would invert lifetime causal order
-        // (SPEC Safety 1), so they are treated as settled before the session floor is taken.
         for (ChannelId channel : this.receivedChannels) {
             Long past = deliveredPast.get(channel);
             if (past != null) {
@@ -171,11 +174,20 @@ public final class ProcessEngine {
         this.sessionFloor = Map.copyOf(fedUpTo);
     }
 
+    /**
+     * Returns the channels this process receives, in {@link ChannelId} order.
+     *
+     * @return the channels this process receives, in {@link ChannelId} order
+     */
     public Set<ChannelId> receivedChannelSet() {
         return Collections.unmodifiableSet(receivedChannels);
     }
 
-    /** The settled frontier the decision unit reads; also usable directly with {@link Deliverability#decide}. */
+    /**
+     * Exposes settled positions to the delivery decision.
+     *
+     * @return how far each channel has settled, for {@link Deliverability#decide}
+     */
     public Deliverability.SettledView settledView() {
         return channel -> {
             ArrayDeque<Hold> channelHeld = held.get(channel);
@@ -188,9 +200,16 @@ public final class ProcessEngine {
     }
 
     /**
-     * Receive one message from a channel. Fails closed on undecodable metadata (SPEC Safety 7) and on feeds that
-     * contradict positions this execution already covered (Host obligation 1/2 breach). Does not deliver; callers
-     * drain via {@link #nextDeliverable()} / {@link #markDelivered}.
+     * Takes one message from the host.
+     *
+     * <p>Causes carried by a message are merged into the frontier on receipt, before any
+     * question of delivering it. Happened-before passes through receipt, so a message this
+     * process has seen but not yet delivered still constrains what it may send.
+     *
+     * @param message the message, whose position must exceed any already fed for its channel
+     * @return whether the message was accepted or recognised as already delivered
+     * @throws ParsleyFailClosedException if the host fed out of order, if the metadata cannot
+     *         be decoded, or if the metadata exceeds the configured budget
      */
     public ReceiveOutcome onReceive(ReceivedMessage message) {
         ChannelId channel = message.channel();
@@ -201,16 +220,12 @@ public final class ProcessEngine {
 
         Causes causes = extractCauses(message);
 
-        // Host obligation 1: within one execution, each channel is fed in increasing position order. A feed at or
-        // below a position this execution already fed is a breach, wherever it lies relative to the session floor —
-        // only in-order feeds at or below the floor are replays of a committed past. (Observed in the wild as a
-        // recreated topic's records arriving under the old channel's identity: fail loudly, never drop silently.)
         Long fedBefore = fedThisExecution.get(channel);
         if (fedBefore != null && message.position() <= fedBefore) {
             throw new ParsleyFailClosedException(Reason.OUT_OF_ORDER_FEED,
                     "process " + processName + ": fed " + channel + "@" + message.position()
                             + " after this execution was already fed position " + fedBefore
-                            + " of the same channel — the host must feed each channel in increasing position order");
+                            + " of the same channel; the host must feed each channel in increasing position order");
         }
         fedThisExecution.put(channel, message.position());
 
@@ -219,18 +234,12 @@ public final class ProcessEngine {
         }
 
         if (!sabotage.has(Sabotage.Mode.SKIP_RECEIPT_MERGE)) {
-            // Happened-before passes through receipt: causes of anything received are causes of every subsequent
-            // send, delivered or not (SPEC Structural 15). This must precede the duplicate-drop below — a message
-            // dropped because a joining channel must not re-enter delivered past (D31) was still *received*, and
-            // its metadata may carry causes this process has never seen.
             causes.byChannel().forEach(this::mergeFrontier);
         }
 
         Long fed = fedUpTo.get(channel);
         if (fed != null && message.position() <= fed && !sabotage.has(Sabotage.Mode.REDELIVER_REFEEDS)) {
             if (fed == FED_TO_END_OF_CHANNEL) {
-                // A dead channel never legitimately feeds again — topic IDs are not reused — so this is not a
-                // replay of a delivered past but evidence the substrate or facts were wrong. Fail loudly.
                 throw new ParsleyFailClosedException(Reason.OUT_OF_ORDER_FEED,
                         "process " + processName + ": fed " + channel + "@" + message.position()
                                 + " on a channel recorded as no longer existing");
@@ -241,8 +250,7 @@ public final class ProcessEngine {
                         "process " + processName + ": fed " + channel + "@" + message.position()
                                 + " which this execution already covered as fed-or-never-arriving (fedUpTo=" + fed + ")");
             }
-            // Below the session floor: a committed step of an earlier execution already consumed this position, so
-            // it was delivered then; delivering again would breach SPEC Safety 2, which binds across restarts.
+
             return ReceiveOutcome.DUPLICATE_DROPPED;
         }
 
@@ -266,11 +274,9 @@ public final class ProcessEngine {
             }
         }
         if (!present) {
-            return Causes.none(); // SPEC Safety 6: no metadata, no causes.
+            return Causes.none();
         }
         if (headerValue != null && headerValue.length > metadataBudgetBytes) {
-            // SPEC Operational 4: refuse metadata beyond the configured budget on receipt, with parsley's own
-            // diagnosis, before it merges into the frontier and rides toward the substrate's record-size wall.
             throw new ParsleyFailClosedException(Reason.METADATA_BUDGET_EXCEEDED,
                     "process " + processName + ": " + message.channel() + "@" + message.position()
                             + " carries " + headerValue.length + " bytes of causal metadata; the configured budget"
@@ -292,17 +298,18 @@ public final class ProcessEngine {
     }
 
     /**
-     * Ingest reported position facts. Order of operations matters: the read-position report is applied first — a
-     * reported position covers everything below it as fed-or-never-arriving, so the truncation check must compare
-     * the earliest retained position against the state *including* this batch's report, or a retention pass over an
-     * already-covered never-yielding run would fail closed spuriously (and permanently, since restarts replay the
-     * same facts). Pruning never touches a cause above the reported earliest retained position.
+     * Takes the broker's current view of the channels this process reads.
+     *
+     * <p>Facts are what let a channel settle past positions that will never yield a message,
+     * such as those consumed by an aborted transaction. Without them a process holding for a
+     * cause on an idle channel could not tell whether the wait would end.
+     *
+     * @param facts the broker's view
+     * @throws ParsleyFailClosedException if positions were discarded before this process read
+     *         them, if a received topic was recreated or deleted while its messages remain
+     *         held, or if a channel left the received set holding messages
      */
     public void onFacts(PositionFacts facts) {
-        // SPEC Assumption 2: a topic deleted and recreated under the same name is a different channel. For a
-        // received channel this is checked before anything else: the feed path subscribes by name, so from the
-        // moment of recreation it may carry the new channel's records under the old identity — the only safe
-        // response is to stop delivering, mid-run, not merely at the next restart (D33 covers restarts).
         if (!sabotage.has(Sabotage.Mode.IGNORE_RECREATION)) {
             for (ChannelId channel : facts.recreatedChannels()) {
                 if (receivedChannels.contains(channel)) {
@@ -323,11 +330,6 @@ public final class ProcessEngine {
             if (receivedChannels.contains(channel)) {
                 ArrayDeque<Hold> channelHeld = held.get(channel);
                 if (channelHeld != null && !channelHeld.isEmpty() && !sabotage.has(Sabotage.Mode.DELIVER_PAST_DEAD_HOLDS)) {
-                    // SPEC Safety 9: this process retains received-but-undelivered messages from a channel that no
-                    // longer exists. Upstream processes that delivered from it may legally discard its causes from
-                    // their metadata the moment they learn of the death (Structural 13), so arriving effects can no
-                    // longer be ordered against the held messages — their place in causal order cannot be
-                    // preserved locally, and delivering past them is the one thing Safety 9 forbids. Stop.
                     throw new ParsleyFailClosedException(Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES,
                             "process " + processName + ": " + channelHeld.size() + " received message(s) from "
                                     + channel + " remain undelivered but the channel's topic no longer exists;"
@@ -335,8 +337,7 @@ public final class ProcessEngine {
                                     + " The deletion breached the deletion-hygiene assumption (SPEC Assumption 17);"
                                     + " an operator must reset this process's state deliberately to proceed.");
                 }
-                // With nothing held from it, the dead channel only settles: the topic is gone and topic IDs are
-                // never reused, so every remaining position will never yield a message.
+
                 advanceFedUpTo(channel, FED_TO_END_OF_CHANNEL);
             }
         }
@@ -345,22 +346,17 @@ public final class ProcessEngine {
             Long base = fedUpTo.get(channel);
             if (logStart != null && base != null && base != FED_TO_END_OF_CHANNEL && logStart > base + 1
                     && !sabotage.has(Sabotage.Mode.IGNORE_TRUNCATION)) {
-                // Positions in (base, logStart) were discarded by the substrate before this process covered them;
-                // they cannot be treated as positions that never carried messages (SPEC Safety 8).
                 throw new ParsleyFailClosedException(Reason.POSITIONS_DISCARDED_UNREAD,
                         "process " + processName + ": " + channel + " earliest retained position " + logStart
                                 + " is beyond this process's covered position " + base);
             }
         }
 
-        // SPEC Structural 13: discard exactly the causes that can no longer matter — position below the channel's
-        // earliest retained position, or channel no longer existing. Stale facts under-prune, never over-prune.
         List<ChannelId> prune = null;
         for (var entry : frontier.entrySet()) {
             ChannelId channel = entry.getKey();
             Long logStart = facts.logStart().get(channel);
-            // A recreated topic's old channel is dead by affirmative evidence: its name now denotes another id,
-            // and topic IDs are never reused, so the old incarnation cannot come back.
+
             boolean dead = facts.deadChannels().contains(channel) || facts.recreatedChannels().contains(channel);
             if (dead || (logStart != null && entry.getValue() < logStart)) {
                 if (prune == null) {
@@ -375,8 +371,7 @@ public final class ProcessEngine {
                 store.delete(StoreCodec.channelKey(StoreCodec.TAG_FRONTIER, channel));
             }
         }
-        // Delivered-past entries age out on the same terms: below the earliest retained position a joining channel
-        // could not read them anyway, and a dead channel's identity is never reused.
+
         List<ChannelId> pastPrune = null;
         for (var entry : deliveredPast.entrySet()) {
             ChannelId channel = entry.getKey();
@@ -411,23 +406,25 @@ public final class ProcessEngine {
             frontier.put(channel, position);
             store.put(StoreCodec.channelKey(StoreCodec.TAG_FRONTIER, channel), StoreCodec.encodeLong(position));
         }
-        // SPEC Operational 4 at the point where the bounded quantity actually grows: the frontier is a union
-        // across everything received and delivered, so per-message header checks alone would let a process that
-        // only receives balloon its persisted frontier past the budget without ever refusing (D52 promises it
-        // stops attributably). The size is affine in the entry count, so this costs no encode.
+
         if (CausesCodec.encodedSize(frontier.size()) > metadataBudgetBytes) {
             throw new ParsleyFailClosedException(Reason.METADATA_BUDGET_EXCEEDED,
                     "process " + processName + ": the causal frontier reached " + CausesCodec.encodedSize(frontier.size())
                             + " bytes (" + frontier.size() + " channels); the configured budget is "
                             + metadataBudgetBytes + " bytes. The frontier's growth law is documented in"
-                            + " docs/DESIGN.md §2.");
+                            + " docs/model.md.");
         }
     }
 
     /**
-     * The next message that may be delivered, or empty when every held head is blocked. Deterministic: channels are
-     * scanned in their total order, so identical state yields identical delivery order across executions
-     * (SPEC 2-safety 2). Only channel heads are offered to the decision (SPEC Safety 3).
+     * Offers the next message whose causes are all satisfied.
+     *
+     * <p>Only the head of each channel's hold-back buffer is considered, which preserves the
+     * order the channel itself established. A host calls this repeatedly until it returns
+     * empty.
+     *
+     * @return the next deliverable message, or empty when every channel is blocked or idle
+     * @see #markDelivered(ChannelId, long)
      */
     public Optional<DeliverableMessage> nextDeliverable() {
         Deliverability.SettledView settled = settledView();
@@ -469,8 +466,17 @@ public final class ProcessEngine {
     }
 
     /**
-     * Record that the message returned by {@link #nextDeliverable()} is being delivered in this step. From this point
-     * its delivery happened-before every send of this process, so it joins the causal frontier.
+     * Records that a message offered by {@link #nextDeliverable()} was delivered.
+     *
+     * <p>Delivery advances the frontier, and it advances the delivered causal past, which is
+     * the clamp a channel joining the received set later must start above. Both are needed:
+     * the frontier governs what this process may express, and the delivered past governs what
+     * a later joiner may deliver behind effects already delivered.
+     *
+     * @param channel  the channel the message arrived on
+     * @param position its position within that channel
+     * @throws IllegalStateException if {@code position} is not the head of that channel's
+     *         hold-back buffer
      */
     public void markDelivered(ChannelId channel, long position) {
         ArrayDeque<Hold> channelHeld = held.get(channel);
@@ -489,8 +495,7 @@ public final class ProcessEngine {
             store.delete(StoreCodec.heldKey(channel, position));
         }
         mergeFrontier(channel, position);
-        // The delivered causal past now covers this message and everything its metadata expressed; a channel joining
-        // the received set later must start above this (SPEC Structural 16, Safety 1 across the lifetime).
+
         mergeDeliveredPast(channel, position);
         if (delivered != null) {
             delivered.causes.byChannel().forEach(this::mergeDeliveredPast);
@@ -505,9 +510,14 @@ public final class ProcessEngine {
         }
     }
 
-    /** The causes every emission of this step must express: the current causal frontier, canonically encoded.
-     * Fails closed when the encoding exceeds the metadata budget (SPEC Operational 4): the alternative is the
-     * substrate's record-size wall, a permanent stop with no parsley diagnosis. */
+    /**
+     * The metadata every message sent by this step must carry.
+     *
+     * @return the encoded frontier, for {@link CausesCodec#HEADER_KEY}
+     * @throws ParsleyFailClosedException if the encoded frontier exceeds the configured
+     *         budget, which stops the process rather than letting the message meet the
+     *         broker's record-size limit with no diagnosis
+     */
     public byte[] causesHeaderForEmission() {
         byte[] encoded = CausesCodec.encode(frontierSnapshot());
         if (encoded.length > metadataBudgetBytes) {
@@ -515,23 +525,34 @@ public final class ProcessEngine {
                     "process " + processName + ": expressing the causal frontier needs " + encoded.length
                             + " bytes (" + frontier.size() + " channels); the configured budget is "
                             + metadataBudgetBytes + " bytes. The frontier's growth law is documented in"
-                            + " docs/DESIGN.md §2.");
+                            + " docs/model.md.");
         }
         return encoded;
     }
 
-    /** The number of channels the causal frontier currently names (SPEC Operational 5). */
+    /**
+     * Returns how many channels the frontier names.
+     *
+     * @return how many channels the frontier names
+     */
     public int frontierSize() {
         return frontier.size();
     }
 
-    /** The encoded size, in bytes, of the metadata every emission currently carries (SPEC Operational 5).
-     * Computed, not encoded: the codec's size is affine in the entry count, and this runs on the stream thread
-     * every punctuation. */
+    /**
+     * Returns the encoded width of the frontier, in bytes.
+     *
+     * @return the encoded width of the frontier, in bytes
+     */
     public int frontierBytes() {
         return CausesCodec.encodedSize(frontier.size());
     }
 
+    /**
+     * Returns the frontier as it stands, for diagnostics and tests.
+     *
+     * @return the frontier as it stands, for diagnostics and tests
+     */
     public Causes frontierSnapshot() {
         if (sabotage.has(Sabotage.Mode.OVEREXPRESS)) {
             TreeMap<ChannelId, Long> inflated = new TreeMap<>(frontier);
@@ -546,9 +567,10 @@ public final class ProcessEngine {
     }
 
     /**
-     * Persist any held messages received in this step and not delivered within it. The adapter must call this before
-     * the step can commit — at the end of every {@code process()} — so that a committed read position never covers a
-     * message the store does not hold (SPEC Liveness 5).
+     * Persists every held message not yet written.
+     *
+     * <p>A host calls this before committing, so that a message held at the moment of a crash
+     * is still held after the restart.
      */
     public void flushHolds() {
         if (sabotage.has(Sabotage.Mode.DROP_HELD)) {
@@ -560,7 +582,7 @@ public final class ProcessEngine {
                     store.put(StoreCodec.heldKey(channel, hold.position),
                             StoreCodec.encodeHeld(hold.timestamp, hold.key, hold.value, hold.headers, hold.causes));
                     hold.persisted = true;
-                    // The body is reloaded from the store at delivery; free the memory.
+
                     hold.key = null;
                     hold.value = null;
                     hold.headers = null;
@@ -569,18 +591,33 @@ public final class ProcessEngine {
         });
     }
 
-    // Observability for tests and diagnostics.
-
+    /**
+     * Reports how far one channel has been fed.
+     *
+     * @param channel the channel to report on
+     * @return the highest position fed for that channel, or empty when none has been
+     */
     public OptionalLong fedUpTo(ChannelId channel) {
         Long fed = fedUpTo.get(channel);
         return fed == null ? OptionalLong.empty() : OptionalLong.of(fed);
     }
 
+    /**
+     * Reports the depth of one channel's hold-back buffer.
+     *
+     * @param channel the channel to report on
+     * @return how many messages are held on that channel
+     */
     public int heldCount(ChannelId channel) {
         ArrayDeque<Hold> channelHeld = held.get(channel);
         return channelHeld == null ? 0 : channelHeld.size();
     }
 
+    /**
+     * Returns how many messages are held across every channel.
+     *
+     * @return how many messages are held across every channel
+     */
     public int heldCountTotal() {
         return held.values().stream().mapToInt(ArrayDeque::size).sum();
     }

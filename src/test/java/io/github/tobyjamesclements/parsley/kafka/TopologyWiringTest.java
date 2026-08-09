@@ -42,13 +42,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Kafka Streams wiring, driven through TopologyTestDriver: byte-exact key/value pass-through, the causal header on
- * the wire, cross-channel holds at the processor level, punctuator fact ingestion, store persistence across a
- * restart, and step-failing rejections. Protocol-level behaviour under crashes and transactions is covered by the
- * simulation suite; broker-level behaviour by the integration tests.
+ * Establishes the Kafka Streams wiring through {@code TopologyTestDriver}.
+ *
+ * <p>Covers the header on the wire, byte-exact pass-through of key and value, holding across
+ * channels, fact ingestion, and each condition that fails a step.
  */
 class TopologyWiringTest {
-
     private static final UUID IN1_ID = new UUID(100, 1);
     private static final UUID IN2_ID = new UUID(100, 2);
     private static final UUID OUT_ID = new UUID(100, 3);
@@ -59,7 +58,6 @@ class TopologyWiringTest {
     private static final ChannelId IN1 = new ChannelId(IN1_ID, 0);
     private static final ChannelId IN2 = new ChannelId(IN2_ID, 0);
 
-    /** A controllable facts source standing in for the admin client. */
     static final class FakeFacts implements FactsSource {
         volatile PositionFacts facts = PositionFacts.EMPTY;
 
@@ -100,9 +98,7 @@ class TopologyWiringTest {
         return driver.createInputTopic(topic, new ByteArraySerializer(), new ByteArraySerializer());
     }
 
-    /** ASSESSMENT 1.13/D56: forwarding the received headers on an emission is a natural pattern; the reserved
-     * transport header is parsley's, filtered out of the seam's view, so the pattern must simply work — and the
-     * application header must travel while the emission still carries fresh causal metadata of its own. */
+    /** Forwarding received headers on an emission works. */
     @Test
     void forwardingReceivedHeadersOnAnEmissionWorks() throws Exception {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
@@ -129,8 +125,7 @@ class TopologyWiringTest {
                 "the emission's causal metadata is parsley's own stamp, not the forwarded copy");
     }
 
-    /** ASSESSMENT 3.7: a payload the application's own serde cannot decode fails the step with parsley's reason
-     * (D13) — skipping would deliver past the message (SPEC Safety 3). */
+    /** Undecodable application payload fails the step. */
     @Test
     void undecodableApplicationPayloadFailsTheStep() {
         org.apache.kafka.common.serialization.Serde<String> poison =
@@ -154,6 +149,7 @@ class TopologyWiringTest {
                 refusal.reason());
     }
 
+    /** Key value bytes pass through untouched and causes ride a header. */
     @Test
     void keyValueBytesPassThroughUntouchedAndCausesRideAHeader() throws Exception {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
@@ -173,16 +169,14 @@ class TopologyWiringTest {
                 driver.createOutputTopic("out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
         TestRecord<byte[], byte[]> record = outTopic.readRecord();
 
-        // Safety 4/5: the record's key and value are exactly what the application's serializer produces — a reader
-        // with the application's codecs alone decodes them; nothing is wrapped or prefixed.
         assertArrayEquals(new StringSerializer().serialize("out", "k1"), record.key());
         assertArrayEquals(new StringSerializer().serialize("out", "v1!"), record.value());
 
-        // The causal metadata rides in the reserved header, expressing the delivered cause (in1@0).
         Causes causes = CausesCodec.decode(record.headers().lastHeader(CausesCodec.HEADER_KEY).value());
         assertEquals(Causes.of(Map.of(IN1, 0L)), causes);
     }
 
+    /** Effect arriving before its cause is held across channels. */
     @Test
     void effectArrivingBeforeItsCauseIsHeldAcrossChannels() {
         List<String> delivered = new ArrayList<>();
@@ -198,6 +192,7 @@ class TopologyWiringTest {
         assertEquals(List.of("A", "B"), delivered);
     }
 
+    /** Punctuator report ingestion frees messages whose cause never arrives. */
     @Test
     void punctuatorReportIngestionFreesMessagesWhoseCauseNeverArrives() {
         List<String> delivered = new ArrayList<>();
@@ -211,16 +206,12 @@ class TopologyWiringTest {
         driver.advanceWallClockTime(Duration.ofMillis(200));
         assertEquals(List.of(), delivered, "positions 0..5 of in1 are not yet known to be empty");
 
-        // The host's read position report says in1 has nothing before position 6 left to feed.
         facts.facts = new PositionFacts(Map.of(IN1, 6L), Map.of(), Set.of());
         driver.advanceWallClockTime(Duration.ofMillis(200));
         assertEquals(List.of("B"), delivered, "the report, not a message and not time, frees the hold");
     }
 
-    // Restart persistence of held messages cannot be shown with TopologyTestDriver — its close() wipes local state
-    // by design — and is covered by the simulation suite (heldMessageIsDeliveredAfterRestart) and the broker
-    // integration test instead.
-
+    /** Undecodable metadata fails the step. */
     @Test
     void undecodableMetadataFailsTheStep() {
         ProcessDefinition definition = twoInputRecorder(new ArrayList<>());
@@ -234,6 +225,7 @@ class TopologyWiringTest {
                 () -> "expected UNDECODABLE_METADATA in " + thrown);
     }
 
+    /** Emission to undeclared channel fails the step. */
     @Test
     void emissionToUndeclaredChannelFailsTheStep() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
@@ -241,7 +233,7 @@ class TopologyWiringTest {
         ProcessDefinition definition = ProcessDefinition.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(undeclared, "k", "v").build())
-                .build(); // note: no .sends(...)
+                .build();
         newDriver(definition, new FakeFacts());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
@@ -250,6 +242,7 @@ class TopologyWiringTest {
                 () -> "expected EMISSION_TO_UNDECLARED_CHANNEL in " + thrown);
     }
 
+    /** Application state reads see earlier writes and tombstones pass through. */
     @Test
     void applicationStateReadsSeeEarlierWritesAndTombstonesPassThrough() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
@@ -271,7 +264,7 @@ class TopologyWiringTest {
 
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "x".getBytes()));
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "y".getBytes()));
-        input("in1").pipeInput(new TestRecord<>("k".getBytes(), (byte[]) null)); // a tombstone: no value sent
+        input("in1").pipeInput(new TestRecord<>("k".getBytes(), (byte[]) null));
 
         TestOutputTopic<byte[], byte[]> outTopic =
                 driver.createOutputTopic("out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
@@ -280,10 +273,9 @@ class TopologyWiringTest {
         assertNull(outTopic.readRecord().value(), "no value required where the application sent none");
     }
 
+    /** Stamped causes relay across processes and compress. */
     @Test
     void stampedCausesRelayAcrossProcessesAndCompress() throws Exception {
-        // First process delivers in1@0 and emits to out; run its output through a second driver's input to check
-        // what a downstream parsley process learns from the wire alone.
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
         ProcessDefinition upstream = ProcessDefinition.named("up")
@@ -305,11 +297,9 @@ class TopologyWiringTest {
                 "two causes on one channel compress to the single greater position");
     }
 
+    /** Self channel topology is accepted. */
     @Test
     void selfChannelTopologyIsAccepted() {
-        // SPEC Structural 2: a channel from a process to itself means the same topic is both a source and a sink of
-        // one topology. This pins the adapter's acceptance of that arrangement; the delivery semantics of the loop
-        // are covered by the simulation suite.
         Channel<String, String> loop = Channel.of("loop", Serdes.String(), Serdes.String());
         ProcessDefinition definition = ProcessDefinition.named("p")
                 .receives(loop, (delivery, state) -> delivery.value().length() < 3
@@ -325,9 +315,9 @@ class TopologyWiringTest {
         assertArrayEquals("vx".getBytes(), out.readRecord().value());
     }
 
+    /** Several send channels and several stores wire independently. */
     @Test
     void severalSendChannelsAndSeveralStoresWireIndependently() {
-        // SPEC Structural 18: a process may send to any number of channels and hold any number of stores.
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
         Channel<String, String> out2 = Channel.of("in2", Serdes.String(), Serdes.String());

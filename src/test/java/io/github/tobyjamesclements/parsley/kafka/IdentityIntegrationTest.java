@@ -56,17 +56,14 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/**
- * Channel identity against a real KRaft broker with a real {@code StandardAuthorizer} (ASSESSMENT 1.1–1.3): a topic
- * recreated under its name mid-run stops the process; an authorization denial masked by the broker as unknown-topic
- * is treated as denial, not death — a frontier cause survives it and a held message is not released by it; and a
- * recreation across a restart is diagnosed as the identity change it is, never as a declaration change. The cluster
- * allows everything unless an ACL exists ({@code allow.everyone.if.no.acl.found}), so only the deliberately denied
- * topics behave differently from the main integration suite's cluster.
- */
 @Timeout(value = 300, unit = TimeUnit.SECONDS)
+/**
+ * Establishes how topic identity is handled against a real broker.
+ *
+ * <p>Covers recreation during a run and across a restart, and authorization denial, which is
+ * treated as denial rather than as death.
+ */
 class IdentityIntegrationTest {
-
     private static KafkaClusterTestKit cluster;
     private static Admin admin;
 
@@ -104,8 +101,6 @@ class IdentityIntegrationTest {
             cluster.close();
         }
     }
-
-    // ------------------------------------------------------------------ helpers
 
     private static void createTopics(String... names) throws Exception {
         List<NewTopic> topics = new ArrayList<>();
@@ -220,13 +215,7 @@ class IdentityIntegrationTest {
         return causes;
     }
 
-    // ------------------------------------------------------------------ tests
-
-    /** ASSESSMENT 1.1: delete and recreate a received topic while the process runs. The feed path subscribes by
-     * name, so without the mid-run identity check the new incarnation's records are adopted under the old channel
-     * (observed live: earlier records silently dropped as duplicates, later ones delivered with the dead topic's
-     * id in their emissions, {@code healthy()} true throughout). The facts round must catch the recreation and
-     * stop the process instead. */
+    /** Mid run recreation of a received topic stops the process. */
     @Test
     void midRunRecreationOfAReceivedTopicStopsTheProcess() throws Exception {
         createTopics("rr-in");
@@ -249,8 +238,7 @@ class IdentityIntegrationTest {
             admin.deleteTopics(List.of("rr-in")).all().get(30, TimeUnit.SECONDS);
             Thread.sleep(200);
             createTopics("rr-in");
-            // Enough records that the old read position lands inside the new incarnation's log — the shape that
-            // survives every consumer-level guard and must be caught by the identity check alone.
+
             for (int i = 0; i < 8; i++) {
                 produce("rr-in", "k", "v" + i);
             }
@@ -259,19 +247,13 @@ class IdentityIntegrationTest {
                     () -> !parsley.healthy(), Duration.ofSeconds(30));
             assertTrue(delivered.stream().filter(v -> v.startsWith("m")).count() == 5,
                     "the old incarnation's deliveries stand");
-            // SPEC Operational 1 (ASSESSMENT 1.10): the failure is readable programmatically. Which failure wins
-            // the race varies — the identity refusal from the facts round, or the foreign fallout of the broker
-            // expunging the group mid-recreation — so this asserts readability; the deliberate-refusal reading is
-            // pinned deterministically by deliberateRefusalIsReadableInTheStatusSurface.
+
             await("the failure to be recorded in the status surface",
                     () -> parsley.status().get("rr").failureDetail().isPresent(), Duration.ofSeconds(30));
         }
     }
 
-    /** ASSESSMENT 1.10 / SPEC Operational 1: a deliberate refusal — here the metadata budget failing closed on
-     * receipt (D52) — is readable programmatically with its reason, distinguishable from a transient failure.
-     * (The budget refusal is the deterministic choice: refusals tied to topic deletion race Kafka Streams' own
-     * rebalance-on-metadata-change death, which usually wins with a foreign diagnosis.) */
+    /** Deliberate refusal is readable in the status surface. */
     @Test
     void deliberateRefusalIsReadableInTheStatusSurface() throws Exception {
         createTopics("sr-in", "sr-x");
@@ -289,7 +271,7 @@ class IdentityIntegrationTest {
         try (Parsley parsley = Parsley.start(tinyBudget, p)) {
             Map<ChannelId, Long> big = new java.util.TreeMap<>();
             for (int partition = 0; partition < 5; partition++) {
-                big.put(new ChannelId(xId, partition), 1L); // 5 entries = 145 bytes, over the 64-byte budget
+                big.put(new ChannelId(xId, partition), 1L);
             }
             produce("sr-in", "k", "H", causesHeader(big));
 
@@ -306,9 +288,7 @@ class IdentityIntegrationTest {
         }
     }
 
-    /** ASSESSMENT 1.2, first leg: a DENY-Describe ACL makes the broker answer describe-by-id with unknown-topic
-     * (masking existence) while describe-by-name answers with an authorization error. Denial is not death: the
-     * frontier cause must survive arbitrarily many masked rounds and still be expressed. */
+    /** Denied describe on a frontier topic does not prune its cause. */
     @Test
     void deniedDescribeOnAFrontierTopicDoesNotPruneItsCause() throws Exception {
         createTopics("acl-in", "acl-out", "acl-x");
@@ -328,7 +308,7 @@ class IdentityIntegrationTest {
                     "the injected cause must ride the frontier");
 
             denyDescribe("acl-x");
-            // Far beyond the dead-confirmation window (3 × 500 ms): every masked round must count as denial.
+
             Thread.sleep(4_000);
             produce("acl-in", "k", "second");
             await("the second emission", () -> emittedCauses("acl-out").size() >= 2, Duration.ofSeconds(60));
@@ -341,10 +321,7 @@ class IdentityIntegrationTest {
         }
     }
 
-    /** ASSESSMENT 1.2, received-channel leg (the open question the fix must settle): the same masking on a
-     * received topic must not drive its fed-or-never frontier to the end-of-channel sentinel — a held message
-     * whose cause names positions that may still arrive must stay held through the denial, and deliver once the
-     * positions really arrive. */
+    /** Denied describe on a received topic does not release held messages. */
     @Test
     void deniedDescribeOnAReceivedTopicDoesNotReleaseHeldMessages() throws Exception {
         createTopics("aclr-in", "aclr-x");
@@ -368,8 +345,6 @@ class IdentityIntegrationTest {
             produce("aclr-x", "k", "x0");
             await("x0 to deliver", () -> delivered.contains("x0"), Duration.ofSeconds(60));
 
-            // R waits on aclr-x@3, which does not exist yet. Keep fetching legal while describes are denied:
-            // an explicit READ allow, with DENY taking precedence over the implied describe only.
             allow("aclr-x", AclOperation.READ);
             allow("aclr-x", AclOperation.WRITE);
             denyDescribe("aclr-x");
@@ -380,7 +355,7 @@ class IdentityIntegrationTest {
                     "a denial-masked describe must not settle positions that may still arrive");
             assertTrue(parsley.healthy(), "the process holds and waits; denial is not its failure");
 
-            dropAcls("aclr-x"); // no ACLs left: allow-everyone applies again
+            dropAcls("aclr-x");
             produce("aclr-x", "k", "x1");
             produce("aclr-x", "k", "x2");
             produce("aclr-x", "k", "x3");
@@ -394,10 +369,7 @@ class IdentityIntegrationTest {
         }
     }
 
-    /** ASSESSMENT 1.3: stop with a held message on topic T, delete and recreate T under the same name, restart
-     * with the unchanged declaration. The held entries carry the old identity, so a naive held-versus-declared
-     * comparison misdiagnoses this as a declaration change; the accurate diagnosis is the identity change, with
-     * D33's deliberate-reset remedy. */
+    /** Recreation across a restart is diagnosed as identity change not removal. */
     @Test
     void recreationAcrossARestartIsDiagnosedAsIdentityChangeNotRemoval() throws Exception {
         createTopics("md-in", "md-x");
@@ -411,8 +383,6 @@ class IdentityIntegrationTest {
                 .build();
 
         try (Parsley parsley = Parsley.start(config("md"), p)) {
-            // R is held: its cause names md-x@5, which never arrives. Its read position still commits — that is
-            // the point of hold persistence — so the held entry, under md-in's current identity, outlives the stop.
             produce("md-in", "k", "R", causesHeader(Map.of(xChannel, 5L)));
             awaitCommitted("md-md", "md-in", 1);
         }
