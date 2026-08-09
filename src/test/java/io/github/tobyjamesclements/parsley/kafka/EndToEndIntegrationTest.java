@@ -1,7 +1,7 @@
 package io.github.tobyjamesclements.parsley.kafka;
 
-import kafka.testkit.KafkaClusterTestKit;
-import kafka.testkit.TestKitNodes;
+import org.apache.kafka.common.test.KafkaClusterTestKit;
+import org.apache.kafka.common.test.TestKitNodes;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.RecordsToDelete;

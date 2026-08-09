@@ -2120,3 +2120,60 @@ so it reaches no consumer. The consumer-facing dependency set is `kafka-streams`
 
 The 3.9.x line is a maintenance branch. Whatever argument existed for moving to 4.x still
 applies, and this entry neither makes nor forecloses it.
+
+### D70 — Kafka 4.3.1 (supersedes D69 and D19's pin)
+
+**Context**
+
+D69 took the 3.9.2 patch release for CVE-2026-35554 and left the move to 4.x open as a
+separate question. This entry settles it. 4.3.1 is the current 4.x release and carries that
+fix, 4.2.0 being its earliest 4.x fix version.
+
+**Decision**
+
+Move to 4.3.1. The suite is green at 418 tests against a real embedded 4.3.1 broker. Three
+things had to change, none of them in the protocol or its core.
+
+**The embedded broker moved.** `kafka.testkit.KafkaClusterTestKit` and `TestKitNodes` are
+gone in 4.x, replaced by `org.apache.kafka.common.test` in the `kafka-test-common-runtime`
+artifact. That artifact brings the broker transitively, so the five declarations the 3.9.x
+test kit needed collapse to one: `kafka_2.13`, its test classifier, and the test classifiers
+of `kafka-server-common` and `kafka-clients` are all removed. Each removal was tested by
+deletion against the integration suite rather than assumed.
+
+**The JUnit platform had to align.** `kafka-test-common-runtime` brings
+`junit-platform-launcher` 1.13.1, and Jupiter 5.11.4 brings `junit-platform-engine` and
+`junit-platform-commons` 1.11.4. A launcher newer than its engine fails the forked JVM before
+any test runs, on `OutputDirectoryProvider`. Jupiter moves to 5.13.1, whose platform is
+exactly 1.13.1.
+
+**Avro had to stop dictating Jackson.** `avro` 1.12.0 depends on `jackson-core` 2.17.2, and
+being a direct dependency it won on nearest-first over the 2.21.2 the broker's Jackson stack
+expects. log4j2 parses its configuration with Jackson, so the broker died in static
+initialisation with `YAMLParser._updateToken` missing, surfacing as an unrelated-looking
+`Could not initialize class kafka.utils.Log4jControllerRegistration$`. `jackson-core` is now
+excluded from `avro`, so the broker's version governs and keeps governing as Kafka moves.
+
+**Effect on the transitive set**
+
+* `snappy-java` 1.1.10.5 to 1.1.10.7
+* `zstd-jni` 1.5.6-4 to 1.5.6-10
+* `commons-io` 2.14.0 to 2.16.1
+* `commons-compress` 1.26.2, unchanged, still test scope
+* `rocksdbjni` 7.9.2 to 10.1.3, which is consumer-facing
+
+The consumer-facing set stays four artifacts: `kafka-streams`, `kafka-clients`, `rocksdbjni`,
+`slf4j-api`.
+
+**Alternatives**
+
+* Stay on 3.9.2. Rejected: 3.9.x is a maintenance branch, and the tree is now demonstrated
+  green on 4.x against a real broker of that version, which was the only real unknown.
+* Keep `kafka_2.13` declared alongside `kafka-test-common-runtime` as insurance. Rejected: it
+  is unused, and an unused artifact is a version to keep in step for no benefit. Its absence
+  fails loudly if the test kit ever needs it again.
+
+**Cost**
+
+The broker floor rises with the client. `EVIDENCE.md` row 1 already records that no executable
+check distinguishes broker versions below the floor, and that remains true.

@@ -39,8 +39,8 @@
   <properties>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <maven.compiler.release>21</maven.compiler.release>
-    <kafka.version>3.9.2</kafka.version>
-    <junit.version>5.11.4</junit.version>
+    <kafka.version>4.3.1</kafka.version>
+    <junit.version>5.13.1</junit.version>
     <slf4j.version>2.0.16</slf4j.version>
   </properties>
 
@@ -78,6 +78,16 @@
       <artifactId>avro</artifactId>
       <version>1.12.0</version>
       <scope>test</scope>
+      <!-- Avro pins an older jackson-core than the rest of the Jackson stack the embedded
+           broker pulls in, and being a direct dependency it wins on nearest-first. That
+           combination breaks log4j2's YAML config parsing at broker startup. Excluded so the
+           broker's own Jackson version governs, and keeps governing as Kafka moves. -->
+      <exclusions>
+        <exclusion>
+          <groupId>com.fasterxml.jackson.core</groupId>
+          <artifactId>jackson-core</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <groupId>org.slf4j</groupId>
@@ -88,29 +98,8 @@
     <!-- Embedded KRaft broker for integration tests -->
     <dependency>
       <groupId>org.apache.kafka</groupId>
-      <artifactId>kafka_2.13</artifactId>
+      <artifactId>kafka-test-common-runtime</artifactId>
       <version>${kafka.version}</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.kafka</groupId>
-      <artifactId>kafka_2.13</artifactId>
-      <version>${kafka.version}</version>
-      <classifier>test</classifier>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.kafka</groupId>
-      <artifactId>kafka-server-common</artifactId>
-      <version>${kafka.version}</version>
-      <classifier>test</classifier>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.apache.kafka</groupId>
-      <artifactId>kafka-clients</artifactId>
-      <version>${kafka.version}</version>
-      <classifier>test</classifier>
       <scope>test</scope>
     </dependency>
   </dependencies>

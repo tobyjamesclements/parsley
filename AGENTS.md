@@ -8,7 +8,7 @@ topic-partition and orders nothing between partitions. Parsley supplies the miss
 cross-channel guarantee: **if message A is a cause of message B, every process that delivers
 both delivers A first**, across restarts and for the whole lifetime of a process.
 
-Single Maven module, Java 21, Kafka 3.9.2, packages under
+Single Maven module, Java 21, Kafka 4.3.1, packages under
 `io.github.tobyjamesclements.parsley`. `kafka-clients` and `kafka-streams` are the only
 runtime dependencies. This tree is `io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT`.
 
