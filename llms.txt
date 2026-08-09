@@ -1,61 +1,45 @@
 # Parsley
 
-> Causal delivery order for Kafka stream processing: a record reaches your processor only
-> after every cause your processor consumes has been delivered locally. When A causally
-> precedes B, every processor subscribed to both of their topics processes A before B.
-> Causal safety is inviolable: Parsley blocks or fails, it never reorders, drops, or guesses
-> on a timeout.
+> Causal delivery order for Kafka Streams processors. If message A is a cause of message B,
+> every process that delivers both delivers A first, across restarts and for the whole
+> lifetime of a process. Causal safety is inviolable: a process blocks or stops, and never
+> reorders, drops, or resolves a wait by timeout.
 
-Parsley is a Java 21 library (Maven artifact, MIT license) for Kafka Streams applications
-against brokers 3.7.0 or newer. The runtime dependencies are kafka-clients and kafka-streams,
-both inherited; only the Streams adapter touches kafka-streams, and an application using just
-the plain-client edge (CausalClock, CausalHeaders) can exclude it. The on-wire footprint is
-three record headers (`vc`, `vc-sender`, `vc-seq`) on the application's own records; there
-are no protocol records and plain consumers need no Parsley awareness. The primary
-correctness gate is a deterministic simulator with a ground-truth causal oracle, run by
-`mvn verify`. The full protocol is exercisable without a broker through
-`Parsley.testTopology()` and Kafka Streams' `TopologyTestDriver`.
+Parsley is a Java 21 library, MIT licensed, for Kafka Streams applications. The runtime
+dependencies are kafka-clients and kafka-streams. One declared process becomes one Kafka
+Streams application running under exactly_once_v2 and read_committed. The on-wire footprint
+is one record header, `parsley.causes`, on the application's own records. There are no
+protocol records, and plain consumers decode key and value with the application's own serdes
+alone.
+
+The delivery discipline is that of causal broadcast, indexed by channel rather than by
+process, over Lamport's happened-before relation. The correctness gate is a deterministic
+simulator checked against a happened-before oracle, run by `mvn verify`, together with
+integration tests against an embedded KRaft broker.
 
 This file describes version 0.2.0-SNAPSHOT, the Maven artifact
 `io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT`, resolved from the Central snapshots
 repository (https://central.sonatype.com/repository/maven-snapshots/). Every link below
-tracks the main branch, which matches 0.2.0-SNAPSHOT. On the versioned docs site these are
-the pages served by the default `latest` alias, also addressable as `dev`. The 0.1.0
-release, whose wire format and API differ from this version, stays addressable by its
-version number.
+tracks the main branch. The 0.1.0 release is a different implementation, whose API and wire
+format both differ from this version, and stays addressable by its version number.
 
-## Foundations
+## Overview
 
-- [The causal model](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/foundations/causal-model.md): the delivery invariant, its preconditions, and the happened-before relation on Kafka coordinates
-- [The delivery gate](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/foundations/delivery-gate.md): per-channel FIFO hold queues, the delivered frontier, and the release cascade
-- [Liveness](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/foundations/liveness.md): why every wait terminates, including under exactly-once transaction markers
+- [Overview](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/index.md): the guarantee, the scope, and the shape of an application
 
-## Design
+## Protocol
 
-- [Architecture](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/design/architecture.md): the functional core, the imperative edges, and the Kafka Streams adapter
-- [State and recovery](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/design/state.md): what persists, under which keys, and how crash recovery restores it
-- [Verification](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/design/verification.md): the simulator, the causal oracle, and the obligations the suite enforces
+- [Model](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/model.md): specification terms in Kafka, the causal frontier, pruning and growth
+- [Delivery](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/delivery.md): settled positions, the delivery decision, order and duplicates
+- [State](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/state.md): ordering state layout, persistence and recovery
+- [Wire format](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/wire-format.md): the frozen, normative definition of the causal metadata header
 
-## Guide
+## Operation
 
-- [Getting started](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/getting-started.md): the coordinates, the snapshot repository, what the published POM declares about itself, the inherited classpath with its licences and native binaries, and declaring topics, stages, and running an application
-- [Topology shapes](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/topologies.md): pipelines, fan-in, fan-out, and cycles
-- [Codecs and Avro](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/codecs.md): typed topics and schema integration
-- [Error handling](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/error-handling.md): the error model and the recovering decorators
-- [Ticks](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/ticks.md): runtime-emitted time records delivered through the causal gate
-- [The contract](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/expectations.md): what Parsley promises and what it requires of the application
-- [Diagnosing held records](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/diagnosing-holds.md): explainHolds(), the vc-hold-* warnings, and what each diagnosis means — never fixed by skipping or a timeout
-- [Verifying your application](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/verifying.md): ContractProbes — the contract's checkable clauses as test-time and cluster probes
-- [Plain clients](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/clients.md): stamping from plain producers with CausalClock and incremental adoption
+- [Failing closed](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/failing-closed.md): what stops a process, the blast radius, and every refusal reason
+- [Runtime](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/runtime.md): start sequence, configuration lockdown, facts ingestion, the handler seam
+- [API](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/api.md): the three packages and where the generated Javadoc lives
 
-## Reference
+## Verification
 
-- [Wire format](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/reference/wire-format.md): the record headers and state-store layouts; the compatibility surface
-- [Conformance kit](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/reference/conformance-kit.md): the simulator and oracle as a consumable test-jar; the host contract, and how a vendored copy or alternative host verifies itself
-- [Metrics](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/reference/metrics.md): the vc-metrics group, gauges, and counters
-- [README](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/README.md): the one-page overview
-
-## Optional
-
-- [Every document above, concatenated](https://tobyjamesclements.github.io/parsley/llms-full.txt): the full text in one fetch, if you would rather not follow the links individually
-- [Source repository](https://github.com/tobyjamesclements/parsley): single Maven module, one package; the public tier is codified in package-info.java
+- [Verification](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/verification.md): the test layers, the sabotage meta-tests, and the standard of evidence
