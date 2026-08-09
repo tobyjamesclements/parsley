@@ -1,0 +1,107 @@
+package io.github.tobyjamesclements.parsley.kafka;
+
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRebalanceListener;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+
+import java.time.Duration;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Set;
+
+/**
+ * A consumer that joins a group to read and write committed positions without consuming.
+ *
+ * <p>Kafka Streams commits positions through its own consumer, which is not reachable from a
+ * processor. Reading a group's committed positions therefore needs a separate member of that
+ * group. Assigned partitions are paused on assignment, so this member never fetches a record.
+ */
+final class GroupMembershipCommitter implements AutoCloseable {
+    private final KafkaConsumer<byte[], byte[]> consumer;
+
+    /**
+     * @param clientProperties base client properties, including bootstrap servers
+     * @param groupId          the group to join
+     */
+    GroupMembershipCommitter(Map<String, Object> clientProperties, String groupId) {
+        Map<String, Object> props = new HashMap<>(clientProperties);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+
+        props.putIfAbsent(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 10_000);
+        props.putIfAbsent(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 30_000);
+        this.consumer = new KafkaConsumer<>(props, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+    }
+
+    /**
+     * Joins the group and waits for an assignment.
+     *
+     * @param topics  the topics to subscribe to
+     * @param timeout how long to wait for the assignment
+     */
+    void join(Set<String> topics, Duration timeout) {
+        consumer.subscribe(topics, new ConsumerRebalanceListener() {
+            @Override
+            public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+                consumer.pause(partitions);
+                for (TopicPartition partition : partitions) {
+                    consumer.seek(partition, 0);
+                }
+            }
+
+            @Override
+            public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+            }
+        });
+        long deadline = System.nanoTime() + timeout.toNanos();
+        org.apache.kafka.common.errors.InconsistentGroupProtocolException lastProtocolConflict = null;
+        while (consumer.assignment().isEmpty()) {
+            if (System.nanoTime() - deadline > 0) {
+                throw new IllegalStateException("no assignment from group coordinator within " + timeout
+                        + (lastProtocolConflict == null
+                                ? ""
+                                : ": the group is held by protocol-incompatible members, a Kafka Streams"
+                                        + " lifetime of this process is running, or a closed one's members have"
+                                        + " not yet timed out"),
+                        lastProtocolConflict);
+            }
+            try {
+                consumer.poll(Duration.ofMillis(100));
+            } catch (org.apache.kafka.common.errors.InconsistentGroupProtocolException e) {
+                lastProtocolConflict = e;
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("interrupted while joining the group", interrupted);
+                }
+            }
+        }
+    }
+
+    /**
+     * @param partitions the partitions to query
+     * @return the group's committed position per partition, absent entries meaning none
+     */
+    Map<TopicPartition, OffsetAndMetadata> committed(Set<TopicPartition> partitions) {
+        return consumer.committed(partitions);
+    }
+
+    /**
+     * @param offsets the positions to commit for this group
+     */
+    void commit(Map<TopicPartition, OffsetAndMetadata> offsets) {
+        consumer.commitSync(offsets);
+    }
+
+    /** Leaves the group and closes the consumer. */
+    @Override
+    public void close() {
+        consumer.close();
+    }
+}

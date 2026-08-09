@@ -3,104 +3,115 @@
 Guidance for AI coding agents working on Parsley, or using it from an application. It is
 written to be read by any agent or assistant; nothing here is specific to one tool.
 
-Parsley provides causal delivery order for Kafka stream processing: a record reaches a
-processor only after every cause that processor consumes has been delivered locally. Single
-Maven module, single package `io.github.tobyjamesclements.parsley`, Java 21, brokers 3.7.0
-or newer. `kafka-clients` and `kafka-streams` are the runtime dependencies, both inherited.
-Only the Streams adapter touches `kafka-streams`; an application using just the plain-client
-edge (`CausalClock`, `CausalHeaders`) can exclude it.
+Parsley provides causal delivery order for Kafka Streams processors. Kafka orders records within a
+topic-partition and orders nothing between partitions. Parsley supplies the missing
+cross-channel guarantee: **if message A is a cause of message B, every process that delivers
+both delivers A first**, across restarts and for the whole lifetime of a process.
 
-This tree is version 0.2.0-SNAPSHOT: the Maven artifact
-`io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT`, resolved from the Central snapshots
-repository (https://central.sonatype.com/repository/maven-snapshots/). Depend on and cite
-this version, not the 0.1.0 release: 0.1.0's wire format and API differ from this tree. The
-docs matching this tree are the ones in this repository, and on the docs site they are what
-the default `latest` alias serves (also addressable as `dev`); released versions remain
-reachable by version number. Pre-1.0 the main branch owns `latest`, because releases trail
-it and may differ incompatibly; from 1.0.0 `latest` follows the newest stable release and
-main is `dev` only.
+Single Maven module, Java 21, Kafka 4.3.1, packages under
+`io.github.tobyjamesclements.parsley`. `kafka-clients` and `kafka-streams` are the only
+runtime dependencies. This tree is `io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT`.
+
+> **This tree is a from-spec reimplementation.** Its API shares no type with 0.1.0.
+> `Stage`, `CausalStreams`, `Fold`, `Tick` and `Codec` no longer exist, and the wire format
+> differs. Do not carry 0.1.0 examples, docs or assumptions into it. The `pre-rewrite` tag
+> marks the last commit of the previous implementation.
 
 ## The one rule that overrides everything
 
-Causal safety is inviolable: a record is never delivered before a real cause, and there is
-no timeout guessing. When records appear "stuck", the gate is doing its job — a cause is
+Causal safety is inviolable: a message is never delivered before a real cause, and there is
+no timeout guessing. When messages appear "stuck", the gate is doing its job: a cause is
 missing, lagging, or unstamped. Diagnose why the cause has not arrived; never "fix" blocking
-by reordering, skipping, or adding a timeout. The delivery invariant is
-`docs/foundations/causal-model.md`; liveness (why every wait terminates) is
-`docs/foundations/liveness.md`.
+by reordering, skipping, or adding a timeout. Where the guarantee cannot be upheld, Parsley
+**fails closed**: it stops delivering, and stays down until an operator intervenes.
+
+## Authority, in this order
+
+1. `SPEC.md`, the complete specification, and the sole authority on correctness. Criteria
+   are cited throughout the code and docs as e.g. "Safety 9", "Structural 13",
+   "Operational 4". Treat it as read-only.
+2. `docs/wire-format.md`, the **frozen** wire format of the causal metadata. Any change to the
+   grammar needs a new version byte and a documented migration; prefer no change.
+3. `docs/model.md`, how the pieces satisfy the spec, and why.
+4. `DECISIONS.md`, every choice the spec left open, numbered and append-only, with the
+   alternatives rejected. Correcting entries supersede rather than delete (D64 corrects D27,
+   D67 supersedes D65 and D66). Add to it when you make a choice; do not rewrite it.
+5. `EVIDENCE.md`, per spec criterion, what would catch a violation. Its standard is
+   unforgiving: each cell names what *fails* when the behaviour breaks, and a test that
+   stays green when the behaviour breaks is worse than an empty cell.
+6. `ASSESSMENT.md`, the findings of the hardening review this tree resolved. Historical;
+   `DECISIONS.md` cites it by section throughout.
 
 ## Map
 
-- `docs/foundations/` — the causal model, the delivery gate, liveness. Authoritative for
-  what is guaranteed and why.
-- `docs/design/` — architecture, state and recovery, verification obligations.
-- `docs/guide/` — getting started, topology shapes, codecs, error handling, ticks, the
-  application contract, plain clients.
-- `docs/reference/wire-format.md` — the on-wire contract (headers `vc`, `vc-sender`,
-  `vc-seq`) and state-store layouts. This is the compatibility surface between
-  applications; never change it in a vendored or modified copy.
-- `src/main/java/.../package-info.java` — codifies the public API tier. The public surface
-  is the functional core (`Topic`, `Codec`, `Message`, `Emission`, `Handler`, `Fold`,
-  `Step`, `Tick`, `TickHandler`, `TickFold`) plus the imperative edges (`Stage`, `Parsley`,
-  `CausalStreams`, `CausalClock`, `CausalHeaders`, `ContractProbes`, `HeldRecord`,
-  `CorruptClockException`); everything else is package-private.
+- `…/parsley/core`, the host-independent protocol: the causal frontier (`Causes`), its wire
+  codec (`CausesCodec`), the hold-back buffer and the pure deliverability decision
+  (`Deliverability.decide`), driven by `ProcessEngine` over an `OrderingStore`. This package
+  names no host type, and `CorePurityTest` enforces it by scanning the directory: no clock,
+  no network, no Kafka (SPEC Structural 9). Keep it that way.
+- `…/parsley/api`, the public, statically-typed declaration surface: `Parsley`,
+  `ParsleyConfig`, `ProcessDefinition`, `Channel`, `StoreDef`, `Handler`, `Delivery`,
+  `Effects`, `StateReader`, `ProcessStatus`.
+- `…/parsley/kafka`, the Kafka Streams adapter: byte topologies (`ProcessTopology`,
+  `ParsleyProcessor`), position facts from the admin client (`AdminFactsSource`), the
+  store over a Streams state store (`StreamsOrderingStore`), and the EOS lifecycle
+  (`ParsleyRuntime`).
 
-`docs/llms.txt` indexes every document with a one-line description of what it settles. If
-you are working from outside this checkout, that index and the full text of all documents in
-one fetch are served at https://tobyjamesclements.github.io/parsley/llms.txt and
-https://tobyjamesclements.github.io/parsley/llms-full.txt.
+`Sabotage` lives in `core` but is package-private on purpose: the public API offers no way
+to construct an engine with a mode enabled (SPEC Structural 9). It exists so the suite can
+prove it catches each violation class.
 
 ## Verifying anything
 
-- `mvn verify` is the full gate: the unit suite, the deterministic simulator with its
-  ground-truth causal oracle (`CausalNodeSimTest`, `SimWorld`, `Oracle`), and PIT mutation
-  testing. `-DskipPitest=true` skips mutation testing for quick iteration.
-- The whole protocol runs without a broker or Docker: `Parsley.testTopology()` under Kafka
-  Streams' `TopologyTestDriver`. Use this to demonstrate or test causal gating end to end.
-- A broker smoke suite runs under `-Pbroker-it` (needs Docker; Testcontainers).
-- Simulator tests are seeded and deterministic; a failure reproduces from its seed.
-- `scripts/docs-build.sh` builds the docs site the way the Pages workflow does — Javadoc
-  staged into `docs/api`, `llms-full.txt` regenerated from `llms.txt`, then a strict MkDocs
-  build — so a bad page or a dead link fails here rather than after a push. `--serve` for
-  live reload, `--skip-api` to skip the Javadoc step. It creates its own `.venv` on first
-  run and never deploys.
+- `./mvnw verify` is the full gate: **418 tests, green, roughly four minutes**. It must be
+  green at every commit, and it grows. It never shrinks.
+- Three layers. Unit tests over the pure core. A **simulation harness** driving real engines
+  under a simulated host that honours the spec's Host obligations, over randomised topologies,
+  interleavings, gaps from aborted transactions, crashes, restarts and offset rewinds,
+  checked against a happened-before `Oracle` maintained outside the engine. And integration tests
+  against an **embedded KRaft broker** (real EOS, real aborted transactions, real
+  truncation). No Docker required.
+- The suite also runs against deliberately sabotaged engines and asserts it catches each
+  violation class (`SabotageMetaTest`, and a randomised sweep with a measured margin). That
+  is the evidence the tests would fail if the behaviour broke.
+- Simulator runs are seeded and deterministic: `CausalOrderPropertyTest` sweeps seeds 1 to 300,
+  and a failure reproduces exactly from its seed.
+- There is **no mutation-testing gate**; `Sabotage` is this project's mutation testing, aimed
+  at spec criteria rather than syntax. D67 records why, and the three gaps a pitest run found
+  before it was removed.
 
 ## Using it from an application
 
-Start from `docs/guide/getting-started.md`. The runtime enforces
-`processing.guarantee=exactly_once_v2` and `isolation.level=read_committed`, and must be
-started through `Parsley.streams` (it installs the position-capturing client supplier the
-protocol's liveness depends on). Emissions may only name declared sinks, and a stage with
-ticks needs its tick topic (`<application.id>-<stage>-ticks`) created with the partition
-count of the stage's widest source topic. Every topic and store Parsley owns is named
-`<application.id>-<stage>-<kind>`, the convention Kafka Streams uses for the topics it
-creates, so an application's topics sort together in a listing. The full application
-contract is `docs/guide/expectations.md`.
+Each declared process runs as its own Kafka Streams application under `exactly_once_v2` with
+`read_committed`; none of the safety-bearing configuration can be overridden. The seam hands
+application logic exactly the delivered message and its application state, and accepts
+effects only through the returned value: no timers, no producer, no clock.
 
-## Vendoring this library
+```java
+var shipper = ProcessDefinition.named("shipper")
+    .receives(orders, (delivery, state) -> Effects.builder()
+        .put(inventory, delivery.key(), remaining)
+        .send(shipments, delivery.key(), Shipment.of(delivery.value()))
+        .build())
+    .sends(shipments)
+    .stores(inventory)
+    .build();
 
-Copying the source into another codebase is permitted (MIT) and workable at this size, with
-four rules:
+try (Parsley parsley = Parsley.start(config, shipper)) {
+    // runs until closed; a process that fails closed stays down until an operator intervenes
+}
+```
 
-1. Copy verbatim; do not re-synthesize or restyle the protocol classes. `CausalNode`,
-   `VectorClock`, and the wire format encode invariants that fail silently when paraphrased.
-2. Bring the verification with you: the conformance kit
-   (`docs/reference/conformance-kit.md`) — `CausalNodeSimTest`, `SimWorld`, `Oracle`, the
-   protocol tests, and the self-tests that prove the kit can fail — must run in your CI, or
-   your copy is unverified. The kit also ships as the `test-jar` artifact of the Maven
-   coordinates above.
-3. Never change the wire format (`docs/reference/wire-format.md`); it is what keeps your
-   copy interoperable with every other Parsley application.
-4. Record the upstream commit you copied from, so your copy can be diffed against upstream
-   when fixes land there.
-
-Renaming the package and classes is fine; no runtime string carries the library name.
+`docs/index.md` carries the fuller version. `ProcessStatus` and `OrderingStateInspector` are the
+diagnosis surface when a process is holding or has stopped.
 
 ## Conventions if you modify the code
 
-- No mock frameworks; hand-rolled test doubles behind the narrow seams (`BrokerOffsets`,
-  `StateStore`).
+- Keep `core` pure. `CorePurityTest` will tell you if you did not.
+- No mock frameworks; hand-rolled test doubles behind the narrow seams (`OrderingStore`,
+  `FactsSource`).
 - Every test that builds a Kafka Streams instance takes its `state.dir` from a JUnit
   `@TempDir`; shared directories contend on one RocksDB lock.
 - camelCase test method names, Javadoc on every `@Test`, assertion messages.
-- Documentation describes the code as it stands; design history stays out of the docs.
+- Record what you decided in `DECISIONS.md` and what would catch its failure in
+  `EVIDENCE.md`. Both are part of the deliverable.

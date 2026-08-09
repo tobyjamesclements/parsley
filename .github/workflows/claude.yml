@@ -52,4 +52,4 @@ jobs:
 
           claude_args: |
             --model claude-sonnet-5
-            --allowedTools "Bash(./mvnw test:*),Bash(./mvnw verify -DskipPitest=true:*),Bash(./mvnw compile:*)"
+            --allowedTools "Bash(./mvnw test:*),Bash(./mvnw verify:*),Bash(./mvnw compile:*)"

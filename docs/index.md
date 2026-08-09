@@ -1,72 +1,67 @@
 # Parsley
 
-Parsley provides causal delivery order for Kafka stream processing: a record reaches your
-processor only after every cause your processor consumes has been delivered locally. The
-guarantee is the causal-consistency model of the distributed-systems literature — Lamport's
-happened-before relation, realised with vector clocks — instantiated on Kafka coordinates.
-When A causally precedes B, every processor that subscribes to both of their topics processes
-A before B.
+Kafka orders records within a topic-partition and orders nothing between partitions. Parsley
+supplies the missing cross-channel guarantee.
 
-Causal safety is inviolable: Parsley blocks or fails, and never reorders, drops, or guesses on
-a timeout. Joining a running topology needs no coordination — a new application starts
-consuming, self-gates into causal order during replay, and its stamps make its outputs
-correctly gated everywhere from its first emission.
+> If message A is a cause of message B, every process that delivers both delivers A first.
 
-## Shape of the system
+The guarantee holds for the whole lifetime of a process, across restarts, rebalances and
+partition reassignment.
 
-Parsley is a small public API — pure user logic over typed topics, run by a Kafka Streams
-adapter — around a package-private causal delivery protocol. The protocol implementation
-carries no compile-time Kafka dependency, but it is not transport-agnostic — Kafka's
-semantics (broker-assigned offsets, transactional visibility, consumer positions) are
-load-bearing throughout. That freedom exists so the deterministic simulator can host the
-protocol, not so other transports can.
+## Scope
 
-The protocol ([architecture](design/architecture.md)) gates delivery with head-of-line blocking
-per channel: each `(topicId, partition)` channel has a FIFO hold queue, only queue heads are
-evaluated against the contiguous delivered frontier, and a delivery cascades releases to
-fixpoint. Outbound records carry a single header — a vector clock over channels — computed at
-one stamping site. All causal state persists under per-channel keys in the same transaction as
-the delivery that mutated it.
+Parsley is a library over Kafka Streams. One declared process becomes one Kafka Streams
+application running under `exactly_once_v2` and `read_committed`. State changes, sends and
+consumed read positions commit in a single transaction.
 
-Parsley's entire on-wire footprint is record headers on business topics. Liveness rides the
-consumer's own position advance past transaction markers — see
-[liveness](foundations/liveness.md), which develops why every held record is eventually
-released.
+The delivery discipline is that of causal broadcast, indexed by channel rather than by
+process. Causality is Lamport's happened-before: same-process precedence, plus the edge from
+a delivery to any later send, closed transitively. A causes B when a delivery of A happened
+before B was sent.
 
-The adapter ([getting started](guide/getting-started.md)) hosts the protocol and runs user
-logic as pure functions — a `Message` in, `Emission` values out — with one serialization
-point on each side, and enforces `exactly_once_v2`. Plain producers and consumers use the same stamps through the
-[plain-client ops](guide/clients.md). The guide continues with the common
-[topology shapes](guide/topologies.md), [codecs and Avro](guide/codecs.md), and
-[the contract](guide/expectations.md) — everything Parsley expects of you and everything it
-promises back. The [API reference](reference/api.md) carries the Javadoc built from this
-version's sources.
+Where the guarantee cannot be upheld, a process stops. Waiting is never resolved by a
+timeout, and a held message is released only by evidence.
 
-## How it is verified
+## Shape of an application
 
-The primary correctness gate is a deterministic simulator with a ground-truth causal oracle —
-not broker integration tests. The simulator models EOS transactions, marker and aborted
-offsets, asynchronous acknowledgements, crashes with transactional rollback, and seeded random
-interleavings; the oracle tracks real happened-before ancestry outside the protocol and checks
-every delivery. [Verification](design/verification.md) states the obligations and how each is
-enforced, including the self-tests that prove the harness catches a broken protocol and a
-broken host. The whole apparatus ships as the
-[conformance kit](reference/conformance-kit.md), so a vendored copy or an alternative host
-can run the same verification.
+```java
+var orders    = Channel.of("orders", Serdes.String(), orderSerde);
+var shipments = Channel.of("shipments", Serdes.String(), shipmentSerde);
+var inventory = StoreDef.of("inventory", Serdes.String(), Serdes.Long());
+
+var shipper = ProcessDefinition.named("shipper")
+    .receives(orders, (delivery, state) -> {
+        Long stock = state.get(inventory, delivery.key());
+        return Effects.builder()
+            .put(inventory, delivery.key(), (stock == null ? 100 : stock) - 1)
+            .send(shipments, delivery.key(), Shipment.of(delivery.value()))
+            .build();
+    })
+    .sends(shipments)
+    .stores(inventory)
+    .build();
+
+try (Parsley parsley = Parsley.start(config, shipper)) {
+    // runs until closed
+}
+```
+
+A handler receives the delivered message and a read view of state, and returns what it
+changes. It is given no producer, no timer and no clock.
 
 ## Reading order
 
-1. [The causal model](foundations/causal-model.md) — what is promised, and against what fault
-   model.
-2. [The delivery gate](foundations/delivery-gate.md) — the predicate, its normalisation, and
-   why ignoring unconsumed coordinates is sound.
-3. [Liveness](foundations/liveness.md) — why every held record is released and nothing
-   deadlocks.
-4. [Architecture](design/architecture.md) and [state](design/state.md) — the classes, the
-   store layout, crash recovery, scope changes, truncation.
-5. [Verification](design/verification.md) — the simulator, the oracle, and the obligations.
+| Page | Subject |
+|---|---|
+| [Model](model.md) | How the specification's terms map onto Kafka, and what the metadata expresses |
+| [Delivery](delivery.md) | The settled frontier and the delivery decision |
+| [State](state.md) | Ordering state, persistence and recovery |
+| [Failing closed](failing-closed.md) | What stops a process, and why the blast radius is the process |
+| [Runtime](runtime.md) | Wiring into Kafka Streams |
+| [Wire format](wire-format.md) | The frozen on-wire definition of causal metadata |
+| [Verification](verification.md) | How the guarantee is tested |
+| [API](api.md) | Generated Javadoc |
 
-That is a path through the docs, not all of them. [`llms.txt`](llms.txt) indexes every page
-with a one-line description of what it settles, and [`llms-full.txt`](llms-full.txt) is the
-full text of all of them in a single file — both written for agents reading this site, and
-both also served unversioned at the site root.
+`SPEC.md` in the repository is the authority on correctness. `DECISIONS.md` records every
+choice the specification left open, and `EVIDENCE.md` records, per criterion, what would
+catch a violation.
