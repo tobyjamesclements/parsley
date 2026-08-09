@@ -17,4 +17,4 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
       - name: Broker smoke tests
-        run: ./mvnw clean verify -Pbroker-it -DskipPitest=true --no-transfer-progress
+        run: ./mvnw clean verify -Pbroker-it --no-transfer-progress

@@ -1,151 +1,84 @@
 # Parsley
 
-Causal delivery order for Kafka stream processing: a record reaches your processor only after
-every cause your processor consumes has been delivered locally. The guarantee is the
-causal-consistency model of the distributed-systems literature — Lamport's happened-before
-relation, realised with vector clocks — instantiated on Kafka coordinates: when A causally
-precedes B, every processor that subscribes to both of their topics processes A before B.
+Causal delivery order for Kafka Streams processors, built to `SPEC.md`. Kafka guarantees a total order per
+topic-partition and nothing between partitions; parsley adds the missing cross-channel guarantee: **if message A is a
+cause of message B, any process that delivers both delivers A first** — across restarts, for a process's whole
+lifetime.
 
-Causal safety is inviolable. Parsley blocks or fails; it never reorders, drops, or guesses on
-a timeout. Joining a running topology needs no coordination: a new application starts
-consuming, self-gates into causal order during replay, and its stamps make its outputs
-correctly gated everywhere from its first emission.
+## Terms of art
 
-## How it works
+Every term of art used in this repository names the following (SPEC Structural 6):
 
-Parsley implements causal delivery with head-of-line blocking per channel, riding Kafka's
-own semantics throughout. A channel is one partition of one topic, identified by the topic's stable UUID;
-each channel has a FIFO hold queue, and only queue heads are gated against the node's
-contiguous delivered frontier. A delivery advances the frontier and cascades releases across
-channels to fixpoint.
+* **Happened-before** — Lamport's irreflexive partial order over events: same-process precedence, plus send-to-receipt
+  edges, closed transitively (Lamport, *Time, Clocks, and the Ordering of Events in a Distributed System*, CACM 1978).
+* **Cause / causal delivery** — as `SPEC.md` defines them: A causes B when a delivery of A happened-before B's send;
+  causal delivery means no process that delivers both delivers them inverted. This is the delivery discipline of
+  causal broadcast (Birman & Joseph, *Reliable Communication in the Presence of Failures*, TOCS 1987), transplanted
+  onto channels.
+* **Causal frontier** (this implementation's summary) — a map channel → highest position known causal, playing the
+  role a vector clock (Fidge 1988; Mattern 1989) plays in process-indexed causal broadcast, but indexed by channel
+  because the spec forbids process identity in metadata (SPEC Structural 11).
+* **Hold-back buffer** — the standard causal-broadcast queue of received-but-not-yet-deliverable messages, here
+  per-channel and persistent.
+* **Exactly-once / EOS** — Kafka's transactional processing (`exactly_once_v2` + `read_committed`): a step's state
+  changes, sends and consumed read positions commit atomically or not at all.
+* **LSO (last stable offset)** — Kafka's barrier for `read_committed` readers: the first offset of the earliest
+  still-open transaction on a partition (the high watermark when none is open); everything below it is settled as
+  committed data or aborted/control positions that will never yield a message.
+* **Fail closed** — as `SPEC.md` defines it: stop delivering rather than weaken the guarantee.
 
-Outbound records carry their stamp in record headers — a vector clock folded from the
-frontier, the per-channel advertised clocks, ancestry carried across scope changes, and the
-node's own sends, plus a sender tag. Stamping happens at one site and never blocks: a node
-claims its own in-flight sends in its own send-sequence space (assigned synchronously), and
-receivers resolve those claims from the sender tag each record carries. Beyond ordinary
-fetch, broker offset facts (end offsets, log starts) are all the node ever asks of Kafka.
-
-Kafka's non-density under exactly-once — transaction markers and aborted records occupy
-offsets a `read_committed` consumer never returns — is repaired at receive time by seeding and
-bridging, and at the trailing edge by **position-advance bridging**: the consumer's position
-moving past markers is the protocol's entire liveness mechanism. Parsley's whole on-wire
-footprint is the headers on your own records, so plain consumers need no Parsley awareness
-at all.
-
-All causal state persists under per-channel keys and commits in the same EOS transaction as
-the delivery that mutated it, so crash recovery is a pure restore. Hold queues are unbounded
-and disk-backed: a lagging cause channel grows state, never heap, and is bounded by the same
-retention economics that bound the causal history itself.
-
-## Verification
-
-Parsley's primary correctness gate is a deterministic simulator with a ground-truth causal
-oracle. The simulator models partitions with real marker and aborted offsets, step-atomic EOS
-transactions, `read_committed` fetch, node crashes with
-transactional rollback, and seeded random interleavings. The oracle tracks real
-happened-before ancestry entirely outside the protocol and checks every delivery for causal
-order, per-channel FIFO, and duplicates, plus completeness and drain at the end of every run.
-Scenarios assert that the machinery under test actually fired — gate holds, crash injections,
-position advances — and self-tests prove the harness flags a deliberately broken protocol and
-a deliberately broken host.
-
-```
-mvn verify
-```
-
-The simulator and oracle also ship as the
-[conformance kit](docs/reference/conformance-kit.md) — the `test-jar` artifact of the same
-Maven coordinates — so a vendored copy or an alternative host can run this verification in
-its own CI.
-
-## Using it
-
-The API is a functional core with imperative edges. Topics are typed values declared once;
-your logic is a pure function from a causally delivered `Message` to `Emission` values —
-with per-key state, a pure fold that also returns the next state — testable with plain
-equality and no runtime. The runtime enforces `exactly_once_v2` and wires position capture
-and topic identity:
+## What it looks like
 
 ```java
-Topic<String, Order>   orders      = Topic.of("orders", Codec.utf8(), orderCodec);
-Topic<String, Payment> payments    = Topic.of("payments", Codec.utf8(), paymentCodec);
-Topic<String, Settled> settlements = Topic.of("settlements", Codec.utf8(), settledCodec);
+var orders    = Channel.of("orders", Serdes.String(), orderSerde);
+var shipments = Channel.of("shipments", Serdes.String(), shipmentSerde);
+var inventory = StoreDef.of("inventory", Serdes.String(), Serdes.Long());
 
-Stage settlement = Stage.named("settlement")
-        .state(balanceCodec, Balance::zero)
-        .on(orders,   (bal, m) -> Step.of(bal.minus(m.value().total()),
-                                          settlements.send(m.key(), settle(bal, m))))
-        .on(payments, (bal, m) -> Step.of(bal.plus(m.value().amount())))
-        .into(settlements)
-        .build();
+var shipper = ProcessDefinition.named("shipper")
+    .receives(orders, (delivery, state) -> {
+        Long stock = state.get(inventory, delivery.key());
+        long remaining = (stock == null ? 100 : stock) - 1;
+        return Effects.builder()
+            .put(inventory, delivery.key(), remaining)
+            .send(shipments, delivery.key(), Shipment.of(delivery.value()))
+            .build();
+    })
+    .sends(shipments)
+    .stores(inventory)
+    .build();
 
-try (CausalStreams app = Parsley.named("settlements-app", settlement).streams(props)) {
-    app.start();
-    // messages reach each handler in causal order; emissions are stamped automatically
+try (Parsley parsley = Parsley.start(
+        ParsleyConfig.builder("broker:9092", "my-app").build(),
+        shipper)) {
+    // runs until closed; a process that fails closed stays down until an operator intervenes
 }
 ```
 
-Stages compose into pipelines within one application — a hop is the same `Topic` appearing
-as one stage's sink and another's source, an ordinary causal channel:
+Each declared process runs as its own Kafka Streams application under `exactly_once_v2`; none of the safety-bearing
+configuration can be overridden. The seam passes application logic exactly the delivered message and its application
+state, and accepts effects only through the returned value — no timers, no producer, no clock.
 
-```java
-Parsley.named("settlements-app", enrichment, settlement).streams(props).start();
+## Layout
+
+| Where | What |
+|---|---|
+| `io.github.tobyjamesclements.parsley.core` | Host-independent protocol: the causal frontier, hold-back buffer, and the pure deliverability decision (`Deliverability.decide`, SPEC Structural 7) |
+| `io.github.tobyjamesclements.parsley.api` | The public, statically-typed declaration surface |
+| `io.github.tobyjamesclements.parsley.kafka` | The Kafka Streams adapter: byte topologies, position facts from the admin client, EOS lifecycle |
+| `docs/DESIGN.md` | How the pieces satisfy the spec, and why |
+| `docs/METADATA.md` | The frozen wire format of the causal metadata |
+| `DECISIONS.md` | Every choice the spec left open, with the alternatives rejected |
+| `EVIDENCE.md` | Per criterion: what would catch a violation |
+
+## Tests
+
+```
+./mvnw test
 ```
 
-Plain producers stamp with a `CausalClock` — `observe` consumed records, `recordProduced` your
-acknowledgements, `stamp` outbound headers. Adoption is incremental: a producer that stamps
-nothing claims nothing, so you stamp the producers whose ordering matters, one at a time,
-with no flag day.
-
-Requires Java 21 or later and brokers that serve topic IDs (Kafka 3.7+).
-
-```xml
-<dependency>
-    <groupId>io.github.tobyjamesclements</groupId>
-    <artifactId>parsley</artifactId>
-    <version>0.2.0-SNAPSHOT</version>
-</dependency>
-```
-
-Snapshots resolve from `https://central.sonatype.com/repository/maven-snapshots/`, which a
-consuming build declares for itself;
-[getting started](docs/guide/getting-started.md#adding-the-dependency) has that declaration
-and the Gradle equivalent. Build from source with `mvn verify`.
-
-## Documentation
-
-The docs site under `docs/` (mkdocs) covers the model and the design:
-
-- **Foundations** — [the causal model](docs/foundations/causal-model.md),
-  [the delivery gate](docs/foundations/delivery-gate.md), and
-  [liveness](docs/foundations/liveness.md).
-- **Design** — [architecture](docs/design/architecture.md),
-  [state and recovery](docs/design/state.md), and
-  [verification](docs/design/verification.md).
-- **Guide** — [getting started](docs/guide/getting-started.md) and
-  [plain clients](docs/guide/clients.md).
-- **Reference** — [wire format](docs/reference/wire-format.md).
-
-The verification obligations the test suite enforces are catalogued in
-[verification](docs/design/verification.md).
-
-The bullets above are a reading path, not the whole set. [`docs/llms.txt`](docs/llms.txt)
-indexes every document with a one-line description of what it settles; the docs site serves
-that index at [`/llms.txt`](https://tobyjamesclements.github.io/parsley/llms.txt) and the full
-text of all of them, in one file, at
-[`/llms-full.txt`](https://tobyjamesclements.github.io/parsley/llms-full.txt).
-
-AI coding agents should start at [`AGENTS.md`](AGENTS.md): the rule that overrides everything,
-the map of the docs, how to verify a change, and the rules for vendoring the source.
-
-## Current limitations
-
-- Non-Parsley headers on held records are not carried through delivery.
-- Sequence claims carry a late-joiner caveat: consumers joining at the log end should
-  baseline at the last stable offset (see the liveness page).
-- Vector-clock truncation advances exactly as fast as retention, with zero coordination:
-  retention-deleted records sit below every reachable baseline, so stamp width is
-  garbage-collected at retention speed — and no faster.
-- Correctness under a live broker's rebalances and task migration is exercised only by the
-  adapter's design, not yet by broker integration tests.
+Three layers: unit tests on the pure core; a **simulation harness** driving real engines under a simulated host that
+honours the spec's Host obligations — randomised topologies, interleavings, gaps from aborted transactions, crashes,
+restarts, offset rewinds — checked against a happened-before oracle maintained outside the engine; and integration
+tests against an embedded KRaft broker (real EOS, real aborted transactions, real truncation). The suite also runs
+against deliberately sabotaged engines and asserts it catches each violation class: evidence the tests would fail if
+the behaviour broke (see `EVIDENCE.md`).
