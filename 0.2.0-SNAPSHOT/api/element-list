@@ -1,1 +1,3 @@
-io.github.tobyjamesclements.parsley
+io.github.tobyjamesclements.parsley.api
+io.github.tobyjamesclements.parsley.core
+io.github.tobyjamesclements.parsley.kafka

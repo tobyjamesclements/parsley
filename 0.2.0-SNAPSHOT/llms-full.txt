@@ -1,2723 +1,643 @@
 # Parsley — full documentation
 
-> Causal delivery order for Kafka stream processing: a record reaches your processor only
-> after every cause your processor consumes has been delivered locally. When A causally
-> precedes B, every processor subscribed to both of their topics processes A before B.
-> Causal safety is inviolable: Parsley blocks or fails, it never reorders, drops, or guesses
-> on a timeout.
+> Causal delivery order for Kafka Streams processors. If message A is a cause of message B,
+> every process that delivers both delivers A first, across restarts and for the whole
+> lifetime of a process. Causal safety is inviolable: a process blocks or stops, and never
+> reorders, drops, or resolves a wait by timeout.
 
-Parsley is a Java 21 library (Maven artifact, MIT license) for Kafka Streams applications
-against brokers 3.7.0 or newer. The runtime dependencies are kafka-clients and kafka-streams,
-both inherited; only the Streams adapter touches kafka-streams, and an application using just
-the plain-client edge (CausalClock, CausalHeaders) can exclude it. The on-wire footprint is
-three record headers (`vc`, `vc-sender`, `vc-seq`) on the application's own records; there
-are no protocol records and plain consumers need no Parsley awareness. The primary
-correctness gate is a deterministic simulator with a ground-truth causal oracle, run by
-`mvn verify`. The full protocol is exercisable without a broker through
-`Parsley.testTopology()` and Kafka Streams' `TopologyTestDriver`.
+Parsley is a Java 21 library, MIT licensed, for Kafka Streams applications. The runtime
+dependencies are kafka-clients and kafka-streams. One declared process becomes one Kafka
+Streams application running under exactly_once_v2 and read_committed. The on-wire footprint
+is one record header, `parsley.causes`, on the application's own records. There are no
+protocol records, and plain consumers decode key and value with the application's own serdes
+alone.
+
+The delivery discipline is that of causal broadcast, indexed by channel rather than by
+process, over Lamport's happened-before relation. The correctness gate is a deterministic
+simulator checked against a happened-before oracle, run by `mvn verify`, together with
+integration tests against an embedded KRaft broker.
 
 This file describes version 0.2.0-SNAPSHOT, the Maven artifact
 `io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT`, resolved from the Central snapshots
 repository (https://central.sonatype.com/repository/maven-snapshots/). Every link below
-tracks the main branch, which matches 0.2.0-SNAPSHOT. On the versioned docs site these are
-the pages served by the default `latest` alias, also addressable as `dev`. The 0.1.0
-release, whose wire format and API differ from this version, stays addressable by its
-version number.
+tracks the main branch. The 0.1.0 release is a different implementation, whose API and wire
+format both differ from this version, and stays addressable by its version number.
 
 This file is the full text of every document listed in llms.txt, in the same
 order. It is generated from that file on each docs build; do not edit it by hand.
 
 ---
 
-# The causal model
+# Overview
 
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/foundations/causal-model.md
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/index.md
 
-the delivery invariant, its preconditions, and the happened-before relation on Kafka coordinates
-
-# The causal model
-
-## Happened-before
-
-The happened-before relation is a partial order on events, written A → B. It holds when A and
-B occur in the same process and A occurs first, when A is the sending of a message and B its
-receipt, or transitively through any chain of the first two. Causal delivery, applied to
-stream processing, says: if record A happened-before record B, then any processor that
-consumes both delivers A before B. The transitive case is the one that matters in practice — a
-consumer need not subscribe to every intermediate step to be bound by the ordering that runs
-through them.
-
-In the consistency hierarchy this sits above eventual consistency, which constrains no order,
-and below linearisability, which forces a single global timeline. Causal consistency is the
-strongest model maintainable without coordination, which is what lets a new application join
-by simply starting to consume.
-
-## Channels, coordinates, clocks
-
-Kafka's unit of total order is the partition, not the process, so Parsley's clocks are indexed
-by channel:
-
-- A **channel** is `(topicId, partition)`, where `topicId` is the topic's stable Kafka UUID. A
-  topic deleted and recreated under the same name is a different channel, so a coordinate can
-  never silently rebind to a different record history.
-- A **coordinate** is a channel plus a broker offset — the identity of one appended record.
-- A **clock** maps channels to offset watermarks: an entry `(c, n)` claims every offset at or
-  below `n` on `c`. Absent channels claim nothing.
-
-A clock plays two roles, distinguished in the literature as VT(m) and VT(p): attached to a
-record it states the record's dependencies; held by a node it accumulates what the node has
-delivered and learned. The [gate](delivery-gate.md) compares the first against the node's
-frontier; the [stamp](../design/architecture.md#the-stamp) publishes the second.
-
-## What breaks the textbook algorithms here
-
-Classical causal broadcast rests on two assumptions, and Kafka stream processing violates
-both:
-
-**Total visibility.** COPS-style systems and group-broadcast protocols assume every node that
-enforces causal order receives every write, so the delivery predicate always converges. A
-stream processor subscribes to a few topics out of many; most coordinates in a dependency
-clock name channels it will never see. Parsley's answer is not to restore visibility but to
-make the predicate sound without it — the gate's ignore branch, developed in
-[the delivery gate](delivery-gate.md).
-
-**Reliable dense FIFO channels.** A Kafka partition observed through a `read_committed`
-consumer is not dense: transaction commit markers and aborted records occupy real offsets the
-consumer never returns, and retention means consumption need not start at zero. The density
-adaptation (seeding, bridging, position advance) repairs this at receive time — see
-[state and recovery](../design/state.md#density-adaptation) and
-[liveness](liveness.md).
-
-One further deviation from the textbook is Kafka-specific: the sender's clock increment is
-performed by the broker (offset assignment), learned asynchronously from producer
-acknowledgements. A record's own coordinate therefore cannot appear in its own stamp, and a
-node claims its in-flight sends in its own send-sequence space, resolved by receivers from
-the sender tag every stamped record carries — developed in
-[architecture](../design/architecture.md#the-stamp).
-
-## The delivery invariant
-
-Stated the way the verification oracle checks it, with no reference to the protocol's own
-clocks: when record `m` is delivered to the user processor at node `n`, every ancestor `a` of
-`m` (under real happened-before) with `a`'s channel consumed by `n` and `a`'s offset at or
-above `n`'s baseline on that channel has already been delivered at `n`. The baseline is the
-seed point — history below a node's first sighting of a channel is outside its scope by
-definition, a finite-retention fact rather than an ordering exception.
-
-## Preconditions
-
-The guarantee holds under these environmental conditions:
-
-- **Stable channel identity**: topic UUIDs do not change mid-run. A recreated topic is a new
-  channel; its old incarnation's history is loss, never reordering.
-- **Exactly-once processing**: `exactly_once_v2`, with `read_committed` consumption. All of
-  Parsley's state commits in the task's transaction, which is what makes crash recovery a
-  pure restore.
-- **Truthful stamps between causally related topics**: every processor on a causal path
-  stamps its outputs (Parsley stages do this automatically; plain producers use a
-  [`CausalClock`](../guide/clients.md)). An absent stamp claims nothing — safe for the record
-  itself, invisible to downstream ordering.
-- **Closed handler effects.** A handler's logic is arbitrary, but the guarantee covers only
-  effects that leave through its return value: returned emissions are stamped, claimed, and
-  ordered downstream, and returned fold state commits with the delivery. An effect that
-  bypasses the boundary — a write to an external system, a send through a private producer,
-  a mutation of shared state — is invisible to the causal model; no stamp claims it and no
-  gate can order against it. Keep logic pure and route causally significant effects through
-  emissions.
-- **Co-partitioning by key across a stage's input topics.** A task consumes partition *p* of
-  every source topic, and the guarantee is per task: every cause *this task* consumes is
-  delivered first. Causally related records keyed to different partition slices land in
-  different tasks, each of which correctly ignores the other slice's dependency — so a
-  processor reading its inputs as whole topics observes causal order only when related keys
-  route to the same slice. This is the same precondition Kafka Streams processors carry for
-  joins and aggregations, and like Streams, Parsley does not enforce it.
-- **Retention covers consumer lag** on causal topics: a consumer must be able to fetch, or
-  observe the skip of, every offset a claim names. An undersized retention fails loudly at
-  the consumer's position reset, never silently.
-
----
-
-# The delivery gate
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/foundations/delivery-gate.md
-
-per-channel FIFO hold queues, the delivered frontier, and the release cascade
-
-# The delivery gate
-
-The gate is the predicate that decides whether a received record may reach the user processor.
-Everything else in the protocol exists to make this predicate sound and its inputs cheap.
-
-## Head-of-line blocking
-
-Each consumed channel has a FIFO hold queue. Records enter in receive order — which is offset
-order, because Kafka delivers a partition in order — and only the **head** of each queue is
-ever evaluated. A blocked head blocks its channel; it never blocks other channels.
-
-This is the design's central structural choice. Delivering out of order within a partition
-would buy lower convoying latency, at the price of a second projection of the delivered
-vector, an index of ahead-of-frontier deliveries, and a gap-absorption walk on every advance.
-Head-of-line blocking collapses all of that: one frontier per channel, one queue per channel,
-and a gate that only ever looks at heads. Convoying within a channel is the accepted cost.
-
-Two consequences fall out for free:
-
-- **Per-channel FIFO delivery** at every consumer, so a record never needs to claim its own
-  channel's earlier offsets — same-channel order is structural.
-- **The frontier is contiguous by construction**: it advances only when the head delivers, or
-  when a known-clean prefix folds in (seed, bridge, position advance). A prefix is known-clean
-  whenever every business record below it has been delivered — which includes the run below a
-  *held* head, since head-of-line order means everything under the head has already gone.
-
-## The predicate
-
-A record `m` arrives on consumed channel `c` carrying dependency clock `D` (absent header
-means the empty clock — a producer that stamps nothing claims nothing). When `m` reaches the
-head of `c`'s queue:
-
-1. **Normalise**: ignore `D`'s entry for `c` itself. At or above `m`'s own offset it is a
-   self-cycle (an event cannot precede itself); below it, per-channel FIFO has already
-   delivered everything the entry could name. Either way the entry carries no information the
-   structure has not already enforced.
-2. **Restrict**: keep only entries whose channel this node consumes. Unconsumed entries are
-   **ignored** — the ignore branch, justified below.
-3. **Gate**: `m` is deliverable iff the frontier dominates the restricted clock pointwise —
-   for every entry `(ch, n)`, `frontier[ch] ≥ n`.
-
-Delivering `m` advances `frontier[c]` to `m`'s offset and re-evaluates every other head; the
-cascade runs to fixpoint. A delivery can release a chain of held heads across channels in one
-step.
-
-Fail closed: a present but undecodable clock header fails the task. Treating it as empty would
-silently drop the sender's claims and let an effect precede its cause; failing leaves the
-offset uncommitted for a retried, successful decode.
-
-## Why the ignore branch is sound
-
-The gate ignores dependency entries on channels the node does not consume. This is safe only
-if every *consumed* ancestor hiding behind an unconsumed coordinate is claimed **directly** in
-the same clock — otherwise ignoring would open a hole exactly one hop wide.
-
-That directness is an induction along business paths. Consider any real ancestor `a` of `m`
-with `a` consumed here. Causality flows only through business records, so there is a chain
-`a → x₁ → … → m` of deliveries and emissions. The node that delivered `a` has `a` in its
-frontier; its stamp folds the frontier, so `x₁`'s clock claims `a`. Every downstream node
-folds the **full** clock of every record it receives into its per-channel advertised clocks,
-and its own stamps fold those — so the claim on `a` survives every hop to `m`'s clock,
-whether or not any intermediate node consumed `a`'s channel. The restricted comparison in step
-3 therefore sees `a` directly, and the unconsumed entries it skipped carried nothing the gate
-needed.
-
-This is also why the per-channel advertised clocks fold at **receive** rather than delivery:
-the stamp of any output emitted after delivering a record must dominate that record's entire
-clock, and folding early only ever over-claims real appended offsets — a delay, never a
-reorder (see [liveness](liveness.md#why-over-claims-cannot-deadlock)).
-
-## Replays
-
-A received offset at or below the channel's frontier is dropped without effect. Offsets only
-reach that state through a committed delivery, a seed, or a scope-growth resume, so the drop
-is a replay guard, not a filter — under exactly-once commits it fires only when a scope change
-deliberately re-reads a prefix the node has already accounted for.
-
----
-
-# Liveness
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/foundations/liveness.md
-
-why every wait terminates, including under exactly-once transaction markers
-
-# Liveness
-
-This page develops why every held record is eventually released and nothing deadlocks: what a
-gate waits on, how the consumer's position reveals offsets that never arrive as records, and
-why the wait graph cannot cycle.
-
-## What a gate can wait on
-
-The delivery gate waits on exactly one thing: the local frontier of channels the node itself
-consumes. It never consults another node's advertised knowledge — a peer's claim that a record
-was delivered *there* is not proof it was delivered *here*. So the liveness question reduces
-to: does every frontier eventually cover every offset a claim can name?
-
-Three facts answer it:
-
-**Claims name really-appended offsets.** Every source of a claim — the frontier (delivered
-records), end-offset seeds (append-time
-snapshots), and clocks folded from received records (inductively the same) — is an
-append-time fact. There is no such thing as a claim on an offset that does not exist.
-
-**Every appended offset reaches every consumer of its channel, as a record or as a skip.** A
-business record arrives and is delivered in queue order. A transaction marker or aborted
-record is consumer-skipped, and the skip is observable: the next fetched record's offset jumps
-(bridged at receive), or — when nothing follows — the consumer's position advances past it
-anyway.
-
-**Gates are locally satisfiable.** Stamps stay sound along exactly the paths causality
-travels (the induction in
-[the delivery gate](delivery-gate.md#why-the-ignore-branch-is-sound)), so a gate never needs
-knowledge that arrives by any route other than its own consumed channels.
-
-## Position-advance bridging
-
-The one genuine wedge in the receive-side story is the trailing skip. Every EOS commit writes
-a marker; an end-offset seed can mint a claim naming a marker's offset; and if the producer
-never appends again, no later record arrives to reveal the skip. A downstream frontier parks
-one short of the claim forever.
-
-The information that unwedges it already exists at every consumer: a `read_committed`
-consumer's **position** advances past trailing markers and aborted batches even when the poll
-returns no records. A position of `p` is proof that everything below `p` was fetched or
-consumer-skipped. The host reports it through one method — `positionAdvance(channel, p)` —
-and when the channel's hold queue is empty the frontier rises to `p − 1` and the cascade runs.
-
-A skipped run need not be trailing. When one opens *behind a held head* — the head arrived
-across a marker gap while an earlier record was still gated — the position signal cannot be
-applied, because the head itself is undelivered and the frontier must stay below it. The gap
-folds in on its own account instead: head-of-line order means every business record below the
-head has already been delivered, so the rest of that prefix was skipped, and the frontier rises
-to one below the head. Without it, a claim naming an offset inside the gap would wait on a
-coordinate no record and no position advance could ever cover.
-
-Together these are the whole liveness mechanism: gates wait only on local frontiers, and every
-skip is observable — from the position when the queue is empty, from the head when it is not.
-
-## Why over-claims cannot deadlock
-
-Claims can exceed real causality: the init-time end-offset seed claims every offset appended
-to a sink before the node started, including sibling producers' records, and folded clocks
-propagate such claims onward. Over-claims are individually harmless — they name real offsets,
-so they delay rather than reorder. The remaining worry is a cycle of waits: record X held
-waiting on Y while Y is held waiting on X, each wait justified by some claim.
-
-No such cycle can exist, because **every wait edge points from a later-appended record to an
-earlier-appended one**:
-
-- A head-of-line wait: the head was appended (and received) before its successors on the same
-  channel.
-- A real-causality dependency wait: a cause is appended before anything emitted after
-  delivering it — append precedes delivery precedes emission precedes the effect's append.
-- An over-claim dependency wait: an end-offset snapshot taken at time T covers only offsets
-  appended before T, while every record whose stamp carries the resulting claim is appended
-  after T — the claim entered the system at T and propagated causally, and causal propagation
-  moves strictly forward in append time.
-
-A wait cycle would therefore require some record to be appended strictly before itself. The
-wait graph is acyclic; a blocked record always has a wait chain ending at a record that is
-deliverable now, or at a skip the next position advance reveals.
-
-## The sequence-claim caveat: late joiners
-
-Sequence claims (a sender's synchronous claims over its own sends — see
-[the stamp](../design/architecture.md#the-stamp)) add one wait kind the append-order argument
-does not cover on its own: a sequence claim is resolved by *delivering* the claimed sender's
-record, and a consumer whose baseline sits **above** that record can never deliver it. For a
-from-the-start or committed-position consumer this cannot happen — the claimed record is
-always at or above its position. The exposed case is a **late joiner** baselining at the log
-end while a sequence-form claim still circulates in some custody clock and the claiming
-sender never writes that partition again. The verification suite demonstrates the wedge
-directly (an at-latest joiner against a claim no consuming hop rewrote) and its absence for a
-from-the-start joiner.
-
-Operationally: baseline late joiners at the last stable offset (which
-`read_committed` offset listing provides) rather than the log end — every claim minted by an
-open transaction sits above the LSO, so it resolves — and treat a held record whose sequence
-claim names a sender with no post-baseline presence as the detectable signature of the
-remaining window (a retired sender's claim frozen in custody). Offset claims have no such
-window, which is why consuming hops normalise sequence claims to offsets as they resolve
-them, and why a restart's end-offset seed retires the previous incarnation's claims.
-
-## What enforces this empirically
-
-The argument above is prose; the simulator makes it load-bearing. Every simulated world must
-**drain** — reach a state with no fetchable record unfetched,
-no node down — within its step budget, and at drain the oracle checks **completeness**: every
-business record above a node's baseline on a consumed channel was delivered there. A wedged
-frontier, a missed bridge, or a livelock fails one of the two on some seed. The suite asserts
-that position advances actually fire (anti-vacuity), so the mechanism is exercised, not
-merely present. See [verification](../design/verification.md).
-
----
-
-# Architecture
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/design/architecture.md
-
-the functional core, the imperative edges, and the Kafka Streams adapter
-
-# Architecture
-
-Parsley is one package, `io.github.tobyjamesclements.parsley`, with two visibility tiers.
-
-The **public tier** is the entire supported surface, shaped as a functional core with
-imperative edges. The core is the user's logic vocabulary, free of Kafka types: `Topic` and
-`Codec` (typed topics with pure byte codecs; Kafka serdes bridge in at the edge), `Message`
-(a delivery with its own coordinate), `Emission` (an output as a value, minted by
-`Topic.send`), `Handler` (message to emissions), and `Fold` with `Step` (pure per-key state
-step). The edges run it: `Stage` wires logic to topics, `Parsley` composes stages and is the
-front door (`testTopology()` for broker-less `TopologyTestDriver` tests, `streams(props)`
-for production), `CausalStreams` is the running application (a curated allowlist over Kafka
-Streams — lifecycle, state, listeners, metrics, lag — with no accessor to the underlying
-instance), and the plain-client `CausalClock` (constructed from an `Admin`; observe, record
-own sends, stamp — fully opaque) with `CausalHeaders`' names and sender/seq readers for
-observability.
-No protocol vocabulary escapes: the vector clock and channel types are internal. The
-**package-private tier** is the protocol implementation, the adapter's plumbing, and every
-seam — the offset queries carry soundness obligations (strict end-offset resolution,
-definitive absence) that make them contracts users must not substitute, so tests get a
-pre-wired broker-less topology rather than an injection point. The protocol is hidden
-deliberately: it is only sound under a host contract
-no API can enforce — per-channel offset order in, atomic commit of store, offsets, and sends,
-position advances from the real consumer, partitioning before stamping — and the one host
-that upholds that contract ships in the same package.
-
-Kafka's semantics are load-bearing throughout the protocol: offsets are broker-assigned
-(hence sequence claims), visibility is transactional (hence the density adaptation and
-step-atomic recovery), and liveness rides the consumer's position (hence position-advance
-bridging). The implementation's freedom from a compile-time Kafka dependency is a
-**simulator seam, not transport abstraction** — the deterministic simulator, the protocol's
-primary verifier ([verification](verification.md)), hosts it from the test tree of the same
-package.
-
-## The protocol surface
-
-| Type | Role |
-|---|---|
-| `Channel`, `VectorClock` | `(topicId, partition)` identity; vector clocks with max-merge, dominance, truncation, and a sorted, versioned wire form |
-| `DeliveryProtocol` | The host-facing surface: `onRecord`, `positionAdvance`, `prepareSend`, `resumePositions`, `truncate` |
-| `CausalNode` | The implementation: gate, hold queues, density adaptation, stamp, rescope, restore |
-| `StateStore` (SPI) | Keyed bytes, transactional with delivery — the host commits it atomically with consumed offsets and sends |
-| `BrokerOffsets` (SPI) | Broker offset facts: sink end offsets (init seed) and log starts (truncation stability) |
-| `InboundRecord`, `Delivery` | The envelope in (bytes, coordinate, clock), the release out (in causal order) |
-
-The host contract, in one paragraph: feed records per channel in offset order through
-`onRecord`; report consumer position advances through `positionAdvance`; stamp and tag every
-outbound send with `prepareSend` (against its concrete destination channel — the host
-partitions before stamping); process the returned `Delivery` list in order; commit the store,
-the consumed offsets, and the sends atomically (EOS). Indications are pulled — deliveries come
-back as ordered return values — because both Kafka Streams processing and the simulator are
-synchronous.
-
-## Receive path
-
-`onRecord` seeds or bridges density (below), folds the record's clock into the channel's
-advertised clock, enqueues, and cascades. The gate itself is specified in
-[the delivery gate](../foundations/delivery-gate.md): heads only, normalise, restrict,
-dominate. The cascade loops until no head is deliverable and no drained queue has a known
-clean prefix left to fold.
-
-## The stamp
-
-Outbound records carry `stamp = frontier ∪ channelClocks ∪ carriedAncestry ∪ ownOutputs`
-(pointwise max), computed at one site. Each term closes one route by which a real cause could
-escape the claim:
-
-| Term | Covers | Without it |
-|---|---|---|
-| frontier | Everything delivered here, contiguously | Direct causes escape |
-| channelClocks | Per consumed channel, the folded clocks of received records: ancestry that arrived through channels this node does not consume | The gate's ignore branch becomes a hole |
-| carriedAncestry | Delivered past on channels no longer consumed ([scope changes](state.md#scope-changes)) | A redeploy silently un-claims history |
-| ownOutputs | The node's committed prior-incarnation sends (the init end-offset seed) | Own outputs carry no order across partitions and sink topics |
-
-The broker performs the sender's clock increment (offset assignment), which the sender never
-observes — the stamping path never waits on it. Clocks carry a
-second claim kind, **sequence claims**: `(channel, sender, seq)` claims every record the
-sender sent to that channel up to its per-channel send sequence, assigned synchronously at
-`prepareSend`. Every outbound record carries its sender tag, and a receiver resolves a
-sequence claim the moment it has delivered that sender's record at or past the claimed
-sequence (per-partition send order equals offset order under EOS, so FIFO delivery decides it
-with one delivered-sequence mark per channel and sender). A stamp carries at most one
-self-claim per sink channel — this incarnation's send counter — so the sequence surface is
-bounded by the sink set; resolvable sequence claims in folded custody normalise to offset
-claims at the stamping site. A failed send cannot orphan a claim: the claiming record and the
-claimed send share a transaction, so they abort together. Same-channel sends need no claim at
-all — per-channel FIFO delivers them in order everywhere.
-
-`ownOutputs` lives in memory only and is constant after init: every declared sink's end
-offset, an over-claim on real appended offsets (delay-only, therefore sound) that covers every
-prior incarnation's committed sends. The same seed heals every restart-shaped gap, including
-former sinks ([scope changes](state.md#scope-changes)); prior-incarnation sequence claims
-echoed back through custody upgrade to this offset space at the stamping site.
-
-## Hold queues are unbounded
-
-There is deliberately no backpressure surface. Per-channel fetch pausing cannot be honoured
-from inside a Kafka Streams task — the poll loop's own pause/resume bookkeeping, the task's
-internal buffers, and lag-aware record scheduling all sit between a processor and the fetch
-layer, and all belong to Streams. Rather than ship a signal the primary host cannot act on,
-the hold queue is unbounded: records are never dropped, and a wedge is a loud stall, not a
-silent loss. The operational response is monitoring hold depth and sizing retention — the
-same economics that already bound the causal history a deployment keeps.
-
-A held record is resident twice: in the state store (so a restart restores it, and the
-changelog carries it) and in the queue the gate walks, which holds its key and value bytes in
-memory. Hold depth therefore bounds heap as well as disk, and a lagging cause channel costs
-both. `records-held` and the protocol store's size are the two signals, and they move
-together; there is no depth at which one takes over from the other. Paging the tail of a
-queue out of memory would be possible — head-of-line blocking means only the head is ever
-gated — but it is not what this cut does.
-
-## Truncation: log-start stability
-
-Stamp-side clocks (carried ancestry and the advertised channel clocks) are the two whose
-width grows with the node's transitive upstream, and truncation is what bounds them. The
-required bound must be *globally* stable — no present or **future** consumer's gate may still
-need a dropped entry, because a missing claim at a gate is a causal violation, not a delay. A
-membership-based protocol (registered nodes publishing frontiers) cannot deliver that bound
-in Kafka's anonymous-consumer world: a from-earliest late joiner's baseline sits below any
-frontier minimum, and any gating consumer outside the registry breaks it silently.
-
-The coordination-free source that does qualify is **the log-start offset**. Records deleted
-by retention are below every reachable baseline, present or future — the same "below first
-sighting is out of scope" rule that makes seeding sound — so `logStart − 1` per channel is
-unconditionally stable, and a channel whose topic no longer exists truncates entirely (a
-recreated topic is a different channel, so an absent topic's claims are unclaimable forever).
-The driver is `truncateToLogStarts`: query earliest offsets for `stampChannels()`, truncate.
-The Streams adapter runs it on a punctuator (`truncationInterval`, default ten minutes); a
-failed sweep skips a cycle rather than failing the task. Truncation therefore advances
-exactly as fast as retention does — clock width is bounded by the causal history your
-retention actually keeps.
-
-## The Kafka Streams adapter
-
-`Stage` assembles its sub-topology: sources fetched as raw bytes, one adapter processor,
-sinks written as raw bytes. Between them, user logic runs as pure functions: a delivery is
-decoded with the source topic's codecs into a `Message` carrying its own coordinate (for a
-record released from the hold queue, its own, not the release trigger's), the handler or
-fold is applied, and the returned emissions go through the stamping door — encoded with the
-sink topic's codecs, partitioned deterministically before stamping, undeclared sinks failing
-loudly. A stateful stage's fold state lives in a second RocksDB store keyed by the message
-key's encoded bytes, read before and written after each application, in the same transaction
-as the delivery — causal order plus a pure fold makes the state a deterministic function of
-the delivered history. Serialization happens exactly once on each side, inside the stage, so
-the stamp travels with the exact bytes it claims. Stages are immutable: wiring is captured
-by the topology's node suppliers at assembly, never stored on the stage.
-
-A stage with declared [ticks](../guide/ticks.md) closes a loop through the broker: a
-wall-clock punctuator emits one stamped record per interval to the stage's own tick topic,
-routed back to the emitting task's partition, consumed as one of the stage's sources, and
-gated like any other record — the protocol's own-channel handling makes a self-claim
-structurally satisfied, so the loop cannot deadlock. Time thereby enters user logic only as
-data on a delivered record, and the tick's stamp claims the task's consumed history at
-emission.
-
-`Parsley.streams` supplies the production wiring: it enforces `exactly_once_v2` and
-`read_committed`, installs a client supplier whose main consumers record a post-poll view
-into a thread-local — the consumer position paired with the highest record offset the polls
-have returned, the `positionAdvance` feed (`position()` read on the polling thread is its
-only sound source; see
-[liveness](../foundations/liveness.md#position-advance-bridging)), and resolves topic identity
-and broker offset facts through an admin client. The adapter reports a captured position
-only once every returned record at or below it has been fed through the protocol: a
-post-poll position runs ahead of records still buffered between poll and process, and
-reported early it would jump the frontier past them and drop them as replays. The adapter self-checks both at runtime —
-EOS from the task's configuration at init, captured positions at the first delivered
-record — so a topology run outside `Parsley.streams` fails closed instead of wedging.
-`TopologyTestDriver` runs without a broker through `testTopology()`, which assembles a fresh
-broker-less topology per call.
-
-Stages compose: `Parsley.named(applicationId, stageA, stageB, ...)` assembles several named
-stages into one Streams topology, connected through ordinary topics — one stage's sink is another's
-source, and the connecting topic is a causal channel like any other, stamped on write and
-gated on read. Hops cost only the broker round trip (stamping is synchronous under sequence
-claims), custody carries transitively across them, and each stage keeps its own state store
-keyed by its name. Stage-connecting topics are explicit and must pre-exist — there are no
-automatic repartition topics, which keeps the co-partitioning precondition visible at each
-hop. Sender identity derives from the application id, the stage name, and the partition, so
-it survives topology evolution (task ids embed the sub-topology index, which renumbers when
-stages are added).
-
-Current adapter limits: non-Parsley headers on held records are not carried through delivery,
-and own outputs are claimed in sequence space rather than folded from producer
-acknowledgements (Streams attributes acknowledgements per thread, not per task — see the
-stamp section).
-
----
-
-# State and recovery
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/design/state.md
-
-what persists, under which keys, and how crash recovery restores it
-
-# State and recovery
-
-All causal state a node persists lives under per-channel keys in one keyed store, committed in
-the same EOS transaction as the delivery that mutated it and the sends it caused. Only entries
-that changed are written on an advance. The full byte layouts are in
-[wire format](../reference/wire-format.md). A stateful stage's fold state is separate — its
-own store, `<stage>-fold`, keyed by the message key's encoded bytes with a presence
-prefix and holding the user codec's bytes — but commits in the same transaction, so protocol
-state, fold state, deliveries, and emissions advance atomically together.
-
-| Key | Holds |
-|---|---|
-| `scope` | The declared input channels and sink topics the state was written under |
-| `f/<channel>` | The channel's contiguous delivered frontier offset |
-| `cc/<channel>` | The channel's advertised clock: folded clocks of records received on it |
-| `ca` | Carried ancestry: delivered past on channels no longer consumed |
-| `q/<channel>/m` | Hold-queue indices: head and one-past-tail |
-| `q/<channel>/e/<index>` | One held record, verbatim: offset, timestamp, clock, key, value |
-
-Two clocks deliberately do **not** persist. `ownOutputs` is re-derived at every init from sink
-end offsets, which dominate anything a persisted copy could hold
-([architecture](architecture.md#the-stamp)). The position-known watermark (everything below is
-fetched-or-skipped) is re-reported by the host's position advances after restart.
-
-## Density adaptation
-
-A `read_committed` consumer's view of a partition is not dense — transaction markers and
-aborted records occupy offsets that are never returned, and retention means consumption need
-not start at zero. Three receive-side mechanisms, one invariant: the frontier equals the
-highest offset below which everything fetchable was delivered and everything else was
-skipped.
-
-- **Seed**: the first record ever received on a channel folds everything below it into the
-  frontier. History below first sighting is a baseline, not a gap.
-- **Bridge**: a received offset that jumps past the previous position proves the run between
-  was consumer-skipped; with an empty hold queue the frontier folds the run.
-- **Position advance**: the trailing case — skips with no record after them — reported from
-  the consumer's position ([liveness](../foundations/liveness.md#position-advance-bridging)).
-
-Seed and bridge apply only when the channel's hold queue is empty; while records are held, the
-frontier advances through deliveries alone, and a drained queue folds any clean prefix the
-position has revealed since.
-
-## Crash recovery
-
-Everything committed is a consistent cut: frontier, advertised clocks, carried ancestry, hold
-queues, consumed offsets, and produced records all move in one transaction. Recovery is
-therefore a pure restore — read the store, rebuild the queues from their indices, re-seed
-`ownOutputs` from sink end offsets, and resume. An aborted transaction leaves aborted records
-at real offsets; consumers bridge them like any other skip. Init-time writes are idempotent,
-so a crash between init and the first commit re-runs the same reconciliation.
-
-The verification suite drives this path hard: crash injection both between steps and
-mid-transaction, with the oracle's own state rolled back in mirror, and completeness checked
-after recovery ([verification](verification.md)).
-
-## Scope changes
-
-A redeploy can change a stage's declared inputs while its state survives. The recorded `scope`
-is diffed against the current declaration at init. The governing rule: **the causal past a
-node has delivered or carried may be skipped, but never dropped and never re-entered.**
-
-- **Shrink** — an input leaves scope: its frontier entry and advertised clock max-merge into
-  carried ancestry, which every later stamp folds forever (truncation aside). Dropping them
-  instead would let a third party reorder an effect against its retired-channel cause. A held
-  record on the departing channel fails init loudly: it can be neither delivered (no source)
-  nor discarded (fail closed) — redeclare the input or perform a full reset.
-- **Growth** — a new input: its frontier seeds at the node's carried knowledge of the channel
-  (never log-start), and the host resumes fetching one past the seed — skip what was already
-  ignored. An operator who wants that history processed performs a full reset. Replayed
-  prefixes below the seed are dropped by the replay guard.
-- **Former sinks**: their last claims must survive in the stamp even though `ownOutputs` is
-  memory-only. Init folds each former sink's end offsets into carried ancestry (the same
-  delay-only over-claim as the seed); a topic that no longer exists is unclaimable by any
-  receiver and is skipped.
-
-## Truncation
-
-`truncate(stability)` removes entries at or below the bound from carried ancestry and the
-advertised clocks — the two stamp-side clocks whose width otherwise grows monotonically with
-the node's transitive upstream. The frontier and `ownOutputs` stay: their width is bounded by
-the node's own channels. The shipped stability source is the log-start offset
-([architecture](architecture.md#truncation-log-start-stability)): retention-deleted records
-are below every reachable baseline, so the bound holds with no coordination. The
-simulator verifies both that full-retention truncation empties the stamp-side clocks with
-later traffic staying causal, and that a from-earliest joiner arriving after truncation is
-correctly ordered (its baseline is the log start).
-
----
-
-# Verification
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/design/verification.md
-
-the simulator, the causal oracle, and the obligations the suite enforces
-
-# Verification
-
-Parsley's primary correctness gate is a deterministic simulator with a ground-truth oracle,
-in the test tree of the `parsley` package. Broker integration tests exercise plumbing; the
-simulator exercises the protocol, because only a simulator controls interleavings, injects
-crashes at chosen points, and knows the real causal history to judge deliveries against.
-
-The simulator and oracle also ship, as the
-[conformance kit](../reference/conformance-kit.md) — the `test-jar` artifact of the library's
-coordinates — so a vendored copy or an alternative host can run this same verification
-outside this repository.
-
-## The simulated world
-
-`SimBroker` models partitions with real offset occupancy: business records, transaction
-markers, and aborted records all consume offsets, and a `read_committed` fetch returns only
-business records — so the density adaptation is exercised on essentially every run.
-Transactions are step-atomic: one simulation step is one fetch-process-commit cycle, appending
-the step's records and markers together, which models EOS faithfully at the granularity that
-matters (consumers see marker/abort holes; no transaction spans an observation point).
-
-`SimNode` hosts the real `CausalNode` exactly as the Streams adapter does: staged store
-mutations, staged consumer positions, sends stamped at the single site, and a commit-or-abort
-at step end. Nothing hands a send's offset back to the node that made it, because the adapter
-does not fold producer acknowledgements either. A crash aborts
-the in-flight step — appended records become aborted records at their offsets, staged state
-discards, and the node later restarts from committed state through the full init path
-(restore, end-offset seed, rescope). `EdgeProducer` scripts plain clients: sequential
-producers whose sends claim their previous acknowledgements, and observers that fold consumed
-records before producing.
-
-The scheduler draws from every enabled action — fetch, position advance, tick emission,
-producer op, crash, restart — with a seeded generator, so every run is a reproducible
-interleaving and every seed a different one.
-
-Reproducibility is a property the protocol has to cooperate with, not one the scheduler can
-supply alone. `NodeConfig` normalises its channel sets with `Set.copyOf`, and the JDK's
-immutable sets randomise iteration order per JVM; iterating one directly would make the
-cascade's cross-channel delivery order vary between runs, and the host runs user logic per
-delivery in list order, so that order reaches the broker as send order and from there into
-every offset downstream. `CausalNode` therefore iterates a sorted copy wherever set order can
-escape — the cascade, `rescope`, and the scope record — and `CausalNodeDirectedTest` pins
-both. Without it a seed does not determine its run, and PIT verdicts drift between runs of an
-unchanged tree.
-
-## The oracle
-
-The oracle never reads a vector clock. It tracks **real** happened-before ancestry: each
-business emission records the emitting actor's causal past (everything delivered there plus
-its own prior sends, transitively closed), staged and rolled back in mirror with the node's
-transaction so an aborted step teaches the oracle nothing. On every delivery it checks:
-
-- **Causal order** — every ancestor on a consumed channel at or above the node's baseline was
-  delivered there first.
-- **Per-channel FIFO** — delivered offsets strictly increase.
-- **No duplicates** — a record is delivered at most once per node (committed).
-
-At drain it checks **completeness**: every business record above baseline on a consumed
-channel was delivered. A world that cannot drain within its step budget fails outright — that
-is the wedge and livelock detector.
-
-The oracle judges deliveries by **coordinate**, never by content: a delivery is the record at
-`(channel, offset)`, and what the protocol hands the user processor at that coordinate is
-outside its verdict. Nothing the simulator does can catch a restore that returns the right
-record with the wrong bytes, which is why the payload of a held record is pinned by directed
-assertions instead (V10).
-
-## Obligations
-
-| # | Obligation | Enforced by |
-|---|---|---|
-| V1 | Causal delivery under random interleavings | Oracle, on every delivery |
-| V2 | Per-channel FIFO, no loss, no duplicates | Oracle sequence checks + completeness |
-| V3 | Crash/restart preserves V1–V2 | Crash-injecting runs, both idle and mid-transaction |
-| V4 | Markers and aborts never wedge the frontier | Marker-dense logs on every run; filter scenarios |
-| V5 | Liveness: every world drains, queues empty | Drain budget + completeness at drain |
-| V6 | Cycles drain; trailing markers resolve | Damped-feedback and filter scenarios |
-| V7 | Truncation below a true stability bound is invisible | Truncate-then-continue scenarios |
-| V8 | The oracle catches a broken protocol | `OracleSelfTest`: an eager, dependency-ignoring protocol must be flagged |
-| V9 | The kit catches a broken host | `HostContractSelfTest`: a host that breaks step-atomicity, or withholds the position-advance signal, must be flagged |
-| V10 | A restored record is the record that was fetched | `CausalNodePersistenceTest`: key bytes, value bytes, and timestamp survive the hold-queue round trip — the one fact about a delivery the oracle does not judge |
-| V11 | The guards fail closed rather than guess | `CausalNodeFailClosedTest`, one construction per guard |
-
-V8 is the keystone: it runs a deliberately broken implementation and requires the oracle to
-flag it. A harness that cannot fail is not a harness; if V8 ever breaks, every green result is
-meaningless. V9 is its host-side analogue: `SimNode` can shirk one host duty at a time
-(`HostFault`), and the suite requires the shirked duty to be caught — which is what makes the
-harness meaningful as a [conformance kit](../reference/conformance-kit.md) for hosts other
-than the shipped adapter.
-
-## Anti-vacuity
-
-Every scenario asserts that the machinery it targets actually fired: records were held at the
-gate, crashes were injected, position advances ran, a crash landed while records were held. A
-race that never occurs proves nothing, so the suite refuses to pass on quiet schedules.
-Indicatively, the widest scenario across its hundred seeds drives on the order of ten thousand
-scheduler steps, five thousand oracle-checked deliveries, hundreds of crash injections, and a
-thousand-plus position advances.
-
-These assertions count **seeds, not events**. A sum over a hundred seeds passes when one seed
-happened to be interesting, which is the vacuity they exist to refuse; the floor is a minimum
-number of seeds that reached the state (`SEED_FLOOR`, currently twenty against measured rates
-of forty to seventy). The distinction is not academic — the sums were what hid the fact that
-the hold-queue restore path ran on five node incarnations out of nearly seven thousand.
-
-Two interleavings the scheduler will not reach on its own are bought explicitly, because an
-unweighted draw spends its budget before the interesting state exists:
-
-- **A crash while records are held**, the only route into the hold-queue restore path. The
-  last crash of a world's budget is reserved for a node that is actually holding, and a
-  holding node's crash actions are drawn at double weight. Every interleaving an unweighted
-  draw could produce stays reachable.
-- **A consumer whose baseline sits above a channel's earlier history**, which is what makes a
-  stamp's claims load-bearing rather than redundant with per-channel FIFO. Scenarios that
-  target a particular stamp term retire the earlier history with retention, or join the
-  consumer after it, so the term under test is the only thing that can order the delivery.
-
-## Scenario coverage
-
-Ticking stages (the tick channel is both consumed and produced, so a tick is stamped, lands on
-the emitting task's own partition, and returns through the gate carrying the node's causal past
-— including under crash injection, and across a restart that drops one of the stage's other
-sinks while the tick self-loop still holds claims on it),
-shared-input races (a stage's output racing its input at a shared consumer), transitive claims
-through a hop that does not consume the origin, edge-producer cross-topic ordering, observed
-causality from a plain consumer, crash-recovery chains, filter stages with quiet sinks and
-trailing markers, multi-partition sink ordering through sequence claims, which a node's own
-sends are always claimed in until a restart's end-offset seed converts them to offsets — the
-simulator never delivers a producer acknowledgement, because neither the protocol nor the
-Streams adapter folds one. The late-joiner sequence-claim wedge probe, damped feedback
-cycles (with a consumer of both sides of the loop, since the loop's own nodes cannot gate each
-other), truncation mid-history, log-start stability (full-retention truncation emptying the
-stamp-side clocks, and a from-earliest joiner arriving after truncation), scope shrink across
-a restart, a restart's own prior-incarnation sends ordered against each other at a consumer of
-both sinks, and the wide soak combining most of the above.
-
-The scenarios covering the stamp's four terms are each built so that the term is what orders
-the delivery: the shrink scenario retires the dropped input's channel history from t2 before
-its consumer joins (leaving carried ancestry as the only claim on the t1b past), and the
-restart scenario joins its consumer after the restart (so the two sinks race, and only the
-end-offset seed relates them). Both were rebuilt after the terms were found to be removable
-with the suite green — the earlier shapes let per-channel FIFO supply the ordering for free.
-
-## Mutation testing
-
-PIT runs over the whole package inside `mvn verify`, serially, with a 75% mutation floor and
-an 80% line-coverage floor — both well below the standing scores (**681 of 738 mutations
-killed, 92%; line coverage 1345/1465, 92%; test strength 95%**) so refactoring noise does not
-flake the build.
-
-The gate runs on one thread deliberately. The only timing-sensitive verdict PIT produces is
-`TIMED_OUT`, which scores as a kill, so a threaded run under CPU contention can inflate the
-score. One thread removes that hazard rather than periodically re-checking for it, and costs
-little: 506s serial against 402s at four threads. Verdicts are reproducible — five
-consecutive runs (four threaded, one serial) returned identical verdicts for all 738 mutants,
-compared as a multiset. That reproducibility depends on the iteration-order guarantee
-described under [the simulated world](#the-simulated-world); before it, runs of an unchanged
-tree disagreed.
-
-**The delivery gate itself has no surviving mutants.** All eight mutants of `deliverable`,
-the predicate every guarantee rests on, are killed.
-
-The eight `TIMED_OUT` mutants are all structural non-termination rather than slow tests: six
-in the cascade's fixpoint, plus one each in `advanceFrontier` and `frontierOf`. Each stops the
-frontier advancing while leaving the loop's `changed` flag set, so the fixpoint never settles.
-They are the same eight on every run.
-
-Of the 33 survivors, 20 sit in `CausalNode`, and every one carries a written equivalence
-argument rather than an assumption:
-
-- **Redundancy-masked paths**, the largest group. The density adaptation reaches the same
-  frontier fold from two sites — a receive-time bridge and the cascade's own trailing-run
-  fold, both fed by the same recorded position — so removing either alone is invisible while
-  the other stands. These are not gaps in the scenarios; they are places where the protocol is
-  deliberately belt-and-braces, and a mutation that removes one brace changes nothing.
-- **Stamp normalisation of a node's own echoed claims**, provably equivalent: `prepareSend`
-  merges both `ownOutputs` and carried ancestry into the stamp *before* `normalize` runs, and
-  the upgrade target is drawn from exactly those two clocks, so upgrading a self-claim to
-  offset space can never add anything the stamp does not already carry. Normalisation of
-  *another* sender's claim is not equivalent, and is killed.
-- **Equivalent mutants**, accepted: the length guards in the held-record envelope
-  (`if (keyLen > 0) put(key)` versus `>= 0` — writing a zero-length array is a no-op), the
-  half-open bound of the hold-queue restore window (the store never holds an entry at
-  `tailIndex`), and mutants whose only effect is degrading an optimisation the protocol does
-  not rely on for safety.
-
-The remaining 13 survivors sit outside the protocol, in the adapter and the probes, and need a
-seam that does not exist: a started runtime, a log appender, a multi-partition sink
-`TopologyTestDriver` cannot provide, or a task migration.
-
-Uncovered mutants (24) are led by the Admin-backed seam (`AdminBrokerOffsets` and the admin
-resolver in `TopicIds`, 18 between them), which runs only against a real cluster and so falls
-outside PIT's measurement: the seam stays thin, the logic behind it is driven through
-`BrokerOffsets` by the simulator, and the broker smoke suite exercises it against a live
-broker. The remaining six are `CausalStreams` and `Parsley` members reachable only from a
-started runtime, and one branch each in `Stage$Adapter`, `ContractProbes`, and
-`KafkaStateStore`. None is in the protocol core.
-
-Two of the surviving mutants are findings about `src/main` rather than about the tests, and
-are recorded as such: the tick-topic branch of `ContractProbes.runTopology` cannot produce a
-finding under any input, and the `0xFF` carry loop in `KafkaStateStore.forEachPrefix` is
-unreachable because store keys are UTF-8 strings and UTF-8 never emits that byte.
-
-## The broker smoke suite
-
-The `broker-it` Maven profile runs the `*IT` test classes under failsafe against a real
-single-node broker in a Docker container (Testcontainers), pinned to the minimum supported
-broker version so the stated floor is the one actually tested. It carries the three
-obligations only a live cluster can discharge:
-
-- **The broker side of the seam contract.** `AdminBrokerOffsetsIT` asserts that a real
-  cluster answers the two `BrokerOffsets` queries as the protocol assumes: end offsets per
-  partition with empty partitions included, log starts advanced by record deletion, and
-  definitive absence by topic ID that survives recreating a topic under the same name.
-- **The assembled runtime on a live cluster.** `ParsleyStreamsIT` runs `Parsley.streams`
-  end to end under exactly-once: records flow from source to sink carrying parseable clock,
-  sender, and sequence headers on the wire, and a restart of the same application on the
-  same state directory resumes without loss or duplication.
-- **A task migrating between two live instances.** `ParsleyStreamsIT` runs two instances of
-  one application over a two-partition source and drives a task across two rebalances — one
-  when the second instance joins, one when the first stops cleanly. Each partition's records
-  arrive exactly once in produced order, and each task's stamps carry the same sender
-  identity on its new host as on its old, since identity is derived from the application id,
-  the stage name, and the partition rather than from the incarnation. The rebalances are
-  asserted rather than assumed: each phase waits on the instances' reported active-task
-  counts, so a run that silently never migrated fails at the wait instead of passing as a
-  single-instance run.
-
-The suite is a smoke test of plumbing, not a correctness gate: a real broker offers no
-control over interleavings, so every causal-order obligation stays with the simulator. It
-sits outside the default `mvn clean verify` gate (it needs Docker) and outside PIT's
-measurement, and CI runs it as a separate workflow whose failure does not block a snapshot
-publish.
-
-## What the simulator does not cover
-
-Real broker behaviour outside the model: rebalances, consumer-group protocol edge cases, and
-timing that depends on actual I/O. The broker smoke suite covers the seam contract, the
-assembled plumbing, and a clean task migration on a live cluster; `TopologyTestDriver` smoke
-tests cover the adapter's plumbing (hold-and-release, stamp content, fail-closed corrupt
-headers, the buffered-batch position guard) without a broker.
-
-Task migration is covered only in its benign shape: a task moving between two live instances
-across a clean join and a clean stop, with state small enough that the joining instance is
-inside `acceptable.recovery.lag` and takes the task on the first rebalance. Migration away
-from an instance that dies mid-transaction, standby warm-up and the probing rebalances that
-move a task with large state, and migration under sustained load all remain uncovered.
-
-Two further boundaries are worth naming, because a scenario list reads as a coverage claim:
-
-- **Ticks are modelled at the protocol level, not the adapter's.** The simulator drives the
-  self-loop that matters — stamp, own-partition append, return through the gate — with the
-  scheduler standing in for the wall clock, which is strictly more adversarial than a real
-  timer. The punctuator scheduling, the partition-encoded key, and the sink partitioner stay
-  `TopologyTestDriver`-only, as plumbing rather than protocol.
-- **Some shapes are pinned by directed tests rather than reached by random schedules.** A
-  skipped run behind a held head needs a claim naming an offset inside that specific gap; the
-  randomized topologies reach it only by coincidence, so `CausalNodeDirectedTest` constructs it
-  deterministically instead. The drain check would catch a regression in any world that happens
-  to build the shape, but the directed test is what guarantees it is built at all.
-
----
-
-# Getting started
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/getting-started.md
-
-the coordinates, the snapshot repository, what the published POM declares about itself, the inherited classpath with its licences and native binaries, and declaring topics, stages, and running an application
-
-# Getting started
-
-## Requirements
-
-- Java 21 or later.
-- Kafka brokers new enough to serve topic IDs (3.7+).
-- `processing.guarantee=exactly_once_v2` — enforced by `Parsley.streams`, which also pins
-  the consumer to `read_committed`. Parsley's state is defined against EOS; there is no
-  at-least-once mode.
-
-## Adding the dependency
-
-```xml
-<repositories>
-    <repository>
-        <id>central-snapshots</id>
-        <url>https://central.sonatype.com/repository/maven-snapshots/</url>
-        <releases><enabled>false</enabled></releases>
-        <snapshots><enabled>true</enabled></snapshots>
-    </repository>
-</repositories>
-
-<dependencies>
-    <dependency>
-        <groupId>io.github.tobyjamesclements</groupId>
-        <artifactId>parsley</artifactId>
-        <version>0.2.0-SNAPSHOT</version>
-    </dependency>
-
-    <!-- Only for a test suite that uses ContractProbes. -->
-    <dependency>
-        <groupId>org.apache.kafka</groupId>
-        <artifactId>kafka-streams-test-utils</artifactId>
-        <version>4.3.1</version>
-        <scope>test</scope>
-    </dependency>
-</dependencies>
-```
-
-The same in Gradle:
-
-```kotlin
-repositories {
-    mavenCentral()
-    maven { url = uri("https://central.sonatype.com/repository/maven-snapshots/") }
-}
-
-dependencies {
-    implementation("io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT")
-    testImplementation("org.apache.kafka:kafka-streams-test-utils:4.3.1")   // ContractProbes
-}
-```
-
-`kafka-clients` and `kafka-streams` are inherited and required; the coordinates alone run
-everything on this page. An application with no stage, using only `CausalClock` and
-`CausalHeaders` ([plain clients](clients.md)), is the one exception and may exclude
-`kafka-streams` with `<exclusion>` /
-`exclude(group = "org.apache.kafka", module = "kafka-streams")`, which takes 74 MiB off the
-classpath — see [excluding kafka-streams](#excluding-kafka-streams) for the rest of what
-goes with it.
-
-## What the published POM declares
-
-`ContractProbes` ships in the library jar and compiles against `TopologyTestDriver`, so the
-published POM declares `kafka-streams-test-utils` at compile scope, marked optional. Optional
-is what holds the boundary: an application declaring only `parsley` does not resolve it, and
-declares it at test scope itself to use the probes — the coordinates are under [adding the
-dependency](#adding-the-dependency).
-
-The declaration is deliberate, and it is visible. A scanner reading the POM sees a
-`*-test-utils` artifact at compile scope on a production library, which is the shape
-supply-chain policies are written to flag, so expect to justify or suppress it once. What it
-admits is bounded: that artifact's own dependencies are `kafka-streams`, `kafka-clients`, and
-`slf4j-api`, every one of them already inherited below, and it carries no test framework, so
-it adds one node to your graph, not a subtree. Whole-program tooling is the other tell:
-`jdeps`, jlink image builds, and shading with class-retention analysis all report
-`ContractProbes` referencing classes that are not on a production classpath. Nothing fails at
-runtime; the class is never loaded unless a test suite calls it.
-
-## What you inherit
-
-The two Kafka artifacts bring the rest of the classpath with them. Resolved from the
-coordinates above — `kafka-streams-test-utils` is declared optional, so it is not resolved
-from them and is not part of this:
-
-| artifact | scope | size | licence | bundled natives |
-|---|---|---|---|---|
-| `io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT` | — | 0.1 MiB | MIT | — |
-| `org.apache.kafka:kafka-clients:4.3.1` | compile | 9.7 MiB | Apache-2.0 | — |
-| `com.github.luben:zstd-jni:1.5.6-10` | runtime | 7.0 MiB | BSD-2-Clause | 18 |
-| `at.yawk.lz4:lz4-java:1.10.2` | runtime | 1.0 MiB | Apache-2.0 | 8 |
-| `org.xerial.snappy:snappy-java:1.1.10.7` | runtime | 2.2 MiB | Apache-2.0 | 24 |
-| `org.apache.kafka:kafka-streams:4.3.1` | compile | 2.2 MiB | Apache-2.0 | — |
-| `org.rocksdb:rocksdbjni:10.1.3` | compile | 69.4 MiB | Apache-2.0 **or** GPL-2.0 | 12 |
-| `com.fasterxml.jackson.core:jackson-databind:2.21.2` | runtime | 1.6 MiB | Apache-2.0 | — |
-| `com.fasterxml.jackson.core:jackson-core:2.21.2` | runtime | 0.6 MiB | Apache-2.0 | — |
-| `com.fasterxml.jackson.core:jackson-annotations:2.21` | runtime | 0.1 MiB | Apache-2.0 | — |
-| `org.slf4j:slf4j-api:1.7.36` | compile | 40 KiB | MIT | — |
-
-93.8 MiB and 62 native binaries in total; native counts are the `.so`, `.dll`, and `.dylib`
-entries in each jar. `slf4j-api` is the version `kafka-clients` itself declares, so Parsley
-adds no node to that part of your graph. No logging binding is inherited; choosing one, and
-choosing one that binds the 1.7 API rather than 2.x, stays yours.
-
-Three of those rows carry something worth deciding once rather than rediscovering per
-project.
-
-### RocksDB is dual-licensed; elect Apache-2.0
-
-`rocksdbjni-10.1.3.pom` declares two licences — Apache-2.0 and "GNU General Public License,
-version 2" — and a consumer elects one. Elect Apache-2.0 and there is no copyleft obligation.
-It is the only non-permissive string anywhere in the tree, and a dual Apache/GPL entry is
-exactly what an automated licence scanner escalates for manual review, so it is worth
-recording the election in your own compliance notes rather than reaching it again each time
-the scanner runs.
-
-### The natives are inherited, and extracted at runtime
-
-The compression codecs and RocksDB ship a binary per supported platform inside their jars, and
-extract the one they need to a directory on disk before loading it:
-
-| library | extracts to | override |
-|---|---|---|
-| `zstd-jni` | `java.io.tmpdir` | `-DZstdTempFolder=…`, or `-DZstdNativePath=…` to load a pre-installed library instead |
-| `snappy-java` | `java.io.tmpdir` | `-Dorg.xerial.snappy.tempdir=…` |
-| `lz4-java` | `java.io.tmpdir` | — |
-| `rocksdbjni` | `java.io.tmpdir` | `ROCKSDB_SHAREDLIB_DIR` (environment variable) |
-
-Each loads on first use. RocksDB's is not conditional in a Parsley application: every stage
-keeps its protocol state in a persistent store, so the store opens and the binary loads as the
-application starts. The codecs load when their codec is used, which a consumer does not
-choose — reading a partition someone else wrote with zstd loads zstd, whatever this
-application produces.
-
-Three consequences. A hardened container that mounts the extraction directory `noexec` fails
-the load, so point the overrides above at a path that is both writable and executable. An
-audited or FIPS environment needs an owner for every native library on the host, and these
-arrive without being named in any build file. And the jars are multi-platform by
-construction, so an image built for one architecture still carries every other platform's
-binaries — the bulk of the 93.8 MiB, and not removable without repackaging the jars.
-
-### `at.yawk.lz4:lz4-java` is a fork coordinate
-
-Kafka 4.x moved off `org.lz4:lz4-java`, which is dormant, to a fork published from
-[github.com/yawkat/lz4-java](https://github.com/yawkat/lz4-java) under a personal-domain
-groupId. It is Apache-2.0 and it comes straight from `kafka-clients`, but a site running an
-artifact allowlist, a groupId policy, or a provenance check has to admit it, and it arrives
-through this library with nothing else explaining where it came from.
-
-### Excluding kafka-streams
-
-The plain-client exclusion above removes `kafka-streams`, and `rocksdbjni` and the Jackson
-tree with it: 73.8 MiB, the GPL-2.0 option, and 12 of the 62 natives. What remains is 20.0 MiB
-and the 50 codec natives, all of it under permissive licences. The exclusion is only available
-to an application with no stage; anything that runs the causal gate needs the state store, and
-so needs RocksDB.
-
-## The shape: functional core, imperative edges
-
-Your logic is a pure function. It receives a causally delivered `Message` and returns
-`Emission` values; with per-key state, it is a fold that also returns the next state. It
-holds no reference to any runtime, imports nothing from Kafka, and is unit-testable with
-plain equality. Everything imperative — gating, decoding, state persistence, stamping,
-partitioning, the transaction — lives in the stage runtime that hosts it.
-
-## Topics and codecs
-
-Topics are typed values declared once — codecs live with the declaration, and a pipeline hop
-is the same `Topic` appearing as one stage's sink and another's source, which makes codec
-agreement across the hop hold by construction. A `Codec` is two pure functions between a
-value and its bytes; Kafka serdes (Avro, JSON Schema, and friends) bridge in with
-`Codec.fromSerde(serde, topicName)`. The codec contract, hand-rolled codecs, and the
-schema-registry formats are covered in [codecs and Avro](codecs.md).
-
-```java
-Topic<String, Order>   orders      = Topic.of("orders", Codec.utf8(), orderCodec);
-Topic<String, Payment> payments    = Topic.of("payments", Codec.utf8(), paymentCodec);
-Topic<String, Settled> settlements = Topic.of("settlements", Codec.utf8(), settledCodec);
-```
-
-## A stateless stage
-
-A `Handler` maps one delivered message to its emissions. Emissions are created by the sink
-topic itself — `topic.send(key, value)` — so the payload type-checks at the construction
-site, and an emission to an undeclared sink fails loudly at the stamping site.
-
-```java
-Stage settlement = Stage.named("settlement")
-        .on(orders,   m -> List.of(settlements.send(m.key(), settle(m.value()))))
-        .on(payments, m -> List.of(settlements.send(m.key(), apply(m.value()))))
-        .into(settlements)
-        .build();
-
-Properties props = new Properties();
-props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "broker:9092");
-
-try (CausalStreams app = Parsley.named("settlements-app", settlement).streams(props)) {
-    app.start();
-    // run until shutdown
-}
-```
-
-The application id goes to `Parsley.named` rather than into the properties, because it names
-things: `streams` sets `application.id` from it, and it prefixes every topic and store the
-application owns — the same convention Kafka Streams uses, so a cluster's topic listing keeps
-an application's topics together. See [expectations](expectations.md#what-parsley-expects-of-you).
-
-Every cause the stage consumes has already been delivered when a handler runs; that is the
-guarantee. A message carries its own coordinate — source topic, partition, offset,
-timestamp — and for a message released from the hold queue, the coordinate is its own, not
-the release trigger's. By default an emission inherits the handled message's timestamp;
-`send(key, value, timestamp)` overrides it.
-
-## A stateful stage
-
-Declaring `state` gives the stage per-key state, and sources fold over it: the runtime
-resolves the state for the message's key (the declared initial value for an unseen key),
-applies the pure `Fold`, persists the returned state, and applies the returned emissions —
-all in the same transaction as the delivery. Causal order plus a pure fold makes the state a
-deterministic function of the delivered history.
-
-```java
-Stage balances = Stage.named("balances")
-        .state(balanceCodec, Balance::zero)
-        .on(orders,   (bal, m) -> Step.of(bal.minus(m.value().total()),
-                                          settlements.send(m.key(), settled(bal, m))))
-        .on(payments, (bal, m) -> Step.of(bal.plus(m.value().amount())))
-        .into(settlements)
-        .build();
-```
-
-State is keyed by the message key's encoded bytes — the same agreement co-partitioning
-already requires — and scoped to the stage. Returning `Step.of(null, ...)` deletes the key's
-state. The stage name keys its stores, so keep it stable across deployments.
-
-## Testing your logic
-
-Handlers and folds are pure functions over values with equality, so the primary tests need
-no runtime at all:
-
-```java
-assertEquals(List.of(settlements.send("k", expected)),
-        handler.handle(Message.of("orders", "k", order)));
-
-assertEquals(Step.of(expectedBalance, settlements.send("k", expected)),
-        fold.apply(balance, Message.of("payments", "k", payment)));
-```
-
-For the wiring, `Parsley.named(applicationId, stage).testTopology()` returns a fresh
-broker-less topology for `TopologyTestDriver`: pipe records and assert on outputs. Stamp
-presence is observable via the `CausalHeaders` name constants; gating behaviour itself is
-Parsley's contract, verified by Parsley's own suite. The test topology is for the driver
-only — under a real cluster it neither captures consumer positions nor resolves real topic
-identity, and the adapter fails closed at the first delivered record.
-
-## What the runtime wires for you
-
-`Parsley.streams` installs a client supplier that records consumer positions after each poll
-(the liveness signal — see [liveness](../foundations/liveness.md#position-advance-bridging)),
-and resolves topic identity and sink end offsets through an admin client built from the same
-properties. A declared sink must exist before the application starts: init fails loudly
-rather than run with own-output claims silently off. The returned `CausalStreams` is a
-curated allowlist over the Kafka Streams runtime — lifecycle, state, listeners, metrics,
-lag — with no accessor to the underlying instance. The withheld members are absent for
-stated reasons, on the class Javadoc member by member: interactive queries can observe
-uncommitted transactional state, pausing an instance freezes the release of held records
-fleet-wide, and the rest duplicates what scaling by instances already expresses. `metrics()` includes the stage's own gauges and
-counters in the `vc-metrics` group, listed in the
-[metrics reference](../reference/metrics.md).
-
-## Where next
-
-- [Topology shapes](topologies.md) — the common wiring shapes (linear, fan-out, fan-in,
-  diamond, request and reply, event flows, cycles) and exactly what ordering each one gets.
-- [Codecs and Avro](codecs.md) — the codec contract, writing your own, bridging serdes, and
-  schema-registry formats.
-- [Ticks](ticks.md) — time-driven policy as delivered records: the runtime emits a stamped
-  tick per interval, and pure logic folds over it.
-- [The contract](expectations.md) — everything Parsley expects of you and everything it
-  promises back, including the operational notes.
-- [Verifying your application](verifying.md) — the contract's checkable clauses as probes
-  in your test suite and deploy pipeline.
-- [Diagnosing held records](diagnosing-holds.md) — `explainHolds()`, the hold warnings, and
-  what each diagnosis means when records are waiting at the gate.
-- [Plain clients](clients.md) — stamping from plain producers, observing from plain
-  consumers.
-
----
-
-# Topology shapes
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/topologies.md
-
-pipelines, fan-in, fan-out, and cycles
-
-# Topology shapes
-
-A Parsley topology is stages wired through topics, and the wiring rules are few. A topic may
-be the sink of any number of stages but the source of at most one stage per application
-(Kafka Streams allows one source node per topic). Every topic must exist before the
-application starts, and there are no automatic repartition topics, so the co-partitioning
-precondition stays visible at each hop. Beyond that, shapes compose freely, because every hop
-is the same thing: a causal channel, stamped on write and gated on read.
-
-This page catalogues the common shapes and states exactly what ordering each one gets.
-Topics are named `c1..cN`, stages `p1..pN`, and messages `m1..mN`, with a message's number
-giving its send order where that matters. The recurring theme: causal delivery orders a
-record after its causes, and only after its causes. Where a shape needs an order between
-records that are not causally related, the fix is always to make the relation causal — send
-them from one stamping site, or consume the record you need to come first.
-
-## One application or several
-
-Stages compose into one application, or run as separate applications, and the guarantee does
-not change: ordering is carried by the stamps on the wire, not by co-deployment.
-
-```java
-try (CausalStreams app = Parsley.named("pipeline-app", p1, p2).streams(props)) {
-    app.start();
-}
-```
-
-`Parsley.named("pipeline-app", p1, p2)` assembles both stages into one Streams topology,
-under the application id that names every topic and store the application owns. Each stage
-keeps its own state stores, keyed by its stage name. Splitting the same stages across two
-applications changes deployment granularity and nothing else. A new application joins a
-running topology by simply starting to consume: it self-gates into causal order during
-replay, and its outputs are correctly gated everywhere from its first emission.
-
-## Linear
-
-```text
-c1 --> p1 --> c2 --> p2 --> c3
-```
-
-The pipeline. Within one channel, per-partition FIFO already orders everything; what the
-stamps add is ordering *across* the pipeline's topics. Every record p1 emits claims the
-input that caused it, and claims carry transitively through p2, so any stage that consumes
-several of the pipeline's topics — c1 and c3, say, for reconciliation — delivers effects
-after their causes, however far apart the hops run.
-
-```java
-Stage p1 = Stage.named("p1")
-        .on(c1, m -> List.of(c2.send(m.key(), transform(m.value()))))
-        .into(c2)
-        .build();
-
-Stage p2 = Stage.named("p2")
-        .on(c2, m -> List.of(c3.send(m.key(), summarise(m.value()))))
-        .into(c3)
-        .build();
-```
-
-Stamping is synchronous (sequence claims, see [the stamp](../design/architecture.md#the-stamp)),
-so a hop costs one broker round trip and nothing waits on acknowledgements.
-
-## Fan-out
-
-One stage, several sinks:
-
-```text
-            +--> c2
-c1 --> p1 --|
-            +--> c3
-```
-
-```java
-Stage p1 = Stage.named("p1")
-        .on(c1, m -> List.of(
-                c2.send(m.key(), summary(m.value())),
-                c3.send(m.key(), audit(m.value()))))
-        .into(c2, c3)
-        .build();
-```
-
-The emissions of one delivery are applied in list order, leave in one transaction, and are
-claimed in that order: if the handler above emits m2 to c2 and then m3 to c3, then m3 claims
-m2, and any stage that consumes both c2 and c3 delivers m2 before m3. A stage's sends are
-ordered across *all* its sinks this way, across deliveries too — downstream observers see
-one stage-task's output stream in send order, whichever topics it is spread over.
-
-The other fan-out is one topic with several consumers. Kafka Streams allows one source node
-per topic, so two stages of the same application cannot both consume c1; run the second
-consumer as its own application. Each consuming application gates independently and needs no
-awareness of the others.
-
-## Fan-in
-
-```text
-c1 --+
-     |--> p3 --> c4
-c2 --+
-```
-
-```java
-Stage p3 = Stage.named("p3")
-        .state(pairCodec, Pair::empty)
-        .on(c1, (s, m) -> joined(s.withLeft(m.value()), m))
-        .on(c2, (s, m) -> joined(s.withRight(m.value()), m))
-        .into(c4)
-        .build();
-```
-
-Here `joined` is the pure join step: it returns the updated pair as the next state, plus an
-emission to c4 when both sides are present.
-
-A multi-source stage is where the gate earns its keep: records causally related across c1
-and c2 are delivered in causal order, so the fold's state never sees an effect before the
-cause it consumed. Two records with no causal relation are delivered in arrival order —
-the delivered history is one valid extension of the causal partial order, not a total order
-anyone chose. If the outcome must not depend on which concurrent record lands first, make
-the logic commutative for concurrent inputs; causal order fixes everything else.
-
-Two expectations come with the shape. Related keys must land on the same partition number of
-every source topic — in practice, the same key bytes and the same partition count — because
-the guarantee is per task and a task consumes one partition slice of each source
-([preconditions](../foundations/causal-model.md#preconditions)). And per-key fold state is
-keyed by the message key's encoded bytes, so records from c1 and c2 that agree on key bytes
-fold into the same state, which is exactly the agreement co-partitioning already requires.
-
-## Diamond
-
-```text
-            +--> c2 --> p2 --> c4 --+
-c1 --> p1 --|                       |--> p4 --> c6
-            +--> c3 --> p3 --> c5 --+
-```
-
-Two branches derive from a common source and a join consumes both. Within each branch the
-linear rules apply. Across branches, be precise about what is and is not ordered: the
-records p2 and p3 derive from the same input are causally *concurrent* — each claims the
-common input, neither claims the other — so p4 may receive either side first, and a join
-holds its partial result in fold state until the other side arrives, exactly as in fan-in.
-Wanting "the c4 record before the c5 record" at the join is not a causal property, and no
-sound protocol can grant it without inventing an order.
-
-What the diamond does guarantee is that no branch output outruns anything it *depends on*
-that the join consumes. The sharpest version is the base-and-derived triangle:
-
-```text
-c1 --+--------------> p4
-     |                ^
-     +--> p2 --> c2 --+
-```
-
-p4 consumes both the base topic c1 and the derived topic c2. Every record p2 emits claims
-the base record it was derived from, so p4 always delivers the base before the derivation —
-whatever the branch's lag. This is the shape that removes the classic race where an
-enrichment, an index entry, or a projection arrives ahead of the record it describes.
-
-## Request and reply
-
-```text
-p1 --> c1 --> p2 --> c2 --> p1
-```
-
-p1 emits requests to c1; p2 consumes c1 and emits replies to c2; p1 consumes c2. A reply
-claims the request it answers, so any stage consuming both c1 and c2 sees each request
-before its reply. Correlation — which request a reply answers — rides in the key or payload
-as usual; Parsley orders the flow and adds no envelope.
-
-The property that makes the shape worth naming is effect-before-reply. Have the responder
-emit its effects before its reply, in one handler:
-
-```java
-Stage p2 = Stage.named("p2")
-        .on(c1, m -> List.of(
-                c3.send(m.key(), effect(m.value())),
-                c2.send(m.key(), reply(m.value()))))
-        .into(c2, c3)
-        .build();
-```
-
-The reply m3 claims the effect m2 (fan-out emission order), so a requester that consumes
-both c3 and c2 delivers the effect before the reply: by the time p1 processes an
-acknowledgement, everything it acknowledges is already visible locally. Read-your-writes
-across services, expressed as a topology shape.
-
-## Event flows
-
-An event notification is a record announcing state that lives elsewhere, and its classic
-failure is the dangling notification: the announcement arrives before the data it points
-at. The shape that fixes it is the fan-out order again, this time between a data topic and
-an event topic. Write the data m1 to c1, then the notification m2 to c2, from one stamping
-site — two emissions of one delivery, or a plain producer that folds its acknowledgements
-([plain clients](clients.md)). The notification claims the data record, so every stage
-consuming both topics delivers the data first, and a notification handler can always read
-what it was notified about.
-
-Event topics also cross the adoption boundary well: a producer that stamps nothing claims
-nothing, so its events deliver immediately and unordered, and stamping can be added one
-producer at a time as ordering starts to matter.
-
-## Cycles
-
-Topics may wire stages into a cycle:
-
-```text
-c1 --> p1 --> c2 --> p2 --> c1
-```
-
-The protocol does not deadlock on cycles: every wait a gate can hold resolves strictly
-backward in append time, so the wait graph is acyclic whatever shape the topology takes
-([liveness](../foundations/liveness.md#why-over-claims-cannot-deadlock)). What a cycle does
-demand is a termination condition in the logic itself — a fold that re-emits on every
-delivery circulates forever, at one broker round trip per lap. Converge on a fixpoint,
-count rounds in the state, or emit only on change.
-
----
-
-# Codecs and Avro
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/codecs.md
-
-typed topics and schema integration
-
-# Codecs and Avro
-
-A `Codec<T>` is two pure functions between a value and its bytes, and it is the only
-serialization vocabulary in the functional core: user logic sees decoded values, and Kafka
-serdes stay at the imperative edge, bridged in through `Codec.fromSerde`. Serialization runs
-exactly once on each side, inside the stage. Inbound bytes are held verbatim while a record
-is gated and decoded with the source topic's codecs at delivery; emissions are encoded with
-their topic's codecs at the stamping site, so the clock travels with the exact bytes it
-claims.
-
-## The codec contract
-
-- **Never null.** Null keys and null values pass through the runtime untouched — a tombstone
-  stays a tombstone — so `encode` and `decode` may assume their argument is present and need
-  no null branch.
-- **Total on real data, and inverse.** `decode` must accept every byte sequence `encode`
-  produces (and every byte sequence already on the topic), and `decode(encode(v))` must
-  equal `v` under the type's equality, which is what makes pure logic testable with plain
-  values.
-- **Failure is loud.** A codec that cannot decode should throw, not guess: an exception from
-  `decode` or `encode` fails the task, the transaction aborts, and the retry refetches. A
-  lenient codec that returns a placeholder converts a wiring bug into silent data corruption.
-  For bytes whose malformedness is a domain fact rather than a wiring bug, see
-  [decoding failure you can route](#decoding-failure-you-can-route).
-
-## Built-in codecs and writing your own
-
-`Codec.utf8()`, `Codec.int64()`, and `Codec.bytes()` cover strings, longs, and raw bytes.
-Everything else is `Codec.of(encoder, decoder)`. A fixed-layout value needs a dozen lines:
-
-```java
-record Reading(long sensor, double value) {}
-
-Codec<Reading> readingCodec = Codec.of(
-        r -> ByteBuffer.allocate(16).putLong(r.sensor()).putDouble(r.value()).array(),
-        b -> {
-            ByteBuffer buf = ByteBuffer.wrap(b);
-            return new Reading(buf.getLong(), buf.getDouble());
-        });
-```
-
-For JSON, wrap a mapper and rethrow its checked exceptions unchecked — the runtime treats
-any codec exception as a task failure, which is the behaviour you want:
-
-```java
-static <T> Codec<T> json(ObjectMapper mapper, Class<T> type) {
-    return Codec.of(
-            v -> {
-                try {
-                    return mapper.writeValueAsBytes(v);
-                } catch (JsonProcessingException e) {
-                    throw new UncheckedIOException(e);
-                }
-            },
-            b -> {
-                try {
-                    return mapper.readValue(b, type);
-                } catch (IOException e) {
-                    throw new UncheckedIOException(e);
-                }
-            });
-}
-```
-
-## Decoding failure you can route
-
-The codec contract's loud-failure rule is about wiring bugs: between your own producers and
-consumers, undecodable bytes mean a broken deployment, and failing the task is the correct
-response. A source topic whose producers you do not control is different — there, malformed
-bytes can be a fact of the domain, and they arrive before user logic runs, so no handler
-can catch them. The escape is to make the codec itself total over a sum type that keeps the
-failure explicit:
-
-```java
-sealed interface Decoded<T> {
-    record Ok<T>(T value) implements Decoded<T> {}
-    record Malformed<T>(byte[] raw, String reason) implements Decoded<T> {}
-}
-
-static <T> Codec<Decoded<T>> attempting(Codec<T> codec) {
-    return Codec.of(
-            d -> switch (d) {
-                case Decoded.Ok<T> ok -> codec.encode(ok.value());
-                case Decoded.Malformed<T> m -> m.raw();
-            },
-            b -> {
-                try {
-                    return new Decoded.Ok<>(codec.decode(b));
-                } catch (RuntimeException e) {
-                    return new Decoded.Malformed<>(b, e.toString());
-                }
-            });
-}
-```
-
-The handler then receives `Decoded<T>` and routes the `Malformed` case to a declared error
-sink, in causal order like every other emission — see
-[domain failures are data](error-handling.md#domain-failures-are-data). This is not the
-lenient placeholder the contract forbids: a placeholder pretends decoding succeeded and
-corrupts silently, while the sum type forces every consumer of the value to decide the
-failure case in the type system. Keep total codecs on values from foreign producers only;
-a topic your own stages write should keep the loud contract, because there malformed bytes
-are a bug you want to fail on.
-
-## Key codecs are identity
-
-A key's encoded bytes are load-bearing three times over. They choose the partition (the
-producer-default murmur2 hash of the encoded key), they key the stage's per-key fold state,
-and they are the unit of the co-partitioning agreement across topics and producers. A key
-codec must therefore be **canonical and stable**: the same logical key produces the same
-bytes on every producer, in every version, forever. `Codec.utf8()`, `Codec.int64()`, and
-`Codec.bytes()` all qualify.
-
-Registry-framed encodings do not: an Avro, JSON Schema, or Protobuf serializer prefixes the
-payload with a schema id, so re-registering the key schema changes the bytes of every key —
-which re-partitions the topic and orphans existing fold state. Keep registry-framed codecs
-on values, and give keys a primitive or hand-rolled canonical codec.
-
-## Bridging Kafka serdes
-
-`Codec.fromSerde(serde, topic)` turns any configured `Serde<T>` into a codec. The topic name
-is fixed at bridge time because serdes take it per call — schema-registry serdes derive
-their subject from it — so bridge one codec per topic rather than sharing one across topics.
-The caller configures the serde before bridging and owns its lifecycle. The bridged codec
-inherits the codec contract's null rule: the serde's null path is never exercised, because
-nulls do not reach codecs.
-
-## Avro
-
-Avro arrives through the serde bridge. Add Confluent's serde artifact (it lives in the
-Confluent Maven repository, not Central):
-
-```xml
-<dependency>
-    <groupId>io.confluent</groupId>
-    <artifactId>kafka-streams-avro-serde</artifactId>
-    <version>8.0.0</version>
-</dependency>
-```
-
-Configure a serde per value type, bridge it per topic, and declare the topic once:
-
-```java
-SpecificAvroSerde<Reading> readingSerde = new SpecificAvroSerde<>();
-readingSerde.configure(Map.of("schema.registry.url", "http://registry:8081"), false);
-
-Topic<String, Reading> c1 = Topic.of("c1", Codec.utf8(), Codec.fromSerde(readingSerde, "c1"));
-```
-
-The `false` in `configure` marks it a value serde, and the bridge's topic name gives the
-registry subject (`c1-value` under the default naming strategy). `GenericAvroSerde` works
-identically for `GenericRecord` values, as do Confluent's JSON Schema and Protobuf serdes —
-the bridge does not care which framing sits behind the serde.
-
-What Avro-specific behaviour to expect at runtime:
-
-- **The registry is a runtime dependency of both codec sites.** Encoding at the stamping
-  site registers or looks up the writer schema; decoding at delivery fetches the writer
-  schema by the id in the frame. A registry outage therefore fails the task rather than
-  producing or accepting unreadable bytes, and the transaction's retry refetches.
-- **Held records and schema evolution compose cleanly.** A record can wait in the hold queue
-  for its causes; it waits as the original bytes and is decoded only at delivery. The frame
-  carries the writer-schema id, so a record written under an older schema decodes under
-  whatever compatible reader schema is in force when it is finally released. Avro's usual
-  compatibility rules apply unchanged; Parsley adds no constraint of its own.
-- **Keep Avro off keys.** The schema-id frame makes registry-encoded keys non-canonical —
-  see [key codecs are identity](#key-codecs-are-identity).
-
----
-
-# Error handling
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/error-handling.md
-
-the error model and the recovering decorators
-
-# Error handling
-
-Handlers and folds carry no error channel in their signatures: a handler returns emissions,
-a fold returns a step, and there is no `Either` or result wrapper around either. This page
-states what the runtime does when logic throws, why that is the default, and how to model
-failures that are part of your domain.
-
-## What happens when logic throws
-
-An uncaught `RuntimeException` from a handler, a fold, or a codec fails the stream task. The
-task's transaction aborts atomically: the delivery, the fold state it wrote, the emissions
-it caused, and the sequence claims stamped on them all roll back together, and the
-committed state remains exactly what the last successful delivery left. What happens to the
-application next is the host runtime's policy, decided by the
-[uncaught-exception handler](#the-stream-thread-policy).
-
-On restart the task refetches from its committed position and redelivers the same records
-in the same causal order. The two failure classes therefore behave differently:
-
-- A **transient failure** — a schema-registry outage, a broker hiccup — retries with
-  exactly-once semantics. The aborted attempt leaves no trace, and the retry delivers the
-  record as if the failure never happened.
-- A **deterministic failure** — a bug, a message the logic cannot handle — recurs on every
-  redelivery and fails the task each time. The record blocks its channel until the logic
-  changes.
-
-## Why abort-and-retry is the default
-
-The runtime cannot tell the two classes apart: a throw carries no evidence of whether the
-same inputs produce it again. Aborting is the only response that is safe under both
-readings. Committing a failure outcome instead — routing the record to an error topic, for
-example — is irrevocable under exactly-once semantics, and performed on a transient throw it
-misroutes a record that a retry delivers normally. A blocked channel is loud, visible in the
-[hold metrics](../reference/metrics.md), and fully recoverable by deploying fixed logic; a
-misrouted record is none of those.
-
-For the same reason there is no retry budget and no skip-after-N-attempts policy. An
-attempt count is a function of crash timing, not of the delivered history, so any outcome
-keyed to it makes fold state and emissions depend on how often a task happened to restart —
-the same class of guess as delivering on a timeout, which the
-[contract](expectations.md#what-parsley-promises) excludes.
-
-## Domain failures are data
-
-A failure that belongs to your domain — a validation reject, a request the business logic
-refuses — is not an exception to the model above, because it is not a task failure at all.
-Model it as an emission: declare an error sink, and return the failure through it. An error
-emission is stamped, claimed, and causally ordered downstream like any other, so a consumer
-of the error topic sees rejects in causal order too.
-
-`Handler.recovering` and `Fold.recovering` package this pattern for logic that signals
-failure by throwing. The decorator catches a `RuntimeException` and converts it into the
-emissions a recovery function yields, typically to a declared error sink:
-
-```java
-Topic<String, Order> orders = Topic.of("orders", Codec.utf8(), orderCodec);
-Topic<String, Shipment> shipments = Topic.of("shipments", Codec.utf8(), shipmentCodec);
-Topic<String, String> rejects = Topic.of("rejects", Codec.utf8(), Codec.utf8());
-
-Stage stage = Stage.named("shipping")
-        .on(orders, Handler.recovering(
-                m -> List.of(shipments.send(m.key(), ship(m.value()))),
-                (m, e) -> List.of(rejects.send(m.key(), e.getMessage()))))
-        .into(shipments, rejects)
-        .build();
-```
-
-The fold form keeps the key's prior state unchanged and carries the recovery's emissions in
-its step. In both forms the recovery commits in the same transaction as the delivery — it
-is exactly-once and never retried — which is what makes the caveat above load-bearing:
-
-- **Wrap only logic whose throws are deterministic** in the message (and, for a fold, the
-  state). A transient failure caught by the decorator routes a good record to the error
-  sink irrevocably, where the undecorated form's abort-and-retry delivers it.
-- An `Error` propagates through the decorator and fails the task. Only `RuntimeException`
-  is recoverable, because only it can plausibly be a domain outcome.
-
-## Malformed records
-
-Codec failures sit before user logic — inbound bytes decode at delivery, with no handler
-frame on the stack — so the decorators cannot reach them, and a codec exception fails the
-task as [the codec contract](codecs.md#the-codec-contract) requires. For a source topic
-whose producers you do not control, where malformed bytes are a fact of the domain rather
-than a wiring bug, make the codec total over a sum type instead:
-[decoding failure you can route](codecs.md#decoding-failure-you-can-route). The failure
-then arrives in the handler as a value, and the handler routes it like any other domain
-failure.
-
-## The stream-thread policy
-
-The division of labour: the transaction decides what a failure does to the data (nothing —
-it aborts), and the `StreamsUncaughtExceptionHandler` registered on
-[`CausalStreams`](getting-started.md#what-the-runtime-wires-for-you) decides what it does
-to the application — replace the thread, shut down the client, or shut down the
-application. `CausalStreams` registers the handler totalized: a handler that itself throws,
-or returns null, resolves to `SHUTDOWN_CLIENT` with both failures logged, so a handler bug
-shuts the client down loudly instead of silently losing the stream thread.
-
----
-
-# Ticks
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/ticks.md
-
-runtime-emitted time records delivered through the causal gate
-
-# Ticks
-
-A stage may declare ticks: at the declared interval, the stage runtime emits one stamped
-record per task to the stage's own tick topic, consumes it back through the causal gate like
-any other record, and delivers it to your logic as a `Tick`. Wall-clock time reaches pure
-logic only as data on a delivered record, so tick logic stays a pure function, testable with
-plain equality, and the tick itself is durable: a tick whose processing fails is redelivered
-in order by the aborted transaction's retry, never lost.
-
-```java
-Stage balances = Stage.named("balances")
-        .state(balanceCodec, Balance::zero)
-        .on(orders, (bal, m) -> Step.of(bal.minus(m.value().total())))
-        .ticks(Duration.ofMinutes(1),
-                tick -> List.of(audits.send(null, "cut@" + tick.timestamp())))
-        .into(audits)
-        .build();
-```
-
-## What a tick means
-
-A tick's stamp is written at the same stamping site as every emission, so it claims the
-task's consumed history at the moment of emission — a consistent cut of everything the task
-had delivered when the interval fired. Two consequences follow.
-
-First, any consumer of an emission a tick causes is gated behind that cut: a downstream
-stage sees the tick's effects only after everything the ticking task had seen. A
-channel-scoped policy event needs no enumeration — "everything in this channel so far" is
-exactly what the stamp claims, entry by entry.
-
-Second, the scope is the channel. A task consumes one partition of each source topic, so the
-history a tick can speak for is its own slice's, the same per-task scope as the delivery
-guarantee itself. A policy that must react per entity at a chosen time is a topology shape,
-not a tick: emit a timer request and let a scheduler produce the keyed reply — the
-[request and reply](topologies.md#request-and-reply) shape, with the fire record stamped by
-a [`CausalClock`](clients.md) so it is gated behind the request's causes.
-
-## Stateless and stateful ticks
-
-On a stateless stage, tick logic is a `TickHandler`: a pure function from the tick to its
-emissions. On a stateful stage, `ticks` may instead take a `TickFold`, which steps the
-stage's tick state: one reserved per-partition slot of the stage's declared state type,
-distinct from every per-key slot including the null key's. It is resolved to the stage's
-initial value when unseen, persisted transactionally with the delivery, and deleted by
-returning `Step.of(null, ...)` — the same discipline as a key fold.
-
-A tick carries no entity key, so tick logic never sees per-key state. The slot holds
-tick-to-tick memory — the last time a policy fired, counters, rate limits. A stage whose
-state type is `Long` can, for example, emit a cut marker every fifth tick:
-
-```java
-.ticks(Duration.ofMinutes(1), (Long quiet, Tick tick) -> quiet + 1 >= 5
-        ? Step.of(0L, audits.send(null, "cut@" + tick.timestamp()))
-        : Step.of(quiet + 1))
-```
-
-A stateful stage may also declare ticks with a plain `TickHandler`, which leaves the slot
-untouched.
-
-## Delivery timing
-
-Ticks ride the ordinary pipeline, so two delays are inherent. A tick becomes visible to the
-task's consumer only when the transaction that emitted it commits, so tick delivery lags
-emission by up to the commit interval. And a tick's stamp merges the claims advertised by
-records currently held at the task, so a tick emitted while a record is held on an
-unresolved dependency is itself held until that dependency delivers — delay-only, and
-liveness is unaffected: every claim names a really-appended offset. The tick interval is a
-cadence floor, not an exact schedule.
-
-## The tick topic
-
-The tick topic is named `<application.id>-<stage-name>-ticks` and is the stage's own: it
-appears as one of the stage's sources, so composition rules prevent any other stage from
-consuming it. The application id comes from `Parsley.named`, and prefixing it follows the
-convention Kafka Streams uses for the topics it creates — a stage named `balances` in the
-application `payments` owns `payments-balances-ticks`, which sorts beside the
-`payments-balances-state-changelog` Streams creates for the same stage.
-
-Like every declared topic it must exist before the application starts, and assembly fails
-loudly when it is missing or its partition count differs from the stage's widest source
-topic — each task emits ticks to its own partition, so the counts must agree exactly.
-`ContractProbes.probe` reports the name to create without needing a cluster. Ticks are
-transient by design; a short retention on the topic is enough, provided it covers consumer
-lag like any causal topic.
-
-## Testing
-
-Tick logic is pure, so the primary tests need no runtime:
-
-```java
-assertEquals(Step.of(1L, audits.send(null, "fired")),
-        policy.apply(0L, new Tick(1000L)));
-```
-
-Under `TopologyTestDriver`, `advanceWallClockTime(interval)` emits the tick, and the driver
-feeds the tick topic back into the stage; construct the driver with a fixed initial wall
-clock to make tick timestamps deterministic. Each emitted tick counts on the
-`ticks-emitted-total` metric ([metrics](../reference/metrics.md)).
-
----
-
-# The contract
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/expectations.md
-
-what Parsley promises and what it requires of the application
-
-# The contract
-
-This page collects the working agreement in one place: what Parsley expects from you, what
-it promises back, and what it deliberately does not promise. Each expectation restates a
-precondition of [the causal model](../foundations/causal-model.md#preconditions), which
-holds the formal versions; the links under each item lead to the reasoning. The
-mechanically checkable clauses also run as probes in your own test suite and deploy
-pipeline — see [verifying your application](verifying.md).
-
-## What Parsley expects of you
-
-**Environment.**
-
-- Java 21 or later, and brokers that serve topic IDs (3.7+) — channel identity is
-  `(topicId, partition)`
-  ([channels, coordinates, clocks](../foundations/causal-model.md#channels-coordinates-clocks)).
-- `processing.guarantee=exactly_once_v2`, with `read_committed` consumption. `Parsley.streams`
-  forces both; there is no at-least-once mode, because all of Parsley's state commits in the
-  task's transaction.
-- Run the topology through `Parsley.streams`. The adapter self-checks at runtime — the
-  processing guarantee at init, captured consumer positions at the first delivered record —
-  and fails closed when the topology is hosted any other way.
-
-**Topics.**
-
-- Every declared topic exists before the application starts. Sinks are resolved at init and
-  a missing one fails loudly; nothing is auto-created, and there are no automatic
-  repartition topics.
-- A stage that declares [ticks](ticks.md) owns the topic
-  `<application.id>-<stage-name>-ticks`, which likewise exists before start, with exactly the
-  partition count of the stage's widest source topic — assembly fails loudly on a mismatch.
-  Short retention suffices; ticks are transient.
-- The application id names things, so it is fixed at composition — `Parsley.named(id, ...)` —
-  and `Parsley.streams` rejects properties that set `application.id` to anything else. Every
-  topic and store the application owns is named `<application.id>-<stage>-<kind>`: the tick
-  topic directly, and the state stores by way of the `<application.id>-<stage>-state-changelog`
-  and `-fold-changelog` topics Kafka Streams derives from them. That is the convention Streams
-  itself uses, so an operator listing a cluster's topics in name order sees an application's
-  Parsley and Streams topics as one block rather than in two unrelated places.
-- Topic identity is stable mid-run: a topic deleted and recreated under the same name is a
-  different channel, and the old incarnation's history is loss, never reordering.
-- Retention covers consumer lag on causal topics. A consumer must be able to fetch, or
-  observe the skip of, every offset a claim names; undersized retention fails loudly at the
-  position reset, never silently.
-
-**Keys and partitioning.**
-
-- Co-partition a stage's source topics by key: related keys must land on the same partition
-  number of every source, which in practice means the same key bytes and the same partition
-  count. The guarantee is per task, and Parsley, like Kafka Streams, does not enforce this
-  precondition ([the causal model](../foundations/causal-model.md#preconditions)).
-- Key encodings are canonical and stable — the encoded bytes choose the partition and key
-  the fold state ([key codecs are identity](codecs.md#key-codecs-are-identity)).
-
-**Logic.**
-
-- Handlers and folds are pure, and their effects are closed: everything causally significant
-  leaves through the returned emissions and fold state. A write to an external system, a
-  send through a private producer, or a mutation of shared state is invisible to the causal
-  model — no stamp claims it and no gate can order against it.
-- Emissions name declared sinks only; an emission to an undeclared sink fails loudly at the
-  stamping site.
-
-**Names.**
-
-- A stage's name keys its state stores and derives its sender identity, so it stays stable
-  across deployments of the same application, as does the application id.
-
-**Stamps.**
-
-- Every producer on a causal path stamps its outputs. Stages do this automatically; plain
-  producers use a [`CausalClock`](clients.md). An unstamped record claims nothing — safe for
-  the record itself, invisible to downstream ordering.
-
-## What Parsley promises
-
-- **Causal delivery, per task.** A record reaches your logic only after every cause your
-  stage consumes has been delivered locally, channels are FIFO per partition, and each
-  `Message` carries its own coordinate — for a record released from the hold queue, its own,
-  not the release trigger's.
-- **One transaction per delivery.** The delivery, the fold state it wrote, and the emissions
-  it caused commit atomically under exactly-once semantics, so crash recovery is a pure
-  restore and a stateful stage's fold state is a deterministic function of the delivered
-  history.
-- **Send order is claimed.** The emissions of one delivery, and one stage-task's successive
-  sends across all its sink topics, are claimed in send order — a stage that consumes
-  several of your sinks delivers your outputs in the order you sent them
-  ([the stamp](../design/architecture.md#the-stamp)).
-- **Joining needs no coordination.** A new application starts consuming, self-gates into
-  causal order during replay, and its stamps make its outputs correctly gated everywhere
-  from its first emission.
-- **Blocks or fails, never guesses.** There is no timeout that reorders, drops, or delivers
-  early. The fail-closed conditions are loud task failures: an undecodable clock, sender, or
-  seq header; an emission to an undeclared sink; a missing sink at init; a topology hosted
-  outside `Parsley.streams`. A failed send aborts with its transaction, taking every claim
-  on it along, and the retry refetches. What a failure in your own logic does, and how to
-  model domain failures instead, is [error handling](error-handling.md).
-- **Held records are never dropped.** Hold queues are unbounded, so a wedge is a loud stall,
-  never a silent loss. They are not free: a held record occupies the state store and its
-  changelog *and* stays resident in memory, so hold depth bounds heap as well as disk
-  ([hold queues](../design/architecture.md#hold-queues-are-unbounded)).
-
-## What Parsley does not promise
-
-- **No total order.** Records with no causal relation deliver in arrival order, and the
-  interleaving of concurrent records may differ between instances and between runs. The
-  delivered history is one valid extension of the causal partial order; logic whose outcome
-  must not depend on the choice is written commutative for concurrent inputs.
-- **No ordering across partition slices.** The guarantee is per task, which is what makes
-  co-partitioning a precondition rather than advice.
-- **No ordering through side channels.** Effects that bypass emissions — external writes,
-  private producers — carry no stamps and are outside the guarantee.
-- **No gating for plain consumers.** A plain consumer may observe stamps
-  ([plain clients](clients.md)), but a consumer that wants causal delivery order is by
-  definition a causal stage: run it as one.
-- **No backpressure surface.** Holding is the mechanism and monitoring is the interface;
-  there is no per-channel pause, because the primary host cannot honour one.
-- **No history below the baseline.** History below a node's first sighting of a channel,
-  like history that retention has deleted, is outside scope by definition — a
-  finite-retention fact, not an ordering exception.
-
-## Operating it
-
-- **Watch hold depth.** The `records-held` and `records-held-age-max-ms` gauges are the
-  direct signals ([metrics](../reference/metrics.md)): the stage's committed positions
-  advance past held records, so its own consumer lag does not show holding. A lagging or
-  stalled cause channel also shows up as growth of the protocol state store (and its
-  changelog) and as consumer lag on the cause topic; retention economics are the real bound
-  on how long a record can wait.
-- **Ask the runtime why.** `CausalStreams.explainHolds()` names, for each gating head, the
-  cause it is waiting for and the local watermarks that show the gap, and a hold that
-  outlives its stage's `holdWarningAfter` threshold logs the same summary once at WARN under
-  a stable `vc-hold-*` code. Start there rather than reconstructing the dependency by hand:
-  [diagnosing held records](diagnosing-holds.md).
-- **A blocked head blocks its channel** (head-of-line blocking, by design). A producer whose
-  stamps claim records its consumers cannot yet fetch convoys that channel; the cure is
-  fixing the lagging cause, not skipping the head.
-- **Truncation follows retention.** Stamp-side clock width is bounded by the causal history
-  retention actually keeps; the sweep runs every `truncationInterval` (default ten minutes),
-  and a failed sweep skips a cycle rather than failing the task, counting on
-  `truncation-sweeps-skipped-total`
-  ([truncation](../design/architecture.md#truncation-log-start-stability)).
-- **Baseline late joiners at the last stable offset,** not the log end, when seeding a new
-  consumer's start position by hand — every claim minted by an open transaction sits above
-  the LSO, so it resolves
-  ([the sequence-claim caveat](../foundations/liveness.md#the-sequence-claim-caveat-late-joiners)).
-- **The runtime handle is an allowlist.** `CausalStreams` exposes lifecycle, listeners,
-  state, metrics, and lag, and withholds the rest: interactive queries because they can
-  observe uncommitted transactional state, pause because it stalls the fleet from one
-  handle, and the members that duplicate scaling by instances because a minimal surface can
-  grow compatibly. The per-member reasons and operational alternatives are on its Javadoc
-  and in [getting started](getting-started.md#what-the-runtime-wires-for-you).
-- **Logging is metadata-only.** Parsley logs through SLF4J and ships no binding, and it
-  declares the same `slf4j-api` version `kafka-clients` brings, so adding Parsley leaves an
-  application's SLF4J version wherever Kafka already put it. Only the classic API is called,
-  which every 1.7 and 2.x binding serves; an application wanting 2.x declares it and gets it.
-  Logger names are the class names under `io.github.tobyjamesclements.parsley`. INFO covers
-  lifecycle: application assembly, task and node initialisation with the source-topic to
-  channel mapping, restored hold queues, scope changes, and truncation on a destroyed
-  topic. WARN covers a skipped truncation sweep, and a record that has gated its channel for
-  longer than its stage's `holdWarningAfter` — once per hold, under a stable `vc-hold-*` code
-  ([diagnosing held records](diagnosing-holds.md)). DEBUG traces each record's hold and
-  delivery with its coordinate, dependency clock, and sender claim, which is the level to
-  enable when a hold needs more than the diagnosis surface reports. No level logs payload
-  bytes; every line carries coordinates that point at the durable record instead.
-
----
-
-# Diagnosing held records
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/diagnosing-holds.md
-
-explainHolds(), the vc-hold-* warnings, and what each diagnosis means — never fixed by skipping or a timeout
-
-# Diagnosing held records
-
-When records stop coming out of a stage, the gate is usually doing its job: a cause is
-missing, lagging, or unstamped, and Parsley is refusing to deliver an effect before it. The
-rule that overrides everything is that this is never fixed by skipping, reordering, or adding
-a timeout — the fix is to deliver the missing cause. This page is how you find out which cause
-that is.
-
-Three surfaces answer three different questions:
-
-| Surface | Answers |
-|---|---|
-| [Metrics](../reference/metrics.md) — `records-held`, `records-held-age-max-ms` | *Is* anything held, and for how long? Alert on these. |
-| `CausalStreams.explainHolds()` | *Why* is it held — which cause, on which channel, how far behind? |
-| The `vc-hold-*` WARN lines | The same answer, pushed, when a hold outlives its threshold. |
-
-The committed consumer position advances past held records, so a stage's own consumer lag
-never shows holding. The metrics are the only signal that something is held at all, which is
-why they are what you alert on.
-
-## Asking the runtime why
-
-`explainHolds()` returns one entry per gating head across the instance's local tasks,
-longest-held first:
-
-```java
-for (HeldRecord held : app.explainHolds()) {
-    log.info(held.summary());
-}
-```
-
-Each entry names the held record's coordinate, how long it has gated its channel, how many
-records wait behind it, and every cause it is still waiting for — with the local watermarks
-that show the gap:
-
-```text
-stage 'reconciler' task 0_3 has held views:3@8814 for 47000ms (queue depth 219):
-vc-hold-not-fetched waiting on commands:3 offset 51204 (local frontier 51199, position 51200)
-— the cause has not reached this consumer yet; check lag on that topic
-— see HeldRecord.Diagnosis#NOT_FETCHED
-```
-
-The line ends with the `HeldRecord.Diagnosis` constant that names the case. Its Javadoc states
-the condition and the action; the section below expands each one.
-
-Only queue heads appear. Holding is head-of-line blocking by design, so the head is the whole
-story: the 219 records behind it wait on it, not on causes of their own.
-
-Two properties are worth knowing before you build on this. It is **payload-free** — coordinates,
-claims, and watermarks, never key or value bytes — which is what keeps it from becoming a back
-door to state that [interactive queries are withheld](getting-started.md#what-the-runtime-wires-for-you)
-to protect. And it reads a snapshot each task publishes from its own stream thread on its
-wall-clock punctuator, so it takes no locks on the processing path, and a reading is at most
-one punctuator interval stale and describes an in-flight view an aborted transaction may roll
-back. Diagnose with it; do not treat it as a source of truth about application state.
-
-## The warning
-
-A hold that outlives its stage's threshold is logged once, at WARN, with the same summary:
-
-```java
-Stage.named("reconciler")
-        .on(views, ...)
-        .holdWarningAfter(Duration.ofMinutes(2))   // default: 30 seconds
-        .into(...)
-```
-
-One hold warns once — a line per punctuator tick would bury the diagnosis it exists to
-surface — and a new head on the same channel is a new hold, so it warns again. Zero or a
-negative duration disables the warning and leaves the accessor and metrics as the interface.
-
-It is WARN and not ERROR deliberately: nothing has failed. The line says a wait has lasted
-long enough to be worth a look, and names what to look at. Match on the `vc-hold-*` code if you
-route logs by pattern; the codes are stable.
-
-## The diagnoses
-
-### The cause has not arrived
-
-`vc-hold-not-fetched` (`HeldRecord.Diagnosis#NOT_FETCHED`) — the claimed record has not been
-fetched by this consumer yet. The local position is at or below the claimed offset, so the
-record is genuinely still in flight.
-
-This is the ordinary case and it usually resolves itself. Look at the *cause* topic: consumer
-lag on it, whether its producer is healthy, and whether the producing stage is itself stalled.
-A cause channel that is merely slow makes a hold that clears; a cause channel whose producer
-has stopped makes one that does not.
-
-### The cause is itself held
-
-`vc-hold-held-upstream` (`HeldRecord.Diagnosis#HELD_UPSTREAM`) — the claimed record has been
-fetched here but not delivered, so it is sitting in its own channel's hold queue behind that
-channel's head.
-
-Follow the chain: that channel's head appears in the same report, with its own unmet causes.
-Holds compose, and the useful end of the chain is the one record whose cause has not arrived
-at all. Fix that one and the whole chain drains.
-
-### No record from that sender
-
-`vc-hold-sender-unseen` (`HeldRecord.Diagnosis#SENDER_UNSEEN`) — a sequence claim naming a
-sender this task has never delivered on that channel. Sequence claims are how a stamp names
-the sender's own just-issued sends, whose offsets the broker has not yet assigned.
-
-Usually this is transient: the sender's record is on its way. If it persists and the sender
-never writes that partition again, this is the documented
-[late-joiner window](../foundations/liveness.md#the-sequence-claim-caveat-late-joiners) — a
-consumer that baselined at the log end cannot deliver a record that sits below its baseline.
-Baseline late joiners at the last stable offset rather than the log end.
-
-### The sender's later records are behind
-
-`vc-hold-sender-behind` (`HeldRecord.Diagnosis#SENDER_BEHIND`) — a sequence claim ahead of
-what this task has delivered from that sender. The sender's later records are in flight, or
-their transaction has not committed.
-
-Under `read_committed`, records of an open transaction are invisible until it commits, so a
-long-running or stuck producer transaction shows up exactly here. Check the sender's commit
-interval and whether it is making progress.
-
-## What none of them mean
-
-None of these diagnoses is ever resolved by skipping the held record. Every claim names a
-really-appended offset, so every wait terminates once its cause is delivered
-([liveness](../foundations/liveness.md)); a hold that never clears means a cause that never
-arrives, and that is a broken upstream, a retired sender, or retention that outran a consumer
-— all of which are fixed upstream.
-
-If holding is costing more than the ordering is worth for a particular topic, the answer is to
-stop stamping that producer, not to weaken the gate: an unstamped record claims nothing and
-delivers immediately, which is a per-topic decision made at the producer
-([plain clients](clients.md)).
-
----
-
-# Verifying your application
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/verifying.md
-
-ContractProbes — the contract's checkable clauses as test-time and cluster probes
-
-# Verifying your application
-
-[The contract](expectations.md) states what Parsley expects of an application; this page is
-how the mechanically checkable clauses run in your test suite instead of being remembered.
-The docs describe, the probes verify. Nothing here replaces the runtime's fail-closed checks
-— probes move discovery from deploy time to test time.
-
-## Test-time probes
-
-`ContractProbes.probe` drives your application's own `testTopology()` under
-`TopologyTestDriver` — broker-less, so it runs in plain CI — with sample records you supply,
-at least one per source topic. `kafka-streams-test-utils` must be on the test classpath (it
-is an optional dependency of Parsley, so your test scope declares it — the coordinates are in
-[getting started](getting-started.md#adding-the-dependency) — and production classpaths never
-see it).
-
-```java
-@Test
-void applicationMeetsTheContract(@TempDir Path stateDir) {
-    ContractProbes.probe(
-            Parsley.named("settlements-app", settlement, balances),
-            ContractProbes.Samples.of()
-                    .on(orders, "o-1", sampleOrder())
-                    .on(payments, "p-1", samplePayment()),
-            stateDir
-    ).assertOk();
-}
-```
-
-`assertOk()` throws with every failure at once, each finding naming the probe, what it
-observed, and the contract clause it checks. A finding names its clause as the Javadoc element
-that states it, so the pointer stays valid however this site is arranged:
-
-| Probe | Checks | Clause |
-|---|---|---|
-| `key-codec` | Key codecs are deterministic and canonical on the samples: encode twice agrees, decode-then-encode returns the same bytes. The encoded bytes choose the partition and key the fold state. | [`Topic#of`](codecs.md#key-codecs-are-identity) |
-| `stamps` | Every record observed on a sink carries parseable `vc`, `vc-sender`, `vc-seq` headers. | [`CausalClock`](clients.md) |
-| `sink-decode` | Every observed output decodes with its sink topic's own codecs — the bytes the next hop's consumer will decode. | [`Codec`](codecs.md) |
-| `declared-sinks` | No handler path emits to an undeclared sink. | [`Handler`](expectations.md#what-parsley-expects-of-you) |
-| `logic` | Handlers and folds are total on their samples — a throwing handler is a finding, not a stack trace to reverse-engineer. | [`Handler`](error-handling.md) |
-| `samples` | Every sample names a topic some stage consumes — a misconfigured probe run fails, it does not silently pass. | [`Parsley`](expectations.md#what-parsley-expects-of-you) |
-| `topic-exists` | Every declared source, sink and tick topic resolves on the cluster. | [`Parsley`](expectations.md#what-parsley-expects-of-you) |
-| `co-partition` | A stage's sources agree on partition count. | [`Stage`](expectations.md#what-parsley-expects-of-you) |
-| `tick-topic` | A stage's tick topic carries exactly the partition count of its widest source. | [`Stage.Builder#ticks`](ticks.md) |
-| `names` | The store names each stage pins, which must stay stable across deployments. | [`Parsley#named`](expectations.md#what-parsley-expects-of-you) |
-
-Findings that are gaps rather than violations arrive as **notes**: a source topic with no
-sample (its handler path went unexercised), a declared sink no sample reached, the tick
-topics the deployment must create, and the store names each stage pins — the reminder that
-stage names and the application id stay stable across deployments. A report with notes and
-no failures passed, with stated blind spots.
-
-Ticking stages tick under the probe: the driver's wall clock advances past the widest
-declared interval, and the emitted ticks pass through the same stamp checks as every other
-record.
-
-## Cluster probes
-
-The clauses about the cluster itself — topics exist before start, a stage's sources agree on
-partition count (the mechanical half of [co-partitioning](expectations.md#what-parsley-expects-of-you);
-the key-bytes half is yours), tick topics carry exactly the partition count of the stage's
-widest source — cannot be seen by a test driver. `ContractProbes.probeCluster` asks a live
-cluster, read-only, without starting the application:
-
-```java
-try (Admin admin = Admin.create(Map.of("bootstrap.servers", brokers))) {
-    ContractProbes.probeCluster(
-            Parsley.named("settlements-app", settlement, balances), admin).assertOk();
-}
-```
-
-Run it from a deploy pipeline against the target environment; what it checks is exactly what
-`Parsley.streams` will fail closed on at init, minus the surprise.
-
-## What probes cannot check
-
-- **Co-partitioning's key half.** That related keys land on the same partition number of
-  every source is a property of your producers' keys and encodings; the probe checks the
-  partition-count half only.
-- **Plain producers outside the topology.** A producer that should stamp with a
-  [`CausalClock`](clients.md) but does not is invisible here — the probe sees only the
-  topology's own outputs. An unstamped record claims nothing; safe for itself, invisible to
-  downstream ordering.
-- **Purity and closed effects.** A handler that writes to an external system looks pure to
-  every black-box check; the [Logic clause](expectations.md#what-parsley-expects-of-you)
-  stays yours to uphold.
-- **The causal guarantee itself.** That is Parsley's obligation, discharged by
-  [its own verification](../design/verification.md), not something each application re-proves.
-
----
-
-# Plain clients
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/guide/clients.md
-
-stamping from plain producers with CausalClock and incremental adoption
-
-# Plain Kafka clients
-
-Topologies rarely begin and end at Streams applications. `CausalClock` gives plain Kafka producers
-the same stamps a causal stage produces, and plain consumers need nothing at all.
-
-## Producing with causal claims
-
-A `CausalClock` is a running view of one producing thread's causal past. Fold what you observed,
-fold your own acknowledgements, and stamp:
-
-```java
-CausalClock clock = new CausalClock(admin);   // an org.apache.kafka.clients.admin.Admin the caller owns
-
-// Anything this producer's next records causally depend on:
-for (ConsumerRecord<String, String> rec : consumer.poll(timeout)) {
-    handle(rec);
-    clock.observe(rec);              // folds the record's coordinate and its carried clock
-}
-
-ProducerRecord<String, String> out = new ProducerRecord<>("orders", key, value);
-clock.stamp(out.headers());          // attach the dependency clock
-RecordMetadata meta = producer.send(out).get();   // sequential producer: wait for the ack
-clock.recordProduced(meta);          // the next send will claim this one
-```
-
-The sequential pattern — send, await the acknowledgement, fold it — is what orders a
-producer's own sends across topics and partitions. A producer that pipelines sends without
-folding acknowledgements still produces valid stamps; it simply does not claim its own
-in-flight records, so their mutual order is not asserted.
-
-A producer that stamps nothing claims nothing: its records deliver immediately everywhere,
-and downstream ordering through them is not constrained. That is the safe default for topics
-outside the causal path, and the reason incremental adoption needs no flag day — stamp the
-producers whose ordering matters, one at a time.
-
-## Consuming
-
-Plain consumers need no Parsley awareness. The only trace of Parsley on the wire is a few
-headers (`CausalHeaders.CLOCK` and the sender tag, readable via `CausalHeaders.readSender` /
-`readSeq` for observability), which a consumer may ignore entirely.
-
-A plain consumer that wants causal *observation* — so that records it later produces claim
-what it read — uses `observe` as above. A plain consumer that wants causal *delivery order*
-is, by definition, a causal stage: run it as one.
-
-An application that runs no stage reaches nothing under `org.apache.kafka.streams`, and can
-exclude `kafka-streams` from the Parsley dependency
-([getting started](getting-started.md#adding-the-dependency)).
-
----
-
-# Wire format
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/reference/wire-format.md
-
-the record headers and state-store layouts; the compatibility surface
-
-# Wire format
-
-Byte layouts for everything Parsley writes: the one record header, and the state-store
-entries. All integers are big-endian. Layouts are versioned where they travel between
-processes; pre-1.0, versions change without compatibility aliases.
-
-## The clock
-
-The serialized form of the internal vector clock, used both in the record header and inside
-state values.
-Both sections are sorted, so equal clocks are byte-identical.
-
-```
-byte     version        (currently 1)
-int32    offsetEntryCount
-entry × offsetEntryCount:
-    int64    topicId, most significant bits
-    int64    topicId, least significant bits
-    int32    partition
-    int64    offsetWatermark
-int32    seqEntryCount
-entry × seqEntryCount:
-    int64    topicId, most significant bits
-    int64    topicId, least significant bits
-    int32    partition
-    int64    senderId, most significant bits
-    int64    senderId, least significant bits
-    int64    seqWatermark
-```
-
-An offset entry claims every offset at or below the watermark on the channel. A sequence
-entry claims every record the sender sent to the channel with per-channel send sequence at or
-below the watermark — the sender-synchronous claim kind that keeps the stamping path
-non-blocking (see [the stamp](../design/architecture.md#the-stamp)).
-
-A malformed clock — unknown version, negative fields, length mismatch — throws
-`CorruptClockException`. A present but undecodable clock always fails the task; it never reads
-as empty ([fail closed](../foundations/delivery-gate.md#the-predicate)).
-
-## Record headers
-
-| Header | Value |
-|---|---|
-| `vc` | The record's dependency clock, serialized as above. Absent means the producer claims nothing. |
-| `vc-sender` | The producing node's stable sender identity: 16 bytes, UUID most- then least-significant. Absent on edge-produced records. |
-| `vc-seq` | The record's per-channel send sequence at its sender: 8 bytes. Present exactly when `vc-sender` is. |
-
-These headers, plus the state stores below, are Parsley's entire byte footprint.
-
-## State-store keys
-
-Keys are UTF-8 strings; `<channel>` is `<topicId-uuid>:<partition>`. Values:
-
-| Key | Value layout |
-|---|---|
-| `scope` | `int32 channelCount`, then per channel `int64 msb, int64 lsb, int32 partition`; `int32 sinkCount`, then per sink `int64 msb, int64 lsb` |
-| `f/<channel>` | `int64` frontier offset |
-| `cc/<channel>` | A serialized clock (the channel's advertised view) |
-| `ca` | A serialized clock (carried ancestry) |
-| `q/<channel>/m` | `int64 headIndex`, `int64 tailIndex` (one past the last held entry) |
-| `q/<channel>/e/<index>` | A held record (below); `<index>` is 16 lower-case hex digits, zero-padded so lexicographic order is numeric order |
-| `sq/<channel>` | `int64` — the last send sequence this node issued to the sink channel |
-| `ds/<channel>/<senderId>` | `int64 seq`, `int64 offset` — the highest delivered sequence from that sender on the channel, and its offset (sequence-claim resolution state) |
-
-## Held record
-
-A record held in a channel's queue persists verbatim, so a restart restores exactly what was
-fetched:
-
-```
-int64    offset
-int64    timestamp
-byte     tagged                   (0 = untagged sender)
-int64    senderId, most significant bits   (zero when untagged)
-int64    senderId, least significant bits  (zero when untagged)
-int64    senderSeq                          (meaningful only when tagged)
-int32    clockLength
-bytes    clock                    (serialized clock; empty clock when the header was absent)
-int32    keyLength                (-1 = null key)
-bytes    key
-int32    valueLength              (-1 = null value)
-bytes    value
-```
-
-Non-Parsley headers are not yet part of the envelope; a held record is delivered with empty
-headers. This is a known limit of the current cut.
-
-## Tick record
-
-A stage with declared ticks emits one record per interval per task to its tick topic,
-`<application.id>-<stage>-ticks`. The key is the emitting task's partition as a big-endian
-`int32` — the sink partitioner reads it back to land the tick on the emitting task's own
-channel — the value is null, the timestamp is the task's wall clock at emission, and the headers are the
-standard stamp above.
-
-## Fold-state store
-
-A stateful stage keeps its per-key fold state in a second store, `<stage>-fold` — which
-Kafka Streams backs with the changelog topic `<application.id>-<stage>-fold-changelog`.
-Keys are the message key's encoded bytes with a one-byte presence prefix — `0x00` alone for
-a null key, `0x01` followed by the key bytes otherwise — so a null key folds under its own
-state without colliding with an empty key. The tick state occupies the single key `0x02`,
-its own namespace beside the presence prefixes. Values are whatever the stage's state codec
-produces; Parsley adds no framing.
-
-## Not persisted
-
-`ownOutputs` (re-seeded from sink end offsets at every init, which dominate any persisted
-copy) and the position-known watermark (re-reported by the host's position advances). Their
-absence from the store is deliberate; see [state and recovery](../design/state.md).
-
----
-
-# Conformance kit
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/reference/conformance-kit.md
-
-the simulator and oracle as a consumable test-jar; the host contract, and how a vendored copy or alternative host verifies itself
-
-# The conformance kit
-
-Parsley's guarantees rest on [verification](../design/verification.md), not on trust in the
-one shipped runtime: a deterministic simulator hosts the real protocol under seeded random
-interleavings, and a ground-truth oracle — which never reads a vector clock — judges every
-delivery against real happened-before ancestry. The conformance kit is that machinery,
-packaged so it runs outside this repository. It exists for two consumers:
-
-- **A vendored copy.** Copying the source into another codebase is permitted and workable,
-  but a copy without the verification is unverified — vendoring rule 2. The kit travels with
-  the test tree; this page says what must keep passing.
-- **An alternative host.** The protocol is only sound under a host contract no API can
-  enforce. The shipped Kafka Streams adapter upholds it by construction; any other host can
-  claim conformance only by verification — port the host duties below, run the kit, and the
-  same obligations hold or fail loudly.
-
-## Getting the kit
-
-The kit is published as the `test-jar` artifact of the library's own coordinates:
-
-```xml
-<dependency>
-    <groupId>io.github.tobyjamesclements</groupId>
-    <artifactId>parsley</artifactId>
-    <version>0.2.0-SNAPSHOT</version>
-    <type>test-jar</type>
-    <scope>test</scope>
-</dependency>
-```
-
-The broker smoke tests (`*IT`) are excluded from the artifact: the kit needs no Docker, no
-Testcontainers, and no broker. Its only test-time dependencies are JUnit 5 and (for the
-Streams adapter's own tests) `kafka-streams-test-utils`; driving `SimWorld` alone needs
-neither Kafka Streams nor a test framework beyond your own.
-
-The kit is deliberately package-private, like the internals it verifies. Tests that drive it
-are declared in the `io.github.tobyjamesclements.parsley` package (or the renamed package of
-a vendored copy) — the same convention the kit's own suites use.
-
-## What is in it
-
-| Piece | Role |
-|---|---|
-| `Oracle` | Ground truth. Tracks real happened-before ancestry entirely outside the protocol; checks causal order, per-channel FIFO, and duplicates on every delivery, completeness at drain. |
-| `SimWorld` | The seeded scheduler: interleaves fetches, position advances, producer ops, tick emissions, crashes, and restarts until the world drains or the step budget fails it. Tick and crash budgets bound the otherwise endless cadence so a ticking world still drains. |
-| `SimBroker` | The broker model: real offset occupancy for business records, transaction markers, and aborted records, as a `read_committed` consumer observes them. |
-| `SimNode` | The reference host. Upholds every host duty the way the Streams adapter does; the executable form of the host contract below. |
-| `SimBehavior`, `EdgeProducer` | Scripting: stage logic (forward, filter, damped feedback) and plain clients at the topology's edge. |
-| `CausalNodeSimTest` | The scenario suite discharging obligations V1–V7 of [verification](../design/verification.md#obligations). |
-| `CausalNodeDirectedTest` | Deterministic constructions for shapes random schedules reach only by coincidence: a skipped run behind a held head, and an echoed self sequence claim on a sink that is dropped or destroyed. |
-| `CausalNodePersistenceTest` | Directed restart tests pinning each persisted fact individually — the frontier, hold queues, send and delivered sequences, advertised clocks — and the payload of a held record, which the oracle cannot see (it judges deliveries by coordinate, so wrong bytes at the right coordinate read as correct). |
-| `CausalNodeFailClosedTest` | The guards that refuse rather than guess: a record on an unconsumed channel, a send to an undeclared sink, an input dropped while records are held on it, a hold queue restoring fewer entries than its indices claim. |
-| `WireFormatTest` | The compatibility surface pinned to literal bytes and literal names: the record headers, which cross applications, and the state-store keys and held-record envelope, which cross versions of one application through its committed state and changelog. A coordinated change to both sides of a codec cannot pass silently. |
-| `OracleSelfTest` | V8: a deliberately broken protocol (`EagerProtocol`) must be flagged. A harness that cannot fail is not a harness. |
-| `HostContractSelfTest` | V9: a deliberately broken host must be flagged — the host-side analogue of V8. |
-
-## The host contract
-
-The protocol surface a host drives is `DeliveryProtocol`; the duties the host owes it are
-modelled, one for one, by `SimNode`. A host that upholds all of them inherits the simulator's
-verdict; a host that shirks one is the thing the kit must catch — and `HostContractSelfTest`
-proves it does for the two duties whose violation is silent in production until data is wrong.
-
-| # | Duty | Where `SimNode` models it | What catches a violation |
-|---|---|---|---|
-| H1 | Hand records to `onRecord` in strictly increasing per-channel offset order (Kafka's order through a `read_committed` consumer). | `step` fetches `nextFetchable` from the committed position, in order. | Oracle FIFO and causal checks on delivery. |
-| H2 | Report consumer position advances past offsets that never arrive as records (`positionAdvance`) — the liveness signal that bridges trailing markers. | `stepPositionAdvance`, offered whenever the log continues past the position with nothing fetchable. | Completeness at drain: stranded held records are flagged as never delivered ([position-advance bridging](../foundations/liveness.md#position-advance-bridging)). |
-| H3 | Commit store mutations, consumer positions, and sends step-atomically; a crash aborts all three together (EOS). | `transactionalStep`: staged store and positions, appended records aborted on crash, oracle knowledge rolled back in mirror. | Duplicate, causal, and completeness checks after crash-injecting runs. |
-| H4 | Partition before stamping, stamp at the single site (`prepareSend` with the concrete destination channel), and append what was stamped. | `sendBusiness`, which also asserts every offset claim names a really-appended offset. | Inline harness assertion; downstream, wedged or violated gates. |
-| H5 | Restart from committed state through the full init path — restore, end-offset seed, rescope, `resumePositions`. | `start`, which reconstructs the protocol and resolves positions from committed state. | Crash-recovery scenarios: completeness and causal checks across restarts. |
-| H6 | Respect the log start: a position below it resets to the first surviving offset, and retention never outruns an active subscriber's lag. | `start` clamps positions to the log start; `advanceLogStart` refuses to delete unfetched history. | The guard itself, plus baseline accounting in the oracle. |
-
-## Running it against a copy
-
-For a vendored copy, conformance means: the kit's suites pass in **your** CI, against **your**
-copy, unmodified in substance. Concretely:
-
-- Copy the test tree with the source tree; renaming the package and classes is fine (no
-  runtime string carries the library name), re-synthesizing the logic is not — the sim and
-  oracle encode invariants that fail silently when paraphrased.
-- `OracleSelfTest` and `HostContractSelfTest` must keep failing their broken subjects. If a
-  rename or adaptation makes them pass vacuously, the copy is unverified regardless of how
-  green the rest looks.
-- Never change the [wire format](wire-format.md): it is what keeps a copy interoperable with
-  every other Parsley application.
-- Record the upstream commit the copy was taken from, so it can be diffed when fixes land
-  upstream.
-
-For an alternative host, the port target is `SimNode`: it is small, single-threaded, and each
-duty above names the lines that uphold it. Verify the host's decision logic through the same
-seam the simulator uses (`DeliveryProtocol` in, `Delivery` out), and keep the kit's step
-budgets and anti-vacuity assertions — a suite that passes because nothing interesting
-happened proves nothing.
-
----
-
-# Metrics
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/reference/metrics.md
-
-the vc-metrics group, gauges, and counters
-
-# Metrics
-
-Every stage task registers its metrics in the group `vc-metrics` on the Kafka Streams
-metrics registry, next to the Streams built-ins. They reach JMX under the `kafka.streams`
-domain, every configured metrics reporter, and [`CausalStreams.metrics()`](api.md). All of
-them carry the tags `thread-id`, `task-id`, and `stage`; the per-topic breakdowns add
-`topic`. Sensors are removed when the task closes, so metrics follow task migration.
-
-These metrics exist because holding is invisible to ordinary lag monitoring. The adapter
-accepts a record before the gate decides on it, so the stage's committed consumer position
-advances past records that are still held. A stalled task can therefore report zero
-consumer lag on its own group. Hold depth and hold age are observable only here.
-
-Gauges are sampled by the task's wall-clock punctuator every 500 ms, so a gauge can trail
-the event it reflects by up to half a second. Counters are recorded at their event sites.
-
-## Task metrics
-
-These record at the `INFO` metrics recording level, the Kafka default.
-
-| Name | Type | Meaning |
-| --- | --- | --- |
-| `records-held` | gauge | The number of records currently held across the task's hold queues. |
-| `records-held-age-max-ms` | gauge | The wall-clock milliseconds the longest-gating head record has been held, measured from when it became its queue's head. A hold restored at restart ages from the first sample after init. |
-| `records-delivered-rate` | rate | The per-second rate of records released through the causal gate. |
-| `records-delivered-total` | total | The total number of records released through the causal gate since the task initialised. |
-| `replays-skipped-total` | total | The total number of records fed at or below the frontier and discarded. Nonzero is expected only while a rescope-growth refetch replays covered offsets. |
-| `truncation-sweeps-skipped-total` | total | The total number of truncation sweeps that failed and skipped their cycle. A climbing value means stamp-side clock entries are not being garbage-collected. |
-| `ticks-emitted-total` | total | The total number of tick records the task has emitted to its tick channel. Absent growth on a ticking stage means the tick punctuator is not firing. |
-| `stamp-offset-entries` | gauge | The number of offset entries in the stamp-side clock. |
-| `stamp-sequence-entries` | gauge | The number of sequence entries in the stamp-side clock, claims not yet resolved to offsets. |
-
-## Per-topic metrics
-
-These record at the `DEBUG` metrics recording level. Enable them with
-`metrics.recording.level=DEBUG` in the application properties; at the default level the
-sensors exist but do not record.
-
-| Name | Type | Meaning |
-| --- | --- | --- |
-| `records-held` | gauge | The number of records currently held on this source topic's channel. |
-| `records-held-age-max-ms` | gauge | The wall-clock milliseconds this channel's head record has been held. |
-
-## Reading the stall pair
-
-`records-held` alone distinguishes nothing: any skew between cause and effect topics holds
-records transiently, and the gauge returns to zero as causes arrive. The stall signal is
-`records-held-age-max-ms` growing without bound, which means a head record is waiting on a
-cause that is not arriving. The per-topic breakdown names the convoyed channel; to name the
-missing cause itself, ask `CausalStreams.explainHolds()`, which reports each gating head's
-unmet claims and the local watermarks that show the gap, and which the same measurement
-feeds — the gauge, the accessor, and the `vc-hold-*` warnings cannot disagree
-([diagnosing held records](../guide/diagnosing-holds.md)). The cure is fixing the lagging
-cause, never skipping the head ([the contract](../guide/expectations.md#operating-it));
-retention on the cause topic bounds how long the wait can succeed.
-
-The width gauges guard the other slow failure. Stamp-side clock entries are freed by the
-log-start truncation sweep ([truncation](../design/architecture.md#truncation-log-start-stability)),
-so `stamp-offset-entries` growing against a steady workload, or
-`truncation-sweeps-skipped-total` climbing, means clock and header overhead is accumulating.
-
----
-
-# README
-
-Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/README.md
-
-the one-page overview
+the guarantee, the scope, and the shape of an application
 
 # Parsley
 
-Causal delivery order for Kafka stream processing: a record reaches your processor only after
-every cause your processor consumes has been delivered locally. The guarantee is the
-causal-consistency model of the distributed-systems literature — Lamport's happened-before
-relation, realised with vector clocks — instantiated on Kafka coordinates: when A causally
-precedes B, every processor that subscribes to both of their topics processes A before B.
+Kafka orders records within a topic-partition and orders nothing between partitions. Parsley
+supplies the missing cross-channel guarantee.
 
-Causal safety is inviolable. Parsley blocks or fails; it never reorders, drops, or guesses on
-a timeout. Joining a running topology needs no coordination: a new application starts
-consuming, self-gates into causal order during replay, and its stamps make its outputs
-correctly gated everywhere from its first emission.
+> If message A is a cause of message B, every process that delivers both delivers A first.
 
-## How it works
+The guarantee holds for the whole lifetime of a process, across restarts, rebalances and
+partition reassignment.
 
-Parsley implements causal delivery with head-of-line blocking per channel, riding Kafka's
-own semantics throughout. A channel is one partition of one topic, identified by the topic's stable UUID;
-each channel has a FIFO hold queue, and only queue heads are gated against the node's
-contiguous delivered frontier. A delivery advances the frontier and cascades releases across
-channels to fixpoint.
+## Scope
 
-Outbound records carry their stamp in record headers — a vector clock folded from the
-frontier, the per-channel advertised clocks, ancestry carried across scope changes, and the
-node's own sends, plus a sender tag. Stamping happens at one site and never blocks: a node
-claims its own in-flight sends in its own send-sequence space (assigned synchronously), and
-receivers resolve those claims from the sender tag each record carries. Beyond ordinary
-fetch, broker offset facts (end offsets, log starts) are all the node ever asks of Kafka.
+Parsley is a library over Kafka Streams. One declared process becomes one Kafka Streams
+application running under `exactly_once_v2` and `read_committed`. State changes, sends and
+consumed read positions commit in a single transaction.
 
-Kafka's non-density under exactly-once — transaction markers and aborted records occupy
-offsets a `read_committed` consumer never returns — is repaired at receive time by seeding and
-bridging, and at the trailing edge by **position-advance bridging**: the consumer's position
-moving past markers is the protocol's entire liveness mechanism. Parsley's whole on-wire
-footprint is the headers on your own records, so plain consumers need no Parsley awareness
-at all.
+The delivery discipline is that of causal broadcast, indexed by channel rather than by
+process. Causality is Lamport's happened-before: same-process precedence, plus the edge from
+a delivery to any later send, closed transitively. A causes B when a delivery of A happened
+before B was sent.
 
-All causal state persists under per-channel keys and commits in the same EOS transaction as
-the delivery that mutated it, so crash recovery is a pure restore. Hold queues are unbounded
-and disk-backed: a lagging cause channel grows state, never heap, and is bounded by the same
-retention economics that bound the causal history itself.
+Where the guarantee cannot be upheld, a process stops. Waiting is never resolved by a
+timeout, and a held message is released only by evidence.
 
-## Verification
-
-Parsley's primary correctness gate is a deterministic simulator with a ground-truth causal
-oracle. The simulator models partitions with real marker and aborted offsets, step-atomic EOS
-transactions, `read_committed` fetch, node crashes with
-transactional rollback, and seeded random interleavings. The oracle tracks real
-happened-before ancestry entirely outside the protocol and checks every delivery for causal
-order, per-channel FIFO, and duplicates, plus completeness and drain at the end of every run.
-Scenarios assert that the machinery under test actually fired — gate holds, crash injections,
-position advances — and self-tests prove the harness flags a deliberately broken protocol and
-a deliberately broken host.
-
-```
-mvn verify
-```
-
-The simulator and oracle also ship as the
-[conformance kit](docs/reference/conformance-kit.md) — the `test-jar` artifact of the same
-Maven coordinates — so a vendored copy or an alternative host can run this verification in
-its own CI.
-
-## Using it
-
-The API is a functional core with imperative edges. Topics are typed values declared once;
-your logic is a pure function from a causally delivered `Message` to `Emission` values —
-with per-key state, a pure fold that also returns the next state — testable with plain
-equality and no runtime. The runtime enforces `exactly_once_v2` and wires position capture
-and topic identity:
+## Shape of an application
 
 ```java
-Topic<String, Order>   orders      = Topic.of("orders", Codec.utf8(), orderCodec);
-Topic<String, Payment> payments    = Topic.of("payments", Codec.utf8(), paymentCodec);
-Topic<String, Settled> settlements = Topic.of("settlements", Codec.utf8(), settledCodec);
+var orders    = Channel.of("orders", Serdes.String(), orderSerde);
+var shipments = Channel.of("shipments", Serdes.String(), shipmentSerde);
+var inventory = StoreDef.of("inventory", Serdes.String(), Serdes.Long());
 
-Stage settlement = Stage.named("settlement")
-        .state(balanceCodec, Balance::zero)
-        .on(orders,   (bal, m) -> Step.of(bal.minus(m.value().total()),
-                                          settlements.send(m.key(), settle(bal, m))))
-        .on(payments, (bal, m) -> Step.of(bal.plus(m.value().amount())))
-        .into(settlements)
-        .build();
+var shipper = ProcessDefinition.named("shipper")
+    .receives(orders, (delivery, state) -> {
+        Long stock = state.get(inventory, delivery.key());
+        return Effects.builder()
+            .put(inventory, delivery.key(), (stock == null ? 100 : stock) - 1)
+            .send(shipments, delivery.key(), Shipment.of(delivery.value()))
+            .build();
+    })
+    .sends(shipments)
+    .stores(inventory)
+    .build();
 
-try (CausalStreams app = Parsley.named("settlements-app", settlement).streams(props)) {
-    app.start();
-    // messages reach each handler in causal order; emissions are stamped automatically
+try (Parsley parsley = Parsley.start(config, shipper)) {
+    // runs until closed
 }
 ```
 
-Stages compose into pipelines within one application — a hop is the same `Topic` appearing
-as one stage's sink and another's source, an ordinary causal channel:
+A handler receives the delivered message and a read view of state, and returns what it
+changes. It is given no producer, no timer and no clock.
+
+## Reading order
+
+| Page | Subject |
+|---|---|
+| [Model](model.md) | How the specification's terms map onto Kafka, and what the metadata expresses |
+| [Delivery](delivery.md) | The settled frontier and the delivery decision |
+| [State](state.md) | Ordering state, persistence and recovery |
+| [Failing closed](failing-closed.md) | What stops a process, and why the blast radius is the process |
+| [Runtime](runtime.md) | Wiring into Kafka Streams |
+| [Wire format](wire-format.md) | The frozen on-wire definition of causal metadata |
+| [Verification](verification.md) | How the guarantee is tested |
+| [API](api.md) | Generated Javadoc |
+
+`SPEC.md` in the repository is the authority on correctness. `DECISIONS.md` records every
+choice the specification left open, and `EVIDENCE.md` records, per criterion, what would
+catch a violation.
+
+---
+
+# Model
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/model.md
+
+specification terms in Kafka, the causal frontier, pruning and growth
+
+# Model
+
+## Terms
+
+Every term of art in this repository names the following.
+
+**Happened-before.** Lamport's irreflexive partial order over events: same-process
+precedence, plus send-to-receipt edges, closed transitively (Lamport, *Time, Clocks, and the
+Ordering of Events in a Distributed System*, CACM 1978).
+
+**Cause, causal delivery.** A causes B when a delivery of A happened before B was sent.
+Causal delivery means no process that delivers both delivers them inverted. This is the
+delivery discipline of causal broadcast (Birman and Joseph, *Reliable Communication in the
+Presence of Failures*, TOCS 1987), transplanted onto channels.
+
+**Causal frontier.** A map from channel to the highest position known causal. It plays the
+role a vector clock plays in process-indexed causal broadcast (Fidge 1988; Mattern 1989),
+indexed by channel because the metadata carries no process identity.
+
+**Hold-back buffer.** The causal-broadcast queue of received but not yet deliverable
+messages, here per channel and persistent.
+
+**Exactly-once, EOS.** Kafka's transactional processing, `exactly_once_v2` with
+`read_committed`: a step's state changes, sends and consumed read positions commit atomically
+or not at all.
+
+**LSO, last stable offset.** Kafka's barrier for `read_committed` readers. It is the first
+offset of the earliest still-open transaction on a partition, and the high watermark where
+none is open. Everything below it is settled as committed data, or as aborted and control
+positions that will never yield a message.
+
+**Fail closed.** Stop delivering rather than weaken the guarantee.
+
+## Specification terms in Kafka
+
+| Term | Kafka realisation |
+|---|---|
+| Channel | Topic-partition, identified by topic ID and partition |
+| Position | Record offset |
+| Message | Record: key bytes, value bytes, headers, offset |
+| Process | One Kafka Streams task of the application built for a declared process |
+| Step | One Kafka Streams transaction |
+| Earliest retained position | Log-start offset |
+
+A channel is identified by topic ID rather than topic name. A topic deleted and recreated
+under the same name yields a different channel, so positions recorded against the old log
+cannot be read as positions in the new one.
+
+One declared process becomes one Kafka Streams application, with its own `application.id`
+and therefore its own consumer group. This is what allows two declared processes to receive
+the same channel, which a single Streams application cannot do, since it cannot register one
+topic in two source nodes.
+
+Each application holds one subtopology: byte-level sources for the received topics, one
+processor node, byte-level sinks for the send topics. Streams induces one task per partition
+group. That task is the specification's process, and its received-channel set is partition
+*i* of each received topic.
+
+## The causal frontier
+
+A message's metadata expresses its causes as (channel, position) pairs. Each process keeps a
+frontier: per channel, the highest position known to be a cause of that process's subsequent
+sends.
+
+One pair per channel suffices. Replacing two pairs on one channel by the greater position is
+compression, since expressing a position at or above a cause's position expresses the cause.
+
+The frontier grows from two events.
+
+**Delivery.** Delivering message M from channel *c* at position *p* merges `(c, p)`. The
+delivery happened before every later send, so M is a cause of them.
+
+**Receipt.** Receiving M merges every pair in M's metadata, whether or not M is delivered.
+Happened-before passes through receipt, so M's causes are already causes of subsequent sends.
+A process that has seen a message but not yet delivered it is still constrained by what that
+message carried.
+
+Sends do not enter the frontier. Causality flows through delivery-before-send, so a process's
+own send becomes a cause of its later sends only once some process delivers it and that
+delivery flows back. One consequence is that a message sent to a channel its sender also
+receives from carries only positions strictly below its own, because offsets are assigned in
+append order.
+
+## Pruning and growth
+
+A pair `(c, p)` is dropped when *p* falls below *c*'s log-start offset, or when *c*'s topic
+identity no longer resolves. Log-start facts may be stale, and a stale fact is a lower bound,
+so staleness delays pruning without over-pruning.
+
+Frontier size follows the causal graph rather than a process's own declaration. Receipt
+merges every pair a message carried, including channels the receiving process never receives,
+which is required for downstream re-expression. Steady-state size approaches the sum of
+partition counts over the transitive upstream closure.
+
+At 28 bytes per entry, the encoding reaches Kafka's default 1 MiB record ceiling near 37,000
+entries. Reaching it inside the producer would stop the process with no diagnosis from
+Parsley, so a metadata budget is applied first: `ParsleyConfig.metadataBudgetBytes`, 256 KiB
+by default. Exceeding it stops the process with an attributable reason. Frontier size and
+encoded width are logged each facts round, and again at 80% of budget.
+
+---
+
+# Delivery
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/delivery.md
+
+settled positions, the delivery decision, order and duplicates
+
+# Delivery
+
+## Settled positions
+
+Per received channel *c* the engine tracks two things.
+
+`fedUpTo(c)` is the highest position such that every position at or below it has either been
+fed to this process as a message or will never arrive as one. Two inputs advance it.
+
+Receipt of a record at offset *o* on *c* sets `fedUpTo(c) := max(fedUpTo(c), o)`. Within an
+execution the host feeds each partition in offset order, and Kafka's per-partition order
+means every earlier offset was already fed or will never yield a record. Aborted
+transactions, control records and compaction account for the positions that yield nothing.
+
+Read-position facts contribute the group's committed offset *n*, giving
+`fedUpTo(c) := max(fedUpTo(c), n - 1)`. A committed position asserts that everything below it
+was fed or never will be. This is what advances past a trailing run of positions that never
+arrive, and it rests on the substrate's own report rather than on elapsed time.
+
+`held(c)` is the hold-back buffer: received but undelivered messages of *c*, in position
+order, persisted.
+
+Settled position is derived from these rather than stored:
+
+```
+settled(c) = held(c) is empty ? fedUpTo(c) : head(held(c)).position - 1
+```
+
+Every position at or below `settled(c)` is delivered or will never arrive. Positions below
+the buffer head that were fed are delivered, since the head is the lowest undelivered one,
+and gaps are covered by the fed-or-never meaning of `fedUpTo`.
+
+## The decision
+
+```
+decide(causes, receivedChannels, settled)
+```
+
+Message M is deliverable when, for every pair `(c, p)` in M's causes, either *c* lies outside
+`receivedChannels`, or `settled(c)` is defined and `p <= settled(c)`.
+
+A cause on a channel the process does not receive imposes no constraint. The process will
+never deliver that message, so no order it could observe can be inverted. This also covers
+dead incarnations of recreated topics, whose topic identity matches no received channel.
+
+The function reads no clock, no timestamps, and nothing outside its arguments. The same unit
+decides every delivery, and it is callable without a host.
+
+## Order within and across channels
+
+Only the head of each channel's buffer is offered to the decision, which enforces per-channel
+FIFO structurally.
+
+Across channels, delivery is a deterministic drain: scan the received channels in a fixed
+total order, deliver every deliverable head, and repeat until a full pass delivers nothing.
+Determinism means replay after a restart reproduces the same order from the same state.
+
+## Baselines and duplicates
+
+Before anything is known of *c*, `settled(c)` is undefined, and any dependency on *c* holds
+the message while *c* is received. The initial committed position established at first start
+initialises `fedUpTo(c)`, so positions below the first receipt count as already satisfied.
+
+A record at an offset at or below `fedUpTo(c)` that is not in the buffer was already
+delivered in a committed step. The host re-feeds exactly those records whose read positions
+were not committed, so such a record is dropped rather than redelivered. An aborted step
+rolls `fedUpTo` back with everything else, so a redelivery after an abort is not a duplicate.
+
+---
+
+# State
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/state.md
+
+ordering state layout, persistence and recovery
+
+# State
+
+## Ordering state
+
+Each process owns one reserved Kafka Streams `KeyValueStore<Bytes, byte[]>`, named with the
+reserved prefix `__parsley.`.
+
+| Key | Value |
+|---|---|
+| `v` | Store format version |
+| `f` + channelId | `fedUpTo`, int64 |
+| `c` + channelId | Frontier position, int64 |
+| `p` + channelId | Delivered causal past, int64 |
+| `n` + topic name | Topic identity recorded for that name |
+| `h` + channelId + position | Held message: key, value, headers, decoded causes, timestamp |
+
+`channelId` is 20 bytes, being the topic identity followed by the partition, big-endian. Each
+key class carries a distinct leading tag, so one class can be scanned without reading the
+rest. Held messages sort by position within a channel, so a prefix scan returns a channel's
+hold-back buffer in order.
+
+Both the key layout and the held-message encoding are versioned. A version this build does
+not recognise stops the process.
+
+## Persistence and recovery
+
+The store is persistent and changelogged. Under exactly-once semantics its content commits
+atomically with the read positions consumed and the messages sent. This is what carries held
+messages across a restart, even though Streams commits read positions past records that were
+buffered rather than delivered.
+
+A held message is restored with its key, value, headers and timestamp exactly as received.
+Null keys, null values and null header values are each distinguished from empty ones.
+
+The delivered causal past is stored separately from the frontier. The frontier governs what a
+process may express on its sends. The delivered past governs what a channel joining the
+received set later may deliver, by clamping it above effects already delivered while that
+channel was absent. Both are advanced on delivery.
+
+## Isolation from application state
+
+Application state cannot alter ordering state. Application store names may not use the
+reserved prefix, and the handler seam exposes only the stores a process declared.
+
+---
+
+# Wire format
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/wire-format.md
+
+the frozen, normative definition of the causal metadata header
+
+# Wire format
+
+This page is the normative definition of the causal metadata a Parsley-sent message carries.
+It stands alone. Any reader can decode a message's key and value with the application's own
+codecs and ignore this metadata. Any implementation of this format can decide deliverability
+from what is defined here.
+
+## Placement
+
+Causal metadata travels in exactly one Kafka record header.
+
+The header key is `parsley.causes`, in ASCII. The header key prefix `parsley.` is reserved.
+Applications must not attach headers with this prefix, and Parsley refuses emissions that do.
+This is what makes the metadata distinguishable by construction from headers attached by
+applications or by other systems.
+
+Every message a Parsley process sends carries this header, including where it expresses no
+causes.
+
+A message with no `parsley.causes` header has no causes and is immediately deliverable. A
+message with more than one such header, or one failing the grammar below, is undecodable: the
+receiver fails closed, and must not treat the metadata as absent.
+
+## Grammar
+
+All integers are big-endian. Version 1 is the only version.
+
+```
+value      := version entryCount entry*
+version    := uint8      -- 0x01
+entryCount := int32      -- number of entries, >= 0
+entry      := topicId partition position
+topicId    := 16 bytes   -- Kafka topic ID: 8 most significant bytes, then 8 least
+partition  := int32      -- >= 0
+position   := int64      -- >= 0, a Kafka offset on that topic-partition
+```
+
+Every constraint below is mandatory. Violating any one makes the value undecodable.
+
+1. The version byte is `0x01`. Any other value is undecodable, and readers must not guess
+   forward compatibility.
+2. `entryCount` is non-negative, and the value contains exactly `entryCount` entries with no
+   trailing bytes.
+3. Entries ascend strictly in the unsigned lexicographic order of their 20-byte channel
+   encoding, being the 16 topic-ID bytes followed by the 4 partition bytes, compared left to
+   right as unsigned bytes. At most one entry per channel, so the encoding of a given cause
+   set is unique byte for byte.
+4. `partition` and `position` are non-negative.
+
+## Meaning
+
+Each entry `(topicId, partition, position)` expresses causes on one channel. The channel is
+the topic-partition identified by topic ID, so a topic deleted and recreated under the same
+name is a different channel. The entry stands for every cause of this message on that channel
+whose position is at or below `position`.
+
+A message's metadata expresses every cause of the message whose position is at or above its
+channel's earliest retained position at send time. This includes causes known to the sender
+only from the metadata of messages it had received and not yet delivered.
+
+Entries never name the sending process, and never name a position that had not been assigned
+when the message was sent. A message sent to a channel its sender also receives from never
+carries an entry for its own channel at or above its own position.
+
+A receiver may deliver a message only when, for every entry naming a channel in the receiver's
+received-channel set, every position on that channel up to and including the entry's position
+has either been delivered at that receiver or will never yield a message it receives. Entries
+naming channels outside that set impose no constraint there, which includes dead incarnations
+of recreated topics. The receiver still re-expresses them on its own sends while they can
+still matter.
+
+## Stability
+
+The header key, the reserved prefix and the version-1 grammar are frozen. Any change to the
+grammar requires a new version byte. Readers encountering an unknown version fail closed.
+
+---
+
+# Failing closed
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/failing-closed.md
+
+what stops a process, the blast radius, and every refusal reason
+
+# Failing closed
+
+Where the guarantee cannot be upheld, a process stops delivering. It stays stopped, and
+re-fails on restart, until an operator intervenes.
+
+A fail-closed event throws `ParsleyFailClosedException` out of the processor, which fails the
+task's step. The transaction aborts, and nothing is delivered past the failure.
+
+## Blast radius
+
+The blast radius is the whole process rather than the affected channel alone.
+
+After receiving a message whose metadata cannot be decoded, every subsequent send of that
+process risks under-expressing causes. Causes known only from the metadata of received but
+undelivered messages must be re-expressed, and an undecodable header conceals exactly those.
+A downstream process acting on an under-expressed frontier could then invert causal order.
+Stopping the process satisfies the requirement to stop at minimum on the affected channel.
+
+## Triggers
+
+| Reason | Condition |
+|---|---|
+| `UNDECODABLE_METADATA` | Metadata present and not decodable |
+| `POSITIONS_DISCARDED_UNREAD` | A read position at or below the log-start offset, so discarded positions cannot be assumed empty |
+| `OUT_OF_ORDER_FEED` | The host fed a channel out of position order |
+| `CHANNEL_REMOVED_WITH_HELD_MESSAGES` | A declaration removed a channel that still holds messages |
+| `CHANNEL_IDENTITY_CHANGED` | A topic resolves to an identity other than the one recorded |
+| `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES` | A received topic was deleted while its messages remain held |
+| `TASK_WIDTH_CHANGED` | The task count changed, so ordering state no longer matches its partitioning |
+| `UNKNOWN_ORDERING_STATE_FORMAT` | Stored state carries a format version this build cannot read |
+| `EMISSION_TO_UNDECLARED_CHANNEL` | A handler emitted on a channel its process never declared |
+| `RESERVED_HEADER_USED` | An application header used the reserved prefix |
+| `APPLICATION_PAYLOAD_UNDECODABLE` | A payload could not be decoded by its declared serde |
+| `SUBSTRATE_MISCONFIGURED` | The substrate is configured in a way the guarantee cannot survive |
+| `METADATA_BUDGET_EXCEEDED` | Causal metadata exceeded the configured budget |
+
+Truncation is caught twice. The main consumer runs with `auto.offset.reset=none`, so an
+out-of-range position kills the task rather than silently jumping, and the engine
+independently fails when a log-start fact exceeds `fedUpTo + 1`.
+
+## Diagnosis
+
+`Parsley.status()` reports each process. `ProcessStatus.refusalReason()` is present where a
+process stopped to preserve the guarantee, and distinguishes that from any other stop.
+
+A held message is not a failure. It means a cause has not arrived, and the diagnosis is which
+cause: `Deliverability.Held` names every outstanding blocker, with the position required and
+the position reached.
+
+---
+
+# Runtime
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/runtime.md
+
+start sequence, configuration lockdown, facts ingestion, the handler seam
+
+# Runtime
+
+## Start
+
+`Parsley.start` performs the following for each declared process.
+
+1. Resolves topic identities through the admin client, and fails where a received topic is
+   missing.
+2. Reads the group's committed positions. For received partitions with none, it pre-commits
+   the declared initial position, taking earliest as the log start and latest as the end.
+   The commit goes through a generation-fenced group membership rather than an admin
+   alteration, so a stale paused bootstrap cannot overwrite a newer lifetime's positions.
+   This gives `auto.offset.reset=none` a defined starting point and establishes the
+   first-receipt baseline. On later starts, existing commits win.
+3. Builds the topology and starts Kafka Streams with `processing.guarantee=exactly_once_v2`,
+   from which `isolation.level=read_committed` follows.
+
+Prior state pins the task width. The ordering store's changelog cannot change partition
+count, so a width-changing declaration refuses with its remedy rather than failing inside the
+host's internal-topic validation.
+
+A channel that rejoins the received set resumes rather than re-entering delivered past. This
+is backed by the `fedUpTo` record even where group positions have expired. A missing position
+alongside prior state re-establishes earliest rather than the declared latest.
+
+## Configuration lockdown
+
+Configuration carrying the guarantee is set by the runtime and cannot be overridden.
+`ParsleyConfig.Builder.streamsProperty` rejects the owned keys, among them
+`processing.guarantee`, `isolation.level`, `auto.offset.reset`, `group.id` and
+`transactional.id`. Neither the `Topology` nor raw configuration is exposed, so no documented
+operation runs the topology without exactly-once semantics.
+
+## Facts ingestion
+
+Inside the processor, a punctuator periodically ingests position facts: committed positions,
+log-start positions, and topic existence and identity. A name resolving to a different
+identity is affirmative evidence of recreation. An unknown identity is corroborated against
+its last-known name and debounced in time. An authorization denial is treated as denial
+rather than death.
+
+Gathering runs on one background thread per runtime. The punctuator snapshots the inputs,
+applies each completed round exactly once on the stream thread, and never blocks on the
+cluster. Every fact is a per-position lower bound, so a round applied one interval late
+releases and prunes exactly what a fresh one would.
+
+This punctuator is internal plumbing for ingesting the host's read-position reports, which is
+the only transport Kafka Streams offers for them. It delivers nothing that was not received
+from a channel, and the decision it triggers remains the pure function described in
+[Delivery](delivery.md). Time never appears among that function's inputs. The public API
+offers no timers and no scheduled callbacks.
+
+## Zombie safety
+
+Facts are monotone. Any delivery a superseded execution performs on stale state sits in a
+transaction the host fences and aborts, so it has not occurred.
+
+## The seam
 
 ```java
-Parsley.named("settlements-app", enrichment, settlement).streams(props).start();
+Effects handle(Delivery<K, V> delivery, StateReader state)
 ```
 
-Plain producers stamp with a `CausalClock` — `observe` consumed records, `recordProduced` your
-acknowledgements, `stamp` outbound headers. Adoption is incremental: a producer that stamps
-nothing claims nothing, so you stamp the producers whose ordering matters, one at a time,
-with no flag day.
+`Delivery` carries the delivered message. `StateReader` is a read-only typed view over the
+process's declared stores. Effects return through the return value: typed sends, statically
+typed per channel, and state writes.
 
-Requires Java 21 or later and brokers that serve topic IDs (Kafka 3.7+).
+The logic receives no other capability. Sending never blocks on the deliverability of the
+message sent. Emissions are stamped with the current frontier and forwarded within the step.
 
-```xml
-<dependency>
-    <groupId>io.github.tobyjamesclements</groupId>
-    <artifactId>parsley</artifactId>
-    <version>0.2.0-SNAPSHOT</version>
-</dependency>
-```
+---
 
-Snapshots resolve from `https://central.sonatype.com/repository/maven-snapshots/`, which a
-consuming build declares for itself;
-[getting started](docs/guide/getting-started.md#adding-the-dependency) has that declaration
-and the Gradle equivalent. Build from source with `mvn verify`.
+# API
 
-## Documentation
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/api.md
 
-The docs site under `docs/` (mkdocs) covers the model and the design:
+the three packages and where the generated Javadoc lives
 
-- **Foundations** — [the causal model](docs/foundations/causal-model.md),
-  [the delivery gate](docs/foundations/delivery-gate.md), and
-  [liveness](docs/foundations/liveness.md).
-- **Design** — [architecture](docs/design/architecture.md),
-  [state and recovery](docs/design/state.md), and
-  [verification](docs/design/verification.md).
-- **Guide** — [getting started](docs/guide/getting-started.md) and
-  [plain clients](docs/guide/clients.md).
-- **Reference** — [wire format](docs/reference/wire-format.md).
+# API
 
-The verification obligations the test suite enforces are catalogued in
-[verification](docs/design/verification.md).
+The generated Javadoc for this version is published alongside this site.
 
-The bullets above are a reading path, not the whole set. [`docs/llms.txt`](docs/llms.txt)
-indexes every document with a one-line description of what it settles; the docs site serves
-that index at [`/llms.txt`](https://tobyjamesclements.github.io/parsley/llms.txt) and the full
-text of all of them, in one file, at
-[`/llms-full.txt`](https://tobyjamesclements.github.io/parsley/llms-full.txt).
+[Browse the Javadoc](api/index.html)
 
-AI coding agents should start at [`AGENTS.md`](AGENTS.md): the rule that overrides everything,
-the map of the docs, how to verify a change, and the rules for vendoring the source.
+## Packages
 
-## Current limitations
+`io.github.tobyjamesclements.parsley.api` is the declaration surface. An application declares
+`Channel` typed topics, `StoreDef` typed stores, and one `ProcessDefinition` per process.
+Logic is a `Handler`, receiving a `Delivery` and returning `Effects`.
 
-- Non-Parsley headers on held records are not carried through delivery.
-- Sequence claims carry a late-joiner caveat: consumers joining at the log end should
-  baseline at the last stable offset (see the liveness page).
-- Vector-clock truncation advances exactly as fast as retention, with zero coordination:
-  retention-deleted records sit below every reachable baseline, so stamp width is
-  garbage-collected at retention speed — and no faster.
-- Correctness under a live broker's rebalances and task migration is exercised only by the
-  adapter's design, not yet by broker integration tests.
+`io.github.tobyjamesclements.parsley.core` is the protocol, independent of any host. It names
+no host type and touches nothing outside its `OrderingStore`. The safety rule is
+`Deliverability.decide`, a pure function. `ProcessEngine` holds the state that function reads.
+
+`io.github.tobyjamesclements.parsley.kafka` is the Kafka Streams adapter.
+
+## Automatic module name
+
+`io.github.tobyjamesclements.parsley`
+
+---
+
+# Verification
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/verification.md
+
+the test layers, the sabotage meta-tests, and the standard of evidence
+
+# Verification
+
+The suite runs under `./mvnw verify` in roughly four minutes and requires no Docker.
+
+## Layers
+
+**Pure core.** Codec round-trip tests, decision-unit table tests, and engine unit tests. A
+purity test scans the `core` sources and fails on any reference to a clock, the network, or
+the substrate.
+
+**Simulation.** A simulated substrate and host honouring the host obligations drives many
+engines over randomised topologies, interleavings, gaps, aborted-transaction runs, crashes,
+restarts and read-position reports. Runs are seeded and deterministic, so a failure
+reproduces exactly from its seed. `CausalOrderPropertyTest` sweeps seeds 1 to 300.
+
+An oracle tracks real happened-before outside the engine and asserts causal order, absence of
+duplicates, FIFO per channel, and quiescent liveness, meaning everything received is
+eventually delivered.
+
+**Sabotage meta-tests.** The same suite runs against deliberately broken engines through a
+test-only hook, asserting that the oracle fails. The `Sabotage` modes each disable one
+guarantee: the dependency check, the FIFO hold, the duplicate drop on refeed, the treatment
+of undecodable metadata, persistence of held messages, truncation handling, and others.
+
+This is the evidence that the tests would catch a violation. `SabotageMetaTest` pins one
+targeted case per mode, and a randomised sweep records the margin by which the oracle catches
+each broken engine.
+
+**Streams wiring.** `TopologyTestDriver` tests for the header format on the wire, byte-exact
+key and value pass-through, Schema-Registry-format serdes, punctuator fact ingestion through
+an injected facts source, and store persistence across driver restarts.
+
+**Integration.** Embedded KRaft broker tests for commit and abort behaviour under
+exactly-once semantics, restart with state restore, aborted-transaction gaps and trailing
+runs, log truncation, and a plain `read_committed` consumer decoding output with application
+serdes alone.
+
+## Standard of evidence
+
+`EVIDENCE.md` records, per specification criterion, what would catch a violation of it. Each
+cell names the test that fails when the behaviour breaks. A test that stays green when the
+behaviour breaks is treated as worse than an empty cell.
+
+There is no mutation-testing gate. `Sabotage` is this project's mutation testing, with the
+mutations chosen against specification criteria rather than syntax. `DECISIONS.md` D67
+records that decision, and the gaps found before the gate was removed.
