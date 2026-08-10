@@ -4,6 +4,7 @@ import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.utils.Bytes;
+import org.apache.kafka.streams.processor.Cancellable;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
@@ -55,11 +56,24 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private final java.util.concurrent.Executor factsExecutor;
     private final int metadataBudgetBytes;
 
-    private final java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.core.PositionFacts> gathered =
+    private final java.util.concurrent.atomic.AtomicLong incarnation =
+            new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicReference<GatheredRound> gathered =
             new java.util.concurrent.atomic.AtomicReference<>();
     private final java.util.concurrent.atomic.AtomicBoolean gatherInFlight =
             new java.util.concurrent.atomic.AtomicBoolean();
     private boolean budgetWarned;
+    private Cancellable factsPunctuator;
+
+    /**
+     * A facts round tagged with the incarnation whose in-memory state produced its hints.
+     *
+     * <p>A round is applied only by the incarnation that launched it. A revived task restores
+     * the engine to committed state, so hints taken from the previous incarnation may describe
+     * feed progress that was rolled back; a probe answering them must not reach the restored
+     * engine as durable truth.
+     */
+    private record GatheredRound(long epoch, io.github.tobyjamesclements.parsley.core.PositionFacts facts) {}
 
     private ProcessorContext<byte[], byte[]> context;
     private ProcessEngine engine;
@@ -96,6 +110,17 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      */
     @Override
     public void init(ProcessorContext<byte[], byte[]> context) {
+        // A revived task re-initialises this same instance against restored state. Anything
+        // the previous incarnation left behind describes rolled-back progress: its facts
+        // rounds are invalidated, its punctuator cancelled, and the gather cycle starts idle.
+        incarnation.incrementAndGet();
+        gathered.set(null);
+        gatherInFlight.set(false);
+        if (factsPunctuator != null) {
+            factsPunctuator.cancel();
+            factsPunctuator = null;
+        }
+
         this.context = context;
         int partition = context.taskId().partition();
 
@@ -120,7 +145,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         }
         stateReader = new StoreStateReader();
 
-        context.schedule(factsInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
+        factsPunctuator = context.schedule(factsInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
             startGatherIfIdle();
             applyGatheredFacts();
             drain();
@@ -132,9 +157,9 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     }
 
     private void applyGatheredFacts() {
-        io.github.tobyjamesclements.parsley.core.PositionFacts facts = gathered.getAndSet(null);
-        if (facts != null) {
-            engine.onFacts(facts);
+        GatheredRound round = gathered.getAndSet(null);
+        if (round != null && round.epoch() == incarnation.get()) {
+            engine.onFacts(round.facts());
         }
     }
 
@@ -142,23 +167,47 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         if (!gatherInFlight.compareAndSet(false, true)) {
             return;
         }
+        long epoch = incarnation.get();
         java.util.Set<ChannelId> received = java.util.Set.copyOf(engine.receivedChannelSet());
         Map<ChannelId, Long> hints = probeHints();
         java.util.Set<ChannelId> frontier = engine.frontierSnapshot().byChannel().keySet();
         try {
             factsExecutor.execute(() -> {
                 try {
-                    gathered.set(factsSource.gather(received, hints, frontier));
+                    io.github.tobyjamesclements.parsley.core.PositionFacts facts =
+                            factsSource.gather(received, hints, frontier);
+                    if (incarnation.get() == epoch) {
+                        gathered.set(new GatheredRound(epoch, facts));
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 } catch (Exception e) {
                     LOG.warn("{}: position facts unavailable, retrying next round", definition.name(), e);
                 } finally {
-                    gatherInFlight.set(false);
+                    // Guarded so a superseded gather completing late cannot free the slot a
+                    // successor incarnation's own gather is holding.
+                    if (incarnation.get() == epoch) {
+                        gatherInFlight.set(false);
+                    }
                 }
             });
         } catch (java.util.concurrent.RejectedExecutionException e) {
             gatherInFlight.set(false);
+        }
+    }
+
+    /**
+     * Invalidates any in-flight facts gather and cancels the facts punctuator, so nothing
+     * from this incarnation can act on a revived successor.
+     */
+    @Override
+    public void close() {
+        incarnation.incrementAndGet();
+        gathered.set(null);
+        gatherInFlight.set(false);
+        if (factsPunctuator != null) {
+            factsPunctuator.cancel();
+            factsPunctuator = null;
         }
     }
 
