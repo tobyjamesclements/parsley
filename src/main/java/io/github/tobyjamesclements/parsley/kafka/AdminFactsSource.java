@@ -45,7 +45,7 @@ class AdminFactsSource implements FactsSource {
     private static final Logger LOG = LoggerFactory.getLogger(AdminFactsSource.class);
     private static final long TIMEOUT_SECONDS = 10;
 
-    private enum NameVerdict {
+    enum NameVerdict {
         SAME_ID,
 
         RECREATED,
@@ -170,6 +170,12 @@ class AdminFactsSource implements FactsSource {
                         if (now - since >= window) {
                             markDead(id);
                         }
+                    } else {
+                        // The name was asked about but the answer did not arrive, so the
+                        // name-gone observation is no longer continuous. The window restarts:
+                        // a dead verdict is confirmed only by an unbroken run of affirmative
+                        // name-gone answers, never by two isolated ones spanning an outage.
+                        unknownSince.remove(id);
                     }
                 }
             }

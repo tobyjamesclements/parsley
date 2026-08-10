@@ -44,6 +44,10 @@ finding per commit, each with pinning tests, full suite run before each push.
   genuine stamp → sender-side RESERVED_HEADER_USED. Pinned by smuggling-serializer test
   in `TopologyWiringTest`.
 - **M3** — `ParsleyRuntime` monitoring collections now synchronizedMap/COW lists.
+- **M4 + §3.6b** — debounce continuity: an UNAVAILABLE answer for a known name now
+  clears `unknownSince`, so death is confirmed only by an unbroken run of affirmative
+  name-gone answers. Pinned by `AdminFactsSourceDebounceTest` (mutation-checked;
+  NameVerdict made package-private as the scripting seam). Closes test gap §3.6 fully.
 
 All four confirmed audit findings (F1-F4) and both P1 test gaps (T1 §3.1, T2 §3.2,
 corruption pins §3.3) are now closed. Remaining triage candidates: C1/C2 hardenings,
@@ -51,9 +55,6 @@ M1-M4 minors, P2/P3 gaps §3.4-§3.9.
 
 ## To do (in order) — hardening pass
 
-- **M4 + §3.6b** — debounce continuity: unknownSince must clear (or not mature) on rounds
-  where name-gone was not re-observed (AdminFactsSource:165-173). Pin via injected clock:
-  NAME_GONE → UNAVAILABLE gap → NAME_GONE must not confirm death.
 - **§3.7** — CorePurityTest: recursive walk + widened ban list.
 - **M2** — GroupMembershipCommitter: strip group.instance.id, cap session timeout.
   Audit asks for a broker repro before fixing.
