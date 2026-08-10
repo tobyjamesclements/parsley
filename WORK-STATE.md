@@ -55,6 +55,11 @@ finding per commit, each with pinning tests, full suite run before each push.
   Safety 8; recreation seed 65 → Assumption 2). Calibration found DELIVER_PAST_DEAD_HOLDS
   caught by 0/300 random seeds, so no floor was added; the deterministic inversion test
   is its documented evidence. docs/verification.md aligned.
+- **M2** — bootstrap member could inherit group.instance.id (passes the deny-list) and
+  a long session timeout, holding the group past close. Reproduced against the real
+  broker first (static member survived close, as the audit predicted), then fixed:
+  committer strips group.instance.id and caps session.timeout.ms at 10s. Pinned by
+  `BootstrapIntegrationTest#bootstrapMemberLeavesOnCloseDespiteStaticMembershipConfig`.
 
 All four confirmed audit findings (F1-F4) and both P1 test gaps (T1 §3.1, T2 §3.2,
 corruption pins §3.3) are now closed. Remaining triage candidates: C1/C2 hardenings,
@@ -62,8 +67,6 @@ M1-M4 minors, P2/P3 gaps §3.4-§3.9.
 
 ## To do (in order) — hardening pass
 
-- **M2** — GroupMembershipCommitter: strip group.instance.id, cap session timeout.
-  Audit asks for a broker repro before fixing.
 - **§3.8** — Oracle delivery-time legality check.
 - **§3.4** — two-instance task-migration smoke test.
 - **M1 / §3.9** — init-gather blocking cost; broker-bounce test. Lowest priority.

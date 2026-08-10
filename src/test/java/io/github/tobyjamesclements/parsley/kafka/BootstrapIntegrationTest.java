@@ -156,6 +156,34 @@ class BootstrapIntegrationTest {
         return new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(causes)));
     }
 
+    /**
+     * Bootstrap membership stays dynamic: a static-membership config cannot defeat
+     * leave-on-close. A static member sends no LeaveGroup when closed, so its slot would
+     * hold the group — under the consumer protocol — for the full session timeout, failing
+     * the Streams start that immediately follows bootstrap.
+     */
+    @Test
+    void bootstrapMemberLeavesOnCloseDespiteStaticMembershipConfig() throws Exception {
+        createTopics(new NewTopic("m2-in", 1, (short) 1));
+        Map<String, Object> clientProps = new HashMap<>();
+        clientProps.put("bootstrap.servers", cluster.bootstrapServers());
+        clientProps.put(ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, "static-1");
+        clientProps.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 60_000);
+
+        try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, "m2-group")) {
+            committer.join(Set.of("m2-in"), Duration.ofSeconds(30));
+        }
+
+        await("the closed bootstrap member to have left the group", () -> {
+            try {
+                return admin.describeConsumerGroups(List.of("m2-group")).all()
+                        .get(30, TimeUnit.SECONDS).get("m2-group").members().isEmpty();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, Duration.ofSeconds(10));
+    }
+
     /** Stale bootstrap commit is fenced by group membership. */
     @Test
     void staleBootstrapCommitIsFencedByGroupMembership() throws Exception {

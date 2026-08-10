@@ -33,7 +33,16 @@ final class GroupMembershipCommitter implements AutoCloseable {
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
 
-        props.putIfAbsent(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 10_000);
+        // This member must vacate the group the moment it closes — the Streams start that
+        // follows joins the same group under a different protocol. A static member sends no
+        // LeaveGroup on close, so an inherited instance id would hold the group for the full
+        // session timeout; and the session timeout itself is capped so even an ungraceful
+        // exit clears quickly.
+        props.remove(ConsumerConfig.GROUP_INSTANCE_ID_CONFIG);
+        Object sessionTimeout = props.get(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG);
+        int sessionTimeoutMs = sessionTimeout == null
+                ? 10_000 : Math.min(Integer.parseInt(String.valueOf(sessionTimeout)), 10_000);
+        props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, sessionTimeoutMs);
         props.putIfAbsent(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 30_000);
         this.consumer = new KafkaConsumer<>(props, new ByteArrayDeserializer(), new ByteArrayDeserializer());
     }
