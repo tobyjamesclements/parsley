@@ -23,8 +23,12 @@ guarantee: the dependency check, the FIFO hold, the duplicate drop on refeed, th
 of undecodable metadata, persistence of held messages, truncation handling, and others.
 
 This is the evidence that the tests would catch a violation. `SabotageMetaTest` pins one
-targeted case per mode, and a randomised sweep records the margin by which the oracle catches
-each broken engine.
+targeted case per mode — for the refusal-disarming modes, both that the sabotage disarms the
+refusal and a pinned seed on which the oracle catches the resulting violation — and a
+randomised sweep records the margin by which the oracle catches each broken engine. One mode
+is the exception: `DELIVER_PAST_DEAD_HOLDS` is reached by no random seed (calibrated at 0 in
+300), so its oracle evidence is a deterministic scenario constructing the causal inversion,
+and it carries no sweep floor.
 
 **Streams wiring.** `TopologyTestDriver` tests for the header format on the wire, byte-exact
 key and value pass-through, Schema-Registry-format serdes, and punctuator fact ingestion

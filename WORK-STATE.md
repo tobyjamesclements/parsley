@@ -48,6 +48,13 @@ finding per commit, each with pinning tests, full suite run before each push.
   clears `unknownSince`, so death is confirmed only by an unbroken run of affirmative
   name-gone answers. Pinned by `AdminFactsSourceDebounceTest` (mutation-checked;
   NameVerdict made package-private as the scripting seam). Closes test gap §3.6 fully.
+- **§3.7** — CorePurityTest: recursive Files.walk; bans widened (java.io., java.nio.file,
+  java.util.Date/Random, ThreadLocalRandom, Math.random, Thread.sleep, System.getenv/
+  getProperty). Core already clean.
+- **§3.5** — SabotageMetaTest: pinned-seed oracle assertions added (truncation seed 4 →
+  Safety 8; recreation seed 65 → Assumption 2). Calibration found DELIVER_PAST_DEAD_HOLDS
+  caught by 0/300 random seeds, so no floor was added; the deterministic inversion test
+  is its documented evidence. docs/verification.md aligned.
 
 All four confirmed audit findings (F1-F4) and both P1 test gaps (T1 §3.1, T2 §3.2,
 corruption pins §3.3) are now closed. Remaining triage candidates: C1/C2 hardenings,
@@ -55,11 +62,8 @@ M1-M4 minors, P2/P3 gaps §3.4-§3.9.
 
 ## To do (in order) — hardening pass
 
-- **§3.7** — CorePurityTest: recursive walk + widened ban list.
 - **M2** — GroupMembershipCommitter: strip group.instance.id, cap session timeout.
   Audit asks for a broker repro before fixing.
-- **§3.5** — SabotageMetaTest: oracle-violation assertions for the three assertDoesNotThrow
-  modes + DELIVER_PAST_DEAD_HOLDS random-sweep floor; align docs/verification.md.
 - **§3.8** — Oracle delivery-time legality check.
 - **§3.4** — two-instance task-migration smoke test.
 - **M1 / §3.9** — init-gather blocking cost; broker-bounce test. Lowest priority.

@@ -21,19 +21,28 @@ class CorePurityTest {
             "org.apache.kafka",
             "java.net.",
             "java.nio.channels",
+            "java.nio.file",
+            "java.io.",
             "java.time.",
+            "java.util.Date",
+            "java.util.Random",
+            "ThreadLocalRandom",
+            "Math.random",
+            "Thread.sleep",
             "System.currentTimeMillis",
             "System.nanoTime",
-            "new java.util.Date",
+            "System.getenv",
+            "System.getProperty",
             "Instant.now",
             "Clock.");
 
-    /** Core sources touch neither clock nor network nor substrate. */
+    /** Core sources touch neither clock nor randomness nor network nor substrate. */
     @Test
     void coreSourcesTouchNeitherClockNorNetworkNorSubstrate() throws IOException {
         Path coreSources = Path.of("src", "main", "java", "io", "github", "tobyjamesclements", "parsley", "core");
         assertTrue(Files.isDirectory(coreSources), "core sources must be present for this scan");
-        try (Stream<Path> files = Files.list(coreSources)) {
+        // Recursive, so a future subpackage of core/ cannot escape the scan.
+        try (Stream<Path> files = Files.walk(coreSources)) {
             files.filter(path -> path.toString().endsWith(".java")).forEach(path -> {
                 String source;
                 try {

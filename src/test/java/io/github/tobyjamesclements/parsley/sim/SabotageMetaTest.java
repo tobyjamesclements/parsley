@@ -84,7 +84,12 @@ class SabotageMetaTest {
     void ignoringTruncationIsCaught() {
         Rig rig = TargetedScenarioTest.truncation(SabotageMode.IGNORE_TRUNCATION);
 
-        assertDoesNotThrow(() -> rig.proc("p").ingestFacts());
+        assertDoesNotThrow(() -> rig.proc("p").ingestFacts(),
+                "the sabotage must disarm the refusal, or the oracle assertion below tests nothing");
+
+        List<String> violations = Scenario.run(4, SabotageMode.IGNORE_TRUNCATION).violations();
+        assertTrue(violations.stream().anyMatch(v -> v.startsWith("Safety 8")),
+                () -> "seed 4 must catch the engine sailing past truncation, got: " + violations);
     }
 
     /** Starting without a removed held channel is caught. */
@@ -113,10 +118,21 @@ class SabotageMetaTest {
     void ignoringRecreationIsCaught() {
         Rig rig = TargetedScenarioTest.recreatedTopic(SabotageMode.IGNORE_RECREATION);
 
-        assertDoesNotThrow(() -> rig.proc("p").ingestFacts());
+        assertDoesNotThrow(() -> rig.proc("p").ingestFacts(),
+                "the sabotage must disarm the refusal, or the oracle assertion below tests nothing");
+
+        List<String> violations = Scenario.run(65, SabotageMode.IGNORE_RECREATION).violations();
+        assertTrue(violations.stream().anyMatch(v -> v.startsWith("Assumption 2")),
+                () -> "seed 65 must catch the engine running across a recreation, got: " + violations);
     }
 
-    /** Delivering past dead channel holds is caught. */
+    /**
+     * Delivering past dead channel holds disarms the refusal. The oracle evidence for this
+     * mode is deliberately not a random seed:
+     * {@link #deliveringPastDeadChannelHoldsInvertsCausalOrderAndTheOracleSeesIt} constructs
+     * the inversion, because no seed in 1..300 reaches it by chance — which is also why this
+     * mode has no random-sweep floor below.
+     */
     @Test
     void deliveringPastDeadChannelHoldsIsCaught() {
         Rig rig = TargetedScenarioTest.deadChannelWithHeldMessages(SabotageMode.DELIVER_PAST_DEAD_HOLDS);
@@ -193,6 +209,8 @@ class SabotageMetaTest {
         floors.put(SabotageMode.IGNORE_REMOVED_CHANNELS, 17);
         floors.put(SabotageMode.SILENT_DROP, 22);
         floors.put(SabotageMode.OVEREXPRESS, 46);
+        // DELIVER_PAST_DEAD_HOLDS has no floor: calibration found 0 catches in 300 seeds.
+        // Its oracle evidence is the deterministic inversion scenario above.
         floors.forEach((mode, floor) -> {
             long caught = LongStream.rangeClosed(1, 120)
                     .filter(seed -> !Scenario.run(seed, mode).clean())
