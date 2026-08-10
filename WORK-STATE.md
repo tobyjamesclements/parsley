@@ -19,14 +19,14 @@ finding per commit, each with pinning tests, full suite run before each push.
   lengths with the classified refusal (repointed in ProcessEngine + inspector). Pinned
   by `StoreCodecCorruptionTest` (19 tests incl. two engine-restore refusal tests).
   Discharges test gap §3.3.
+- **F2 (major)** — unversioned store silently re-stamped v1. Fixed in `ProcessEngine`:
+  when the version entry is null, every tag prefix is probed and any surviving record
+  raises `UNKNOWN_ORDERING_STATE_FORMAT` (changelog-head loss diagnosis) before any
+  stamp or name re-bind. Pinned by 4 tests in `StoreCodecCorruptionTest` incl. the
+  audit's real-engine strip-the-version probe.
 
 ## To do (in order)
 
-- **F2 (major)** — store missing its version entry but containing state is silently
-  re-stamped v1 (`ProcessEngine.java:127`). Fix: if version entry is null AND any
-  parsley-tagged record exists (bounded prefix probe over the store), throw
-  `UNKNOWN_ORDERING_STATE_FORMAT`. Pin: build held state, delete only the `v` key,
-  restart engine → refusal (audit found this passes silently today).
 - **F4 (major)** — one unavailable partition blacks out the whole facts round
   (`AdminFactsSource.java:200`, `ListOffsetsResult.all()`). Fix: per-partition
   `partitionResult()` so loss confines to the affected channel; ensure dead/recreated

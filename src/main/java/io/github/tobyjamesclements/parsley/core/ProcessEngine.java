@@ -125,6 +125,7 @@ public final class ProcessEngine {
 
         byte[] version = store.get(StoreCodec.versionKey());
         if (version == null) {
+            refuseUnversionedState();
             store.put(StoreCodec.versionKey(), new byte[] {StoreCodec.STORE_FORMAT_VERSION});
         } else if (version.length != 1 || version[0] != StoreCodec.STORE_FORMAT_VERSION) {
             throw new ParsleyFailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
@@ -172,6 +173,29 @@ public final class ProcessEngine {
             }
         }
         this.sessionFloor = Map.copyOf(fedUpTo);
+    }
+
+    /**
+     * Stops construction if the store holds ordering state without its version entry.
+     *
+     * <p>The version entry is written before any state, in the store's earliest transaction,
+     * so state without it is unambiguous evidence that the head of the changelog has been
+     * lost — and with it an unknowable amount of the state itself. Stamping a fresh version
+     * here would adopt the remainder as complete and silently under-express causes.
+     */
+    private void refuseUnversionedState() {
+        byte[] tags = {StoreCodec.TAG_FED_UP_TO, StoreCodec.TAG_FRONTIER, StoreCodec.TAG_DELIVERED_PAST,
+                StoreCodec.TAG_NAME_BINDING, StoreCodec.TAG_HELD};
+        for (byte tag : tags) {
+            store.scanPrefix(StoreCodec.tagPrefix(tag), (key, value) -> {
+                throw new ParsleyFailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+                        "process " + processName + ": ordering state present without its format version entry;"
+                                + " the earliest records of the ordering changelog have been lost, so this state"
+                                + " is incomplete and cannot be trusted. Check the changelog topic's"
+                                + " cleanup.policy, then reset the process's state and group offsets"
+                                + " deliberately to proceed.");
+            });
+        }
     }
 
     /**

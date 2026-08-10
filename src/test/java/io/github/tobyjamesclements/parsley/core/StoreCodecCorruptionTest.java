@@ -183,6 +183,65 @@ class StoreCodecCorruptionTest {
         assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, thrown.reason());
     }
 
+    /** A store with no state at all is fresh: stamped with the current version and trusted. */
+    @Test
+    void engineStampsAndTrustsAFreshStore() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        new ProcessEngine("p", Map.of(CH, "in"), store, 64 * 1024);
+        assertArrayEquals(new byte[] {StoreCodec.STORE_FORMAT_VERSION}, store.get(StoreCodec.versionKey()));
+    }
+
+    /**
+     * A store carrying ordering state but no version entry is evidence the changelog head —
+     * where the version is written, in the earliest transaction — has been lost, and an
+     * unknowable amount of state with it. It must be refused, not re-stamped and trusted.
+     */
+    @Test
+    void engineRefusesAnUnversionedStoreThatContainsState() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        store.put(StoreCodec.channelKey(StoreCodec.TAG_FED_UP_TO, CH), StoreCodec.encodeLong(5L));
+
+        ParsleyFailClosedException thrown = assertThrows(ParsleyFailClosedException.class,
+                () -> new ProcessEngine("p", Map.of(CH, "in"), store, 64 * 1024));
+        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, thrown.reason());
+        assertTrue(thrown.getMessage().contains("version"),
+                () -> "diagnosis should name the missing version entry: " + thrown.getMessage());
+    }
+
+    /** The refusal fires whichever class of record survives — a lone held message included. */
+    @Test
+    void engineRefusesAnUnversionedStoreWithOnlyHeldState() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        store.put(StoreCodec.heldKey(CH, 3L), new byte[] {0});
+
+        ParsleyFailClosedException thrown = assertThrows(ParsleyFailClosedException.class,
+                () -> new ProcessEngine("p", Map.of(CH, "in"), store, 64 * 1024));
+        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, thrown.reason());
+    }
+
+    /**
+     * The audit's empirical probe, kept as a permanent pin: state written by a real engine,
+     * restored with only its version entry (and everything before it) missing — as when the
+     * changelog's oldest segment ages out under a mis-set cleanup.policy.
+     */
+    @Test
+    void engineRefusesARealStoreStrippedOfItsVersionEntry() {
+        MemoryOrderingStore original = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", Map.of(CH, "in"), original, 64 * 1024);
+        engine.onReceive(new ReceivedMessage(CH, 0L, 1L, new byte[] {'k'}, new byte[] {'v'}, List.of()));
+
+        MemoryOrderingStore stripped = new MemoryOrderingStore();
+        byte[] tags = {StoreCodec.TAG_FED_UP_TO, StoreCodec.TAG_FRONTIER, StoreCodec.TAG_DELIVERED_PAST,
+                StoreCodec.TAG_NAME_BINDING, StoreCodec.TAG_HELD};
+        for (byte tag : tags) {
+            original.scanPrefix(StoreCodec.tagPrefix(tag), stripped::put);
+        }
+
+        ParsleyFailClosedException thrown = assertThrows(ParsleyFailClosedException.class,
+                () -> new ProcessEngine("p", Map.of(CH, "in"), stripped, 64 * 1024));
+        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, thrown.reason());
+    }
+
     /** A malformed held key in the store stops engine construction with the diagnosis. */
     @Test
     void engineRestoreRefusesAMalformedHeldKey() {
