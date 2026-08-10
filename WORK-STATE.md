@@ -31,14 +31,19 @@ finding per commit, each with pinning tests, full suite run before each push.
   `committedOffsets`/`describeByNames` extracted as seams. Pinned by
   `AdminFactsSourceDegradationTest` (2 tests, mutation-checked: removing the
   per-partition catch fails both). Discharges the F4 half of test gap §3.6.
+- **T2 (test gap §3.2)** — explicit changelog-recovery evidence. Added
+  `EndToEndIntegrationTest#heldMessageSurvivesAStateDirWipeByChangelogRestore` (state
+  dir deleted between starts; hold and order rebuilt from the changelog) and
+  `BootstrapIntegrationTest#orderingChangelogIsCreatedCompacted` (cleanup.policy
+  asserted). Corrected docs/verification.md (driver-restart claim removed, wipe test
+  added) and EVIDENCE.md Liveness 5 (changelog leg now cites the wipe test).
+
+All four confirmed audit findings (F1-F4) and both P1 test gaps (T1 §3.1, T2 §3.2,
+corruption pins §3.3) are now closed. Remaining triage candidates: C1/C2 hardenings,
+M1-M4 minors, P2/P3 gaps §3.4-§3.9.
 
 ## To do (in order)
 
-- **T2 (test gap §3.2)** — explicit changelog-recovery test: EndToEndIntegrationTest
-  variant wiping the state dir between two Parsley.start calls, assert held message
-  still delivers; BootstrapIntegrationTest assertion that
-  `<appId>-__parsley.ordering-changelog` has `cleanup.policy=compact`. Correct
-  docs/verification.md:31 and EVIDENCE.md Liveness 5 while there.
 
 ## Not in scope this pass (triage later)
 

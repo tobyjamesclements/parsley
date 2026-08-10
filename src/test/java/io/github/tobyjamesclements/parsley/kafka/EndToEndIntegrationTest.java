@@ -260,6 +260,52 @@ class EndToEndIntegrationTest {
         }
     }
 
+    /** Held message survives losing all local state: ordering state restores from the changelog. */
+    @Test
+    void heldMessageSurvivesAStateDirWipeByChangelogRestore() throws Exception {
+        createTopics("wipe-a", "wipe-b");
+        Channel<String, String> a = Channel.of("wipe-a", Serdes.String(), Serdes.String());
+        Channel<String, String> b = Channel.of("wipe-b", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition pw = ProcessDefinition.named("pw")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .receives(b, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        produce("wipe-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("wipe-a"), 0), 0L)));
+
+        try (Parsley parsley = Parsley.start(config("wipe"), pw)) {
+            Thread.sleep(5_000);
+            assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
+        }
+
+        deleteRecursively(stateDir.resolve("wipe"));
+
+        try (Parsley parsley = Parsley.start(config("wipe"), pw)) {
+            produce("wipe-a", "k", "A");
+            await("A then B after the wipe", () -> delivered.size() == 2, Duration.ofSeconds(120));
+            assertEquals(List.of("A", "B"), List.copyOf(delivered),
+                    "the hold and its order must be rebuilt entirely from the changelog");
+        }
+    }
+
+    private static void deleteRecursively(java.nio.file.Path root) throws Exception {
+        if (!java.nio.file.Files.exists(root)) {
+            return;
+        }
+        try (var paths = java.nio.file.Files.walk(root)) {
+            for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                java.nio.file.Files.delete(path);
+            }
+        }
+    }
+
     /** Cause on aborted positions resolves from read position reports. */
     @Test
     void causeOnAbortedPositionsResolvesFromReadPositionReports() throws Exception {

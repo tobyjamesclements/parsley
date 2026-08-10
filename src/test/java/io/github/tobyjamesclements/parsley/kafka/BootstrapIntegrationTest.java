@@ -193,6 +193,37 @@ class BootstrapIntegrationTest {
         assertEquals(7, committed.get(tp).offset(), "the newer lifetime's offsets stand untouched");
     }
 
+    /**
+     * The ordering changelog is created compacted. Changelog restore — and the F2 refusal's
+     * premise that the version entry at the head of the changelog outlives every rewrite —
+     * both rest on this policy, so its presence is asserted rather than assumed.
+     */
+    @Test
+    void orderingChangelogIsCreatedCompacted() throws Exception {
+        createTopics(new NewTopic("clog-in", 1, (short) 1));
+        Channel<String, String> in = Channel.of("clog-in", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition p = ProcessDefinition.named("pc")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("clog"), p)) {
+            produce("clog-in", null, "k", "v");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+        }
+
+        var resource = new org.apache.kafka.common.config.ConfigResource(
+                org.apache.kafka.common.config.ConfigResource.Type.TOPIC,
+                "clog-pc-__parsley.ordering-changelog");
+        var config = admin.describeConfigs(List.of(resource)).all().get(30, TimeUnit.SECONDS).get(resource);
+        assertEquals("compact",
+                config.get(org.apache.kafka.common.config.TopicConfig.CLEANUP_POLICY_CONFIG).value(),
+                "the ordering changelog must be compacted; state restore depends on it");
+    }
+
     /** Expired offsets restart from earliest not the declared latest. */
     @Test
     void expiredOffsetsRestartFromEarliestNotTheDeclaredLatest() throws Exception {

@@ -27,11 +27,12 @@ targeted case per mode, and a randomised sweep records the margin by which the o
 each broken engine.
 
 **Streams wiring.** `TopologyTestDriver` tests for the header format on the wire, byte-exact
-key and value pass-through, Schema-Registry-format serdes, punctuator fact ingestion through
-an injected facts source, and store persistence across driver restarts.
+key and value pass-through, Schema-Registry-format serdes, and punctuator fact ingestion
+through an injected facts source.
 
 **Integration.** Embedded KRaft broker tests for commit and abort behaviour under
-exactly-once semantics, restart with state restore, aborted-transaction gaps and trailing
+exactly-once semantics, restart with state restore, restart after a state-dir wipe with the
+ordering state rebuilt entirely from its changelog, aborted-transaction gaps and trailing
 runs, log truncation, and a plain `read_committed` consumer decoding output with application
 serdes alone.
 
