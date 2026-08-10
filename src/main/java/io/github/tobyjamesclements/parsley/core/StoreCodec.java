@@ -107,20 +107,51 @@ final class StoreCodec {
     }
 
     /**
-     * @param key a key beginning with a tag and a channel
+     * @param key a key built by {@link #channelKey(byte, ChannelId)}
      * @return the channel it names
+     * @throws ParsleyFailClosedException with
+     *         {@link ParsleyFailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
+     *         key is not the exact length that builder writes
      */
-    static ChannelId channelOfKey(byte[] key) {
-        ByteBuffer buffer = ByteBuffer.wrap(key, 1, ChannelId.ENCODED_LENGTH);
-        return ChannelId.readFrom(buffer);
+    static ChannelId channelOfChannelKey(byte[] key) {
+        if (key.length != 1 + ChannelId.ENCODED_LENGTH) {
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+                    "corrupt ordering key: length " + key.length + " for tag '" + (char) key[0] + "'");
+        }
+        return ChannelId.readFrom(ByteBuffer.wrap(key, 1, ChannelId.ENCODED_LENGTH));
+    }
+
+    /**
+     * @param key a key built by {@link #heldKey(ChannelId, long)}
+     * @return the channel it names
+     * @throws ParsleyFailClosedException with
+     *         {@link ParsleyFailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
+     *         key is not the exact length that builder writes
+     */
+    static ChannelId channelOfHeldKey(byte[] key) {
+        requireHeldKeyLength(key);
+        return ChannelId.readFrom(ByteBuffer.wrap(key, 1, ChannelId.ENCODED_LENGTH));
     }
 
     /**
      * @param key a key built by {@link #heldKey(ChannelId, long)}
      * @return the position it names
+     * @throws ParsleyFailClosedException with
+     *         {@link ParsleyFailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
+     *         key is not the exact length that builder writes
      */
     static long positionOfHeldKey(byte[] key) {
+        requireHeldKeyLength(key);
         return ByteBuffer.wrap(key, 1 + ChannelId.ENCODED_LENGTH, Long.BYTES).getLong();
+    }
+
+    private static void requireHeldKeyLength(byte[] key) {
+        if (key.length != 1 + ChannelId.ENCODED_LENGTH + Long.BYTES) {
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+                    "corrupt held key: length " + key.length);
+        }
     }
 
     /**
@@ -134,8 +165,16 @@ final class StoreCodec {
     /**
      * @param value an eight-byte encoding
      * @return the number it holds
+     * @throws ParsleyFailClosedException with
+     *         {@link ParsleyFailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
+     *         value is not exactly eight bytes
      */
     static long decodeLong(byte[] value) {
+        if (value.length != Long.BYTES) {
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+                    "corrupt ordering value: length " + value.length + " where 8 bytes were written");
+        }
         return ByteBuffer.wrap(value).getLong();
     }
 
@@ -233,37 +272,62 @@ final class StoreCodec {
             int flags = buffer.get();
             byte[] key = null;
             if ((flags & FLAG_KEY_NULL) == 0) {
-                key = new byte[buffer.getInt()];
-                buffer.get(key);
+                key = readSizedBytes(buffer, "key");
             }
             byte[] value = null;
             if ((flags & FLAG_VALUE_NULL) == 0) {
-                value = new byte[buffer.getInt()];
-                buffer.get(value);
+                value = readSizedBytes(buffer, "value");
             }
             int headerCount = buffer.getInt();
+            if (headerCount < 0 || headerCount > buffer.remaining() / (2 * Integer.BYTES)) {
+                throw corrupt("header count " + headerCount + " with " + buffer.remaining() + " bytes remaining");
+            }
             List<HeaderKV> headers = new ArrayList<>(headerCount);
             for (int i = 0; i < headerCount; i++) {
-                byte[] headerKey = new byte[buffer.getInt()];
-                buffer.get(headerKey);
+                byte[] headerKey = readSizedBytes(buffer, "header key");
                 int valueLength = buffer.getInt();
                 byte[] headerValue = null;
                 if (valueLength >= 0) {
+                    if (valueLength > buffer.remaining()) {
+                        throw corrupt("header value length " + valueLength
+                                + " exceeds " + buffer.remaining() + " bytes remaining");
+                    }
                     headerValue = new byte[valueLength];
                     buffer.get(headerValue);
                 }
                 headers.add(new HeaderKV(new String(headerKey, StandardCharsets.UTF_8), headerValue));
             }
             int causeCount = buffer.getInt();
+            if (causeCount < 0
+                    || buffer.remaining() != causeCount * (long) (ChannelId.ENCODED_LENGTH + Long.BYTES)) {
+                throw corrupt("cause count " + causeCount + " does not match "
+                        + buffer.remaining() + " bytes remaining");
+            }
             TreeMap<ChannelId, Long> causes = new TreeMap<>();
             for (int i = 0; i < causeCount; i++) {
                 ChannelId channel = ChannelId.readFrom(buffer);
                 causes.put(channel, buffer.getLong());
             }
             return new HeldBlob(timestamp, key, value, List.copyOf(headers), Causes.of(causes));
-        } catch (BufferUnderflowException | IllegalArgumentException | IndexOutOfBoundsException e) {
+        } catch (BufferUnderflowException | IllegalArgumentException | IndexOutOfBoundsException
+                 | NegativeArraySizeException e) {
             throw new ParsleyFailClosedException(
                     ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, "corrupt held blob", e);
         }
+    }
+
+    private static byte[] readSizedBytes(ByteBuffer buffer, String what) {
+        int length = buffer.getInt();
+        if (length < 0 || length > buffer.remaining()) {
+            throw corrupt(what + " length " + length + " with " + buffer.remaining() + " bytes remaining");
+        }
+        byte[] bytes = new byte[length];
+        buffer.get(bytes);
+        return bytes;
+    }
+
+    private static ParsleyFailClosedException corrupt(String detail) {
+        return new ParsleyFailClosedException(
+                ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, "corrupt held blob: " + detail);
     }
 }

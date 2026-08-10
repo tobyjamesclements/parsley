@@ -11,19 +11,17 @@ finding per commit, each with pinning tests, full suite run before each push.
   punctuator cancel + close()). Pinned by `ProcessorRevivalTest` (9 tests; each guard
   individually mutation-tested). Commits a20d521, 896c803. This also discharges test gap
   §3.1 (T1).
+- **F3 (major)** — StoreCodec decode paths trust wire length/count fields. Fixed:
+  every length/count validated against remaining bytes before allocation; cause-count
+  check requires exact remaining (also rejects trailing bytes); NegativeArraySizeException
+  added to the corruption catch; `decodeLong` requires exactly 8 bytes;
+  `channelOfChannelKey`/`channelOfHeldKey`/`positionOfHeldKey` validate exact key
+  lengths with the classified refusal (repointed in ProcessEngine + inspector). Pinned
+  by `StoreCodecCorruptionTest` (19 tests incl. two engine-restore refusal tests).
+  Discharges test gap §3.3.
 
 ## To do (in order)
 
-- **F3 (major)** — `StoreCodec` decode paths trust wire length/count fields
-  (`StoreCodec.java:247` primary; also :236 :241 :245 :264). Fix: validate every
-  length/count against `buffer.remaining()` before allocating (CausesCodec pattern);
-  catch `NegativeArraySizeException` (or `RuntimeException`) in `decodeHeld`; reject
-  trailing bytes after decode; `decodeLong` must require exactly 8 bytes. Also wrap the
-  restore-scan parsers (`ProcessEngine.java:148-166` → `channelOfKey`,
-  `positionOfHeldKey`, `decodeLong`) so malformed keys/values raise the classified
-  `UNKNOWN_ORDERING_STATE_FORMAT` refusal, not raw runtime exceptions. Pin with audit
-  §3.3: negative/oversized lengths, oversized header count, wrong-length f/c/p values,
-  malformed keys, trailing bytes — each asserting the refusal + populated refusalReason.
 - **F2 (major)** — store missing its version entry but containing state is silently
   re-stamped v1 (`ProcessEngine.java:127`). Fix: if version entry is null AND any
   parsley-tagged record exists (bounded prefix probe over the store), throw

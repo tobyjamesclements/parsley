@@ -146,13 +146,13 @@ public final class ProcessEngine {
         });
 
         store.scanPrefix(StoreCodec.tagPrefix(StoreCodec.TAG_FED_UP_TO),
-                (key, value) -> fedUpTo.put(StoreCodec.channelOfKey(key), StoreCodec.decodeLong(value)));
+                (key, value) -> fedUpTo.put(StoreCodec.channelOfChannelKey(key), StoreCodec.decodeLong(value)));
         store.scanPrefix(StoreCodec.tagPrefix(StoreCodec.TAG_FRONTIER),
-                (key, value) -> frontier.put(StoreCodec.channelOfKey(key), StoreCodec.decodeLong(value)));
+                (key, value) -> frontier.put(StoreCodec.channelOfChannelKey(key), StoreCodec.decodeLong(value)));
         store.scanPrefix(StoreCodec.tagPrefix(StoreCodec.TAG_DELIVERED_PAST),
-                (key, value) -> deliveredPast.put(StoreCodec.channelOfKey(key), StoreCodec.decodeLong(value)));
+                (key, value) -> deliveredPast.put(StoreCodec.channelOfChannelKey(key), StoreCodec.decodeLong(value)));
         store.scanPrefix(StoreCodec.tagPrefix(StoreCodec.TAG_HELD), (key, value) -> {
-            ChannelId channel = StoreCodec.channelOfKey(key);
+            ChannelId channel = StoreCodec.channelOfHeldKey(key);
             long position = StoreCodec.positionOfHeldKey(key);
             if (!this.receivedChannels.contains(channel) && !sabotage.has(Sabotage.Mode.IGNORE_REMOVED_CHANNELS)) {
                 throw new ParsleyFailClosedException(Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES,

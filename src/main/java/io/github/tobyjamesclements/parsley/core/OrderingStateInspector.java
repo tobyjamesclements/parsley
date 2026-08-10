@@ -34,7 +34,7 @@ public final class OrderingStateInspector {
         latestPerKey.forEach((key, value) -> {
             if (value != null && key.length == 1 + ChannelId.ENCODED_LENGTH + Long.BYTES
                     && key[0] == StoreCodec.TAG_HELD) {
-                channels.add(StoreCodec.channelOfKey(key));
+                channels.add(StoreCodec.channelOfHeldKey(key));
             }
         });
         return channels;
