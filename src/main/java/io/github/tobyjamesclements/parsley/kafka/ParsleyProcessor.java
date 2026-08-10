@@ -60,8 +60,14 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             new java.util.concurrent.atomic.AtomicLong();
     private final java.util.concurrent.atomic.AtomicReference<GatheredRound> gathered =
             new java.util.concurrent.atomic.AtomicReference<>();
-    private final java.util.concurrent.atomic.AtomicBoolean gatherInFlight =
-            new java.util.concurrent.atomic.AtomicBoolean();
+    /**
+     * The gather slot: zero when no gather is in flight, otherwise the epoch that launched
+     * the one that is. Acquired and freed by compare-and-set, so only the epoch that
+     * acquired the slot can free it — a superseded gather completing after a revival cannot
+     * free the slot a successor incarnation's own gather holds.
+     */
+    private final java.util.concurrent.atomic.AtomicLong gatherSlot =
+            new java.util.concurrent.atomic.AtomicLong();
     private boolean budgetWarned;
     private Cancellable factsPunctuator;
 
@@ -110,12 +116,14 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      */
     @Override
     public void init(ProcessorContext<byte[], byte[]> context) {
-        // A revived task re-initialises this same instance against restored state. Anything
-        // the previous incarnation left behind describes rolled-back progress: its facts
-        // rounds are invalidated, its punctuator cancelled, and the gather cycle starts idle.
+        // A revived task runs close() and then init() on this same instance against restored
+        // state; both perform the same reset, so a lifecycle that re-initialises without
+        // closing is covered too. Anything the previous incarnation left behind describes
+        // rolled-back progress: its facts rounds are invalidated, its punctuator cancelled,
+        // and the gather slot freed.
         incarnation.incrementAndGet();
         gathered.set(null);
-        gatherInFlight.set(false);
+        gatherSlot.set(0);
         if (factsPunctuator != null) {
             factsPunctuator.cancel();
             factsPunctuator = null;
@@ -164,10 +172,10 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     }
 
     private void startGatherIfIdle() {
-        if (!gatherInFlight.compareAndSet(false, true)) {
+        long epoch = incarnation.get();
+        if (!gatherSlot.compareAndSet(0, epoch)) {
             return;
         }
-        long epoch = incarnation.get();
         java.util.Set<ChannelId> received = java.util.Set.copyOf(engine.receivedChannelSet());
         Map<ChannelId, Long> hints = probeHints();
         java.util.Set<ChannelId> frontier = engine.frontierSnapshot().byChannel().keySet();
@@ -176,6 +184,8 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                 try {
                     io.github.tobyjamesclements.parsley.core.PositionFacts facts =
                             factsSource.gather(received, hints, frontier);
+                    // Best-effort: a deposit racing a concurrent re-initialisation can still
+                    // leave a superseded round behind; the apply-time epoch check discards it.
                     if (incarnation.get() == epoch) {
                         gathered.set(new GatheredRound(epoch, facts));
                     }
@@ -184,27 +194,24 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                 } catch (Exception e) {
                     LOG.warn("{}: position facts unavailable, retrying next round", definition.name(), e);
                 } finally {
-                    // Guarded so a superseded gather completing late cannot free the slot a
-                    // successor incarnation's own gather is holding.
-                    if (incarnation.get() == epoch) {
-                        gatherInFlight.set(false);
-                    }
+                    gatherSlot.compareAndSet(epoch, 0);
                 }
             });
         } catch (java.util.concurrent.RejectedExecutionException e) {
-            gatherInFlight.set(false);
+            gatherSlot.compareAndSet(epoch, 0);
         }
     }
 
     /**
      * Invalidates any in-flight facts gather and cancels the facts punctuator, so nothing
-     * from this incarnation can act on a revived successor.
+     * from this incarnation can act on a revived successor. On the revival path this runs
+     * before the successor's {@code init}, which repeats the same reset.
      */
     @Override
     public void close() {
         incarnation.incrementAndGet();
         gathered.set(null);
-        gatherInFlight.set(false);
+        gatherSlot.set(0);
         if (factsPunctuator != null) {
             factsPunctuator.cancel();
             factsPunctuator = null;
