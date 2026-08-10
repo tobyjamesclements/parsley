@@ -67,9 +67,21 @@ M1-M4 minors, P2/P3 gaps §3.4-§3.9.
 
 ## To do (in order) — hardening pass
 
-- **§3.8** — Oracle delivery-time legality check.
-- **§3.4** — two-instance task-migration smoke test.
-- **M1 / §3.9** — init-gather blocking cost; broker-bounce test. Lowest priority.
+- **§3.4** — two-instance task-migration smoke test. CAUTION for pickup: Parsley.start
+  bootstraps via GroupMembershipCommitter joining the Streams group with the consumer
+  protocol; starting instance B while A runs may hit INCONSISTENT_GROUP_PROTOCOL in
+  join() (its error text anticipates exactly this). Investigate whether two-instance
+  start is supported (D48 records cold-start collision residuals) before writing the
+  test; if it is not, that finding itself belongs in the report.
+- **§3.8** — Oracle delivery-time legality check: each trueCause delivered/settled/
+  exempt at the moment of onDelivered; must not disturb the D41 exemption or D31
+  clamp. Modifies the oracle — do with a full session and rerun the whole sim suite
+  plus SabotageMetaTest floors afterwards.
+- **M1** — init-gather blocks the stream thread through the synchronized facts source
+  (ParsleyProcessor.ingestFacts at init; AdminFactsSource.gather is synchronized).
+  Availability-only. Any fix must preserve D54's synchronous-seeding semantics.
+- **§3.9** — broker-bounce belt-and-braces test. Lowest priority; audit verified the
+  feared fail-open path is structurally unreachable.
 
 ## Verification protocol per fix
 
