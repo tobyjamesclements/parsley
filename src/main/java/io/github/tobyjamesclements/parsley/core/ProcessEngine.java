@@ -162,8 +162,17 @@ public final class ProcessEngine {
             }
             StoreCodec.HeldBlob blob = StoreCodec.decodeHeld(value);
 
-            held.computeIfAbsent(channel, c -> new ArrayDeque<>())
-                    .addLast(new Hold(position, blob.timestamp(), blob.causes(), true, null, null, null));
+            // Everything downstream treats the deque head as the minimum held position, so
+            // the scan order the store promises is verified rather than assumed.
+            ArrayDeque<Hold> buffer = held.computeIfAbsent(channel, c -> new ArrayDeque<>());
+            Hold last = buffer.peekLast();
+            if (last != null && last.position >= position) {
+                throw new ParsleyFailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+                        "process " + processName + ": held messages restored out of position order on "
+                                + channel + " (" + last.position + " before " + position
+                                + "); the store's scan broke its ordering contract");
+            }
+            buffer.addLast(new Hold(position, blob.timestamp(), blob.causes(), true, null, null, null));
         });
 
         for (ChannelId channel : this.receivedChannels) {

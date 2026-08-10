@@ -242,6 +242,54 @@ class StoreCodecCorruptionTest {
         assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, thrown.reason());
     }
 
+    /**
+     * Restore trusts the store's promised scan order — the deque head must be the minimum
+     * held position — so a store breaking that contract is refused, not silently inverted.
+     */
+    @Test
+    void engineRefusesHeldStateVisitedOutOfOrder() {
+        ChannelId other = new ChannelId(new UUID(5, 5), 0);
+        MemoryOrderingStore inner = new MemoryOrderingStore();
+        ProcessEngine writer = new ProcessEngine("p", Map.of(CH, "in", other, "other"), inner, 64 * 1024);
+        HeaderKV causes = new HeaderKV(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(other, 5L))));
+        writer.onReceive(new ReceivedMessage(CH, 0L, 1L, null, new byte[] {1}, List.of(causes)));
+        writer.onReceive(new ReceivedMessage(CH, 1L, 2L, null, new byte[] {2}, List.of(causes)));
+        writer.flushHolds();
+
+        new ProcessEngine("p", Map.of(CH, "in", other, "other"), inner, 64 * 1024);
+
+        OrderingStore reversed = new OrderingStore() {
+            @Override
+            public byte[] get(byte[] key) {
+                return inner.get(key);
+            }
+
+            @Override
+            public void put(byte[] key, byte[] value) {
+                inner.put(key, value);
+            }
+
+            @Override
+            public void delete(byte[] key) {
+                inner.delete(key);
+            }
+
+            @Override
+            public void scanPrefix(byte[] prefix, EntryConsumer consumer) {
+                java.util.List<byte[][]> entries = new java.util.ArrayList<>();
+                inner.scanPrefix(prefix, (key, value) -> entries.add(new byte[][] {key, value}));
+                for (int i = entries.size() - 1; i >= 0; i--) {
+                    consumer.accept(entries.get(i)[0], entries.get(i)[1]);
+                }
+            }
+        };
+        ParsleyFailClosedException thrown = assertThrows(ParsleyFailClosedException.class,
+                () -> new ProcessEngine("p", Map.of(CH, "in", other, "other"), reversed, 64 * 1024));
+        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, thrown.reason());
+        assertTrue(thrown.getMessage().contains("order"),
+                () -> "diagnosis should name the ordering breach: " + thrown.getMessage());
+    }
+
     /** A malformed held key in the store stops engine construction with the diagnosis. */
     @Test
     void engineRestoreRefusesAMalformedHeldKey() {

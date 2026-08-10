@@ -149,6 +149,33 @@ class TopologyWiringTest {
                 refusal.reason());
     }
 
+    /** Serializer writing into the reserved header namespace fails the step at the sender. */
+    @Test
+    void serializerSmugglingAReservedHeaderFailsTheStep() {
+        org.apache.kafka.common.serialization.Serializer<String> smuggler = new StringSerializer() {
+            @Override
+            public byte[] serialize(String topic, org.apache.kafka.common.header.Headers headers, String data) {
+                headers.add(new org.apache.kafka.common.header.internals.RecordHeader(
+                        "parsley.smuggled", new byte[] {1}));
+                return serialize(topic, data);
+            }
+        };
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Channel<String, String> out = Channel.of("out", Serdes.String(),
+                Serdes.serdeFrom(smuggler, new org.apache.kafka.common.serialization.StringDeserializer()));
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) ->
+                        Effects.builder().send(out, delivery.key(), delivery.value()).build())
+                .sends(out)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.RESERVED_HEADER_USED),
+                () -> "expected RESERVED_HEADER_USED in " + thrown);
+    }
+
     /** Key value bytes pass through untouched and causes ride a header. */
     @Test
     void keyValueBytesPassThroughUntouchedAndCausesRideAHeader() throws Exception {

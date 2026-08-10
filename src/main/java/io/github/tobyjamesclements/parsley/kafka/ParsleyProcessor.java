@@ -354,6 +354,17 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                 ? null : emission.channel().keySerde().serializer().serialize(topic, headers, emission.key());
         byte[] valueBytes = emission.value() == null
                 ? null : emission.channel().valueSerde().serializer().serialize(topic, headers, emission.value());
+        // The emission's own headers were checked at construction, but the serializers were
+        // just handed the mutable collection; re-check before the genuine stamp goes on, so
+        // a header-writing serializer fails here instead of poisoning every receiver.
+        for (Header header : headers) {
+            if (header.key().startsWith(io.github.tobyjamesclements.parsley.core.CausesCodec.RESERVED_HEADER_PREFIX)) {
+                throw new ParsleyFailClosedException(
+                        ParsleyFailClosedException.Reason.RESERVED_HEADER_USED,
+                        definition.name() + ": serializer for " + topic + " wrote reserved header '"
+                                + header.key() + "'");
+            }
+        }
         headers.add(new RecordHeader(io.github.tobyjamesclements.parsley.core.CausesCodec.HEADER_KEY, engine.causesHeaderForEmission()));
         context.forward(new Record<>(keyBytes, valueBytes, timestamp, headers), ProcessTopology.sinkName(topic));
     }
