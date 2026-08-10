@@ -24,15 +24,16 @@ finding per commit, each with pinning tests, full suite run before each push.
   raises `UNKNOWN_ORDERING_STATE_FORMAT` (changelog-head loss diagnosis) before any
   stamp or name re-bind. Pinned by 4 tests in `StoreCodecCorruptionTest` incl. the
   audit's real-engine strip-the-version probe.
+- **F4 (major)** — one unavailable partition blacked out the whole facts round. Fixed
+  in `AdminFactsSource`: per-partition `partitionResult()` futures behind a
+  package-private `earliestOffsets` seam, shared 10s deadline, per-partition catch so
+  loss confines to the affected channel and dead/recreated verdicts still ride;
+  `committedOffsets`/`describeByNames` extracted as seams. Pinned by
+  `AdminFactsSourceDegradationTest` (2 tests, mutation-checked: removing the
+  per-partition catch fails both). Discharges the F4 half of test gap §3.6.
 
 ## To do (in order)
 
-- **F4 (major)** — one unavailable partition blacks out the whole facts round
-  (`AdminFactsSource.java:200`, `ListOffsetsResult.all()`). Fix: per-partition
-  `partitionResult()` so loss confines to the affected channel; ensure dead/recreated
-  verdicts still ride the round when position queries partially fail. Pin per §3.6:
-  one failing partition must not suppress other channels' facts nor the verdicts
-  (inject via the overridable admin seams D50 established).
 - **T2 (test gap §3.2)** — explicit changelog-recovery test: EndToEndIntegrationTest
   variant wiping the state dir between two Parsley.start calls, assert held message
   still delivers; BootstrapIntegrationTest assertion that
