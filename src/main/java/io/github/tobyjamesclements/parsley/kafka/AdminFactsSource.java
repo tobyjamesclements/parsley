@@ -44,6 +44,15 @@ import io.github.tobyjamesclements.parsley.core.PositionFacts;
 class AdminFactsSource implements FactsSource {
     private static final Logger LOG = LoggerFactory.getLogger(AdminFactsSource.class);
     private static final long TIMEOUT_SECONDS = 10;
+    /** How long a startup seed may wait for the source before starting unseeded. */
+    private static final long SEED_WAIT_MILLIS = 5_000;
+
+    /**
+     * Serialises rounds: one instance serves every task of a process, and the admin client
+     * is queried in batches. A lock rather than a monitor, so the seed path can bound its
+     * wait instead of stacking initialising tasks behind a slow broker.
+     */
+    private final java.util.concurrent.locks.ReentrantLock rounds = new java.util.concurrent.locks.ReentrantLock();
 
     enum NameVerdict {
         SAME_ID,
@@ -92,15 +101,41 @@ class AdminFactsSource implements FactsSource {
         this.clock = clock;
     }
 
+    @Override
+    public PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
+                                Set<ChannelId> frontierChannels) throws Exception {
+        rounds.lockInterruptibly();
+        try {
+            return gatherRound(receivedChannels, fedUpToHints, frontierChannels);
+        } finally {
+            rounds.unlock();
+        }
+    }
+
     /**
      * {@inheritDoc}
      *
-     * <p>Synchronized because one instance serves every task of a process, and the admin
-     * client is queried in batches.
+     * <p>Waits a bounded five seconds for the source; a task initialising while another
+     * round grinds against a slow broker starts unseeded rather than stalling the stream
+     * thread, and the first background round arrives within an interval.
      */
     @Override
-    public synchronized PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
-                                             Set<ChannelId> frontierChannels) throws Exception {
+    public PositionFacts gatherForSeed(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
+                                       Set<ChannelId> frontierChannels) throws Exception {
+        if (!rounds.tryLock(SEED_WAIT_MILLIS, TimeUnit.MILLISECONDS)) {
+            LOG.warn("{}: facts source busy; starting unseeded, the first background round will seed instead",
+                    groupId);
+            return PositionFacts.EMPTY;
+        }
+        try {
+            return gatherRound(receivedChannels, fedUpToHints, frontierChannels);
+        } finally {
+            rounds.unlock();
+        }
+    }
+
+    private PositionFacts gatherRound(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
+                                      Set<ChannelId> frontierChannels) throws Exception {
         if (closed) {
             return PositionFacts.EMPTY;
         }
@@ -445,9 +480,14 @@ class AdminFactsSource implements FactsSource {
         }
     }
 
-    synchronized void close() {
-        closed = true;
-        closeProbe();
+    void close() {
+        rounds.lock();
+        try {
+            closed = true;
+            closeProbe();
+        } finally {
+            rounds.unlock();
+        }
     }
 
     Map<UUID, String> describeByIds(Set<UUID> topicIds) throws Exception {

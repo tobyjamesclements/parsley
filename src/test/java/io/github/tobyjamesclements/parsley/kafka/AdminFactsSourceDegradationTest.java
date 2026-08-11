@@ -90,6 +90,55 @@ class AdminFactsSourceDegradationTest {
         }
     }
 
+    /**
+     * A task initialising while another round grinds against a slow broker must start
+     * unseeded after a bounded wait, not stack on the stream thread behind the round.
+     */
+    @Test
+    void aBusySourceYieldsAnUnseededStartInsteadOfAStall() throws Exception {
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        AdminFactsSource parked = new AdminFactsSource(null, "g", Map.of(X_ID, "x"), Map.of(), 1_000L, () -> 0L) {
+            @Override
+            Map<UUID, String> describeByIds(Set<UUID> topicIds) throws Exception {
+                entered.countDown();
+                release.await();
+                return Map.of();
+            }
+
+            @Override
+            Map<String, Object> describeByNames(Set<String> names) {
+                return Map.of();
+            }
+
+            @Override
+            Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsets(
+                    Map<TopicPartition, OffsetSpec> queries) {
+                return Map.of();
+            }
+
+            @Override
+            Map<TopicPartition, OffsetAndMetadata> committedOffsets() {
+                return Map.of();
+            }
+        };
+        Thread background = new Thread(() -> {
+            try {
+                parked.gather(Set.of(A), Map.of(), Set.of());
+            } catch (Exception e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        background.start();
+        assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the round must be in flight");
+
+        PositionFacts seed = parked.gatherForSeed(Set.of(A), Map.of(), Set.of());
+
+        assertEquals(PositionFacts.EMPTY, seed, "a busy source must yield an unseeded start, not a stall");
+        release.countDown();
+        background.join(5_000);
+    }
+
     @Test
     void oneUnavailablePartitionWithholdsOnlyItsOwnChannelsFacts() throws Exception {
         PositionFacts facts = new DegradedFacts().gather(Set.of(A, B), Map.of(), Set.of());

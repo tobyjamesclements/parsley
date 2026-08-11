@@ -76,6 +76,12 @@ finding per commit, each with pinning tests, full suite run before each push.
   seeds + all floors. Pinned by
   `SabotageMetaTest#prematureDeliveryWhoseCauseArrivesOnlyAfterRestartIsCaught`
   (mutation-verified: old oracle sees a fully clean run for that scenario).
+- **M1** — the facts source's monitor became a ReentrantLock; a new
+  `FactsSource.gatherForSeed` default (bounded 5s tryLock in AdminFactsSource) is used
+  by init's seeding, so a slow broker no longer stacks initialising tasks — the seed
+  stays synchronous when the source is free, starts unseeded when it is not. D54 cost
+  note amended. Pinned by
+  `AdminFactsSourceDegradationTest#aBusySourceYieldsAnUnseededStartInsteadOfAStall`.
 
 All four confirmed audit findings (F1-F4) and both P1 test gaps (T1 §3.1, T2 §3.2,
 corruption pins §3.3) are now closed. Remaining triage candidates: C1/C2 hardenings,
@@ -83,9 +89,6 @@ M1-M4 minors, P2/P3 gaps §3.4-§3.9.
 
 ## To do (in order) — hardening pass
 
-- **M1** — init-gather blocks the stream thread through the synchronized facts source
-  (ParsleyProcessor.ingestFacts at init; AdminFactsSource.gather is synchronized).
-  Availability-only. Any fix must preserve D54's synchronous-seeding semantics.
 - **§3.9** — broker-bounce belt-and-braces test. Lowest priority; audit verified the
   feared fail-open path is structurally unreachable.
 

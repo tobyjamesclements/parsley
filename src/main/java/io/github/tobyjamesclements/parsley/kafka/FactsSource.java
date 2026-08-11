@@ -28,4 +28,24 @@ interface FactsSource {
      */
     PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
                          Set<ChannelId> frontierChannels) throws Exception;
+
+    /**
+     * Gathers facts for a task's startup seed, without waiting unboundedly for the source.
+     *
+     * <p>Task initialisation runs on the stream thread, so a source busy with a slow broker
+     * must not stack every initialising task behind it. An implementation may return
+     * {@link PositionFacts#EMPTY} when it cannot answer within a bounded wait; facts are
+     * per-position lower bounds, so starting unseeded merely defers evidence to the first
+     * background round.
+     *
+     * @param receivedChannels  the channels the process receives
+     * @param fedUpToHints      per channel, the highest position already fed
+     * @param frontierChannels  channels named by the frontier
+     * @return the broker's view, or {@link PositionFacts#EMPTY} if the source is busy
+     * @throws Exception if the broker cannot be queried
+     */
+    default PositionFacts gatherForSeed(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
+                                        Set<ChannelId> frontierChannels) throws Exception {
+        return gather(receivedChannels, fedUpToHints, frontierChannels);
+    }
 }

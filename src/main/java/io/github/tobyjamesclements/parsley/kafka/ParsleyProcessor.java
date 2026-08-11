@@ -42,7 +42,9 @@ import io.github.tobyjamesclements.parsley.core.ReceivedMessage;
  * writes, sends and consumed positions commit together under {@code exactly_once_v2}.
  *
  * <p>Broker facts are refreshed on a separate executor, so a slow query cannot stall
- * delivery. The result is picked up on the next record or punctuation.
+ * delivery. The result is picked up on the next record or punctuation. Initialisation seeds
+ * one round synchronously when the source is free, and waits only a bounded time when it is
+ * not — a slow broker must not stack initialising tasks against the poll interval.
  *
  * @see ProcessTopology
  */
@@ -271,7 +273,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         Map<ChannelId, Long> hints = probeHints();
         io.github.tobyjamesclements.parsley.core.PositionFacts facts;
         try {
-            facts = factsSource.gather(engine.receivedChannelSet(), hints,
+            facts = factsSource.gatherForSeed(engine.receivedChannelSet(), hints,
                     engine.frontierSnapshot().byChannel().keySet());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
