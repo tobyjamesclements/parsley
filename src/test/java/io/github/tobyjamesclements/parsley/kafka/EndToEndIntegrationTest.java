@@ -260,6 +260,59 @@ class EndToEndIntegrationTest {
         }
     }
 
+    /**
+     * A task holding an undelivered effect migrates to a second instance without loss or
+     * redelivery — the one leg of "restarts, rebalances and partition reassignment" a
+     * single-instance restart does not cross.
+     *
+     * <p>The second instance may start while the first runs because its bootstrap takes the
+     * read-only fast path: the first instance's bootstrap already committed initial
+     * positions, and only a commit requires joining the group (D48).
+     */
+    @Test
+    void heldMessageSurvivesTaskMigrationBetweenInstances() throws Exception {
+        createTopics("mig-a", "mig-b");
+        Channel<String, String> a = Channel.of("mig-a", Serdes.String(), Serdes.String());
+        Channel<String, String> b = Channel.of("mig-b", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition pm = ProcessDefinition.named("pm")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .receives(b, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        produce("mig-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("mig-a"), 0), 0L)));
+
+        Parsley first = Parsley.start(instanceConfig("mig", "mig-1"), pm);
+        try {
+            Thread.sleep(5_000);
+            assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
+
+            try (Parsley second = Parsley.start(instanceConfig("mig", "mig-2"), pm)) {
+                first.close();
+                produce("mig-a", "k", "A");
+                await("A then B on the surviving instance", () -> delivered.size() == 2, Duration.ofSeconds(120));
+                Thread.sleep(2_000);
+                assertEquals(List.of("A", "B"), List.copyOf(delivered),
+                        "the migrated hold must deliver in causal order, exactly once");
+            }
+        } finally {
+            first.close();
+        }
+    }
+
+    private static ParsleyConfig instanceConfig(String prefix, String instanceDir) {
+        return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
+                .stateDir(stateDir.resolve(instanceDir).toString())
+                .factsInterval(Duration.ofMillis(500))
+                .build();
+    }
+
     /** Held message survives losing all local state: ordering state restores from the changelog. */
     @Test
     void heldMessageSurvivesAStateDirWipeByChangelogRestore() throws Exception {

@@ -60,6 +60,13 @@ finding per commit, each with pinning tests, full suite run before each push.
   broker first (static member survived close, as the audit predicted), then fixed:
   committer strips group.instance.id and caps session.timeout.ms at 10s. Pinned by
   `BootstrapIntegrationTest#bootstrapMemberLeavesOnCloseDespiteStaticMembershipConfig`.
+- **§3.4** — two-instance migration smoke test:
+  `EndToEndIntegrationTest#heldMessageSurvivesTaskMigrationBetweenInstances`. The D48
+  caution resolved cleanly: instance B's bootstrap takes the read-only fast path (offsets
+  already committed by A), so no protocol collision; two-instance start is supported.
+  Held effect migrates, delivers in order exactly once. EVIDENCE Host obligation 6 left
+  untouched (it concerns superseded executions, which this test does not create);
+  verification.md integration list updated.
 
 All four confirmed audit findings (F1-F4) and both P1 test gaps (T1 §3.1, T2 §3.2,
 corruption pins §3.3) are now closed. Remaining triage candidates: C1/C2 hardenings,
@@ -67,12 +74,6 @@ M1-M4 minors, P2/P3 gaps §3.4-§3.9.
 
 ## To do (in order) — hardening pass
 
-- **§3.4** — two-instance task-migration smoke test. CAUTION for pickup: Parsley.start
-  bootstraps via GroupMembershipCommitter joining the Streams group with the consumer
-  protocol; starting instance B while A runs may hit INCONSISTENT_GROUP_PROTOCOL in
-  join() (its error text anticipates exactly this). Investigate whether two-instance
-  start is supported (D48 records cold-start collision residuals) before writing the
-  test; if it is not, that finding itself belongs in the report.
 - **§3.8** — Oracle delivery-time legality check: each trueCause delivered/settled/
   exempt at the moment of onDelivered; must not disturb the D41 exemption or D31
   clamp. Modifies the oracle — do with a full session and rerun the whole sim suite
