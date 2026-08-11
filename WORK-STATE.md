@@ -67,6 +67,15 @@ finding per commit, each with pinning tests, full suite run before each push.
   Held effect migrates, delivers in order exactly once. EVIDENCE Host obligation 6 left
   untouched (it concerns superseded executions, which this test does not create);
   verification.md integration list updated.
+- **§3.8** — Oracle delivery-time legality check added: at onDelivered, every trueCause
+  must be delivered, settled by world truth (dead/recreated channel, truncated below
+  log start, not-received channel — computed in SimProcess.settledCauses mirroring
+  send()'s excuses), or within an engine-mirroring delivered-past bound (position +
+  expressed frontier, kept separate from committedPastMax so D41 is undisturbed).
+  Violation label "Safety 1 (delivery-time)". Zero false positives across 300 property
+  seeds + all floors. Pinned by
+  `SabotageMetaTest#prematureDeliveryWhoseCauseArrivesOnlyAfterRestartIsCaught`
+  (mutation-verified: old oracle sees a fully clean run for that scenario).
 
 All four confirmed audit findings (F1-F4) and both P1 test gaps (T1 §3.1, T2 §3.2,
 corruption pins §3.3) are now closed. Remaining triage candidates: C1/C2 hardenings,
@@ -74,10 +83,6 @@ M1-M4 minors, P2/P3 gaps §3.4-§3.9.
 
 ## To do (in order) — hardening pass
 
-- **§3.8** — Oracle delivery-time legality check: each trueCause delivered/settled/
-  exempt at the moment of onDelivered; must not disturb the D41 exemption or D31
-  clamp. Modifies the oracle — do with a full session and rerun the whole sim suite
-  plus SabotageMetaTest floors afterwards.
 - **M1** — init-gather blocks the stream thread through the synchronized facts source
   (ParsleyProcessor.ingestFacts at init; AdminFactsSource.gather is synchronized).
   Availability-only. Any fix must preserve D54's synchronous-seeding semantics.

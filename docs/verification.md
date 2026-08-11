@@ -15,7 +15,12 @@ reproduces exactly from its seed. `CausalOrderPropertyTest` sweeps seeds 1 to 30
 
 An oracle tracks real happened-before outside the engine and asserts causal order, absence of
 duplicates, FIFO per channel, and quiescent liveness, meaning everything received is
-eventually delivered.
+eventually delivered. Causal order is checked twice: over delivered pairs at the end of a
+run, and at the moment of each delivery — every true cause must already be delivered,
+settled by evidence the simulated world corroborates, or lie within the delivered past the
+engine is entitled to drop behind. The delivery-time check exists for the case the pair
+check cannot see: a premature delivery whose cause never delivers, because the delivery
+itself advanced the clamp that later drops the cause.
 
 **Sabotage meta-tests.** The same suite runs against deliberately broken engines through a
 test-only hook, asserting that the oracle fails. The `Sabotage` modes each disable one

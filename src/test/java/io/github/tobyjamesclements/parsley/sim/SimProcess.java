@@ -204,12 +204,33 @@ public final class SimProcess {
             Instance instance = ((SimWorld.MessageSlot) world.slot(channel, message.position())).instance();
             assertContentFidelity(message, instance);
             engine.markDelivered(message.channel(), message.position());
-            oracle.onDelivered(name, instance);
+            oracle.onDelivered(name, instance, settledCauses(instance));
             delivered++;
             for (SimChannel target : logic.emitTargets(instance)) {
                 send(target, instance.uid + ">" + name + ">" + target.name);
             }
         }
+    }
+
+    /**
+     * The causes of {@code instance} that are settled by world truth at this moment: on a
+     * dead or recreated channel, truncated below the log start (the same excuses
+     * {@link #send} grants expression), or on a channel this process does not receive and so
+     * will never deliver. Judged at delivery time for the oracle's delivery-legality check.
+     */
+    private Set<Instance> settledCauses(Instance instance) {
+        Set<Instance> settled = new java.util.HashSet<>();
+        for (Instance cause : instance.trueCauses) {
+            if (!received.containsKey(cause.channel)) {
+                settled.add(cause);
+                continue;
+            }
+            SimWorld.SimChannel causeChannel = world.channel(cause.channel);
+            if (causeChannel != null && (causeChannel.dead || cause.position < causeChannel.logStart)) {
+                settled.add(cause);
+            }
+        }
+        return settled;
     }
 
     private void assertContentFidelity(DeliverableMessage delivered, Instance instance) {

@@ -79,6 +79,22 @@ class SabotageMetaTest {
                 () -> "expected a liveness violation, got: " + violations);
     }
 
+    /**
+     * The composite blind spot is closed: a premature delivery whose cause first arrives
+     * after a restart. The premature delivery advances the persisted delivered past over its
+     * own cause, the restarted clamp then drops the late-arriving cause as a sanctioned
+     * duplicate, and the end-of-run Safety 1 check compares delivered pairs only — so with
+     * the cause never delivered, the violation is visible solely at delivery time.
+     */
+    @Test
+    void prematureDeliveryWhoseCauseArrivesOnlyAfterRestartIsCaught() {
+        Rig rig = TargetedScenarioTest.heldSurvivesRestart(SabotageMode.IGNORE_CAUSES);
+        List<String> violations = rig.violationsAfterFinalChecks();
+        assertTrue(violations.stream().anyMatch(v -> v.startsWith("Safety 1 (delivery-time)")),
+                () -> "expected the delivery-time legality check to flag the premature delivery, got: "
+                        + violations);
+    }
+
     /** Ignoring truncation is caught. */
     @Test
     void ignoringTruncationIsCaught() {
