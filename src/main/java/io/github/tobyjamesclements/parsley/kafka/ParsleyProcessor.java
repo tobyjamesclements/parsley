@@ -4,6 +4,7 @@ import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.utils.Bytes;
+import org.apache.kafka.streams.processor.Cancellable;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
 import org.apache.kafka.streams.processor.api.ProcessorContext;
@@ -41,7 +42,9 @@ import io.github.tobyjamesclements.parsley.core.ReceivedMessage;
  * writes, sends and consumed positions commit together under {@code exactly_once_v2}.
  *
  * <p>Broker facts are refreshed on a separate executor, so a slow query cannot stall
- * delivery. The result is picked up on the next record or punctuation.
+ * delivery. The result is picked up on the next record or punctuation. Initialisation seeds
+ * one round synchronously when the source is free, and waits only a bounded time when it is
+ * not — a slow broker must not stack initialising tasks against the poll interval.
  *
  * @see ProcessTopology
  */
@@ -55,11 +58,30 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private final java.util.concurrent.Executor factsExecutor;
     private final int metadataBudgetBytes;
 
-    private final java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.core.PositionFacts> gathered =
+    private final java.util.concurrent.atomic.AtomicLong incarnation =
+            new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicReference<GatheredRound> gathered =
             new java.util.concurrent.atomic.AtomicReference<>();
-    private final java.util.concurrent.atomic.AtomicBoolean gatherInFlight =
-            new java.util.concurrent.atomic.AtomicBoolean();
+    /**
+     * The gather slot: zero when no gather is in flight, otherwise the epoch that launched
+     * the one that is. Acquired and freed by compare-and-set, so only the epoch that
+     * acquired the slot can free it — a superseded gather completing after a revival cannot
+     * free the slot a successor incarnation's own gather holds.
+     */
+    private final java.util.concurrent.atomic.AtomicLong gatherSlot =
+            new java.util.concurrent.atomic.AtomicLong();
     private boolean budgetWarned;
+    private Cancellable factsPunctuator;
+
+    /**
+     * A facts round tagged with the incarnation whose in-memory state produced its hints.
+     *
+     * <p>A round is applied only by the incarnation that launched it. A revived task restores
+     * the engine to committed state, so hints taken from the previous incarnation may describe
+     * feed progress that was rolled back; a probe answering them must not reach the restored
+     * engine as durable truth.
+     */
+    private record GatheredRound(long epoch, io.github.tobyjamesclements.parsley.core.PositionFacts facts) {}
 
     private ProcessorContext<byte[], byte[]> context;
     private ProcessEngine engine;
@@ -96,6 +118,19 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      */
     @Override
     public void init(ProcessorContext<byte[], byte[]> context) {
+        // A revived task runs close() and then init() on this same instance against restored
+        // state; both perform the same reset, so a lifecycle that re-initialises without
+        // closing is covered too. Anything the previous incarnation left behind describes
+        // rolled-back progress: its facts rounds are invalidated, its punctuator cancelled,
+        // and the gather slot freed.
+        incarnation.incrementAndGet();
+        gathered.set(null);
+        gatherSlot.set(0);
+        if (factsPunctuator != null) {
+            factsPunctuator.cancel();
+            factsPunctuator = null;
+        }
+
         this.context = context;
         int partition = context.taskId().partition();
 
@@ -120,7 +155,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         }
         stateReader = new StoreStateReader();
 
-        context.schedule(factsInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
+        factsPunctuator = context.schedule(factsInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
             startGatherIfIdle();
             applyGatheredFacts();
             drain();
@@ -132,14 +167,15 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     }
 
     private void applyGatheredFacts() {
-        io.github.tobyjamesclements.parsley.core.PositionFacts facts = gathered.getAndSet(null);
-        if (facts != null) {
-            engine.onFacts(facts);
+        GatheredRound round = gathered.getAndSet(null);
+        if (round != null && round.epoch() == incarnation.get()) {
+            engine.onFacts(round.facts());
         }
     }
 
     private void startGatherIfIdle() {
-        if (!gatherInFlight.compareAndSet(false, true)) {
+        long epoch = incarnation.get();
+        if (!gatherSlot.compareAndSet(0, epoch)) {
             return;
         }
         java.util.Set<ChannelId> received = java.util.Set.copyOf(engine.receivedChannelSet());
@@ -148,17 +184,39 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         try {
             factsExecutor.execute(() -> {
                 try {
-                    gathered.set(factsSource.gather(received, hints, frontier));
+                    io.github.tobyjamesclements.parsley.core.PositionFacts facts =
+                            factsSource.gather(received, hints, frontier);
+                    // Best-effort: a deposit racing a concurrent re-initialisation can still
+                    // leave a superseded round behind; the apply-time epoch check discards it.
+                    if (incarnation.get() == epoch) {
+                        gathered.set(new GatheredRound(epoch, facts));
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 } catch (Exception e) {
                     LOG.warn("{}: position facts unavailable, retrying next round", definition.name(), e);
                 } finally {
-                    gatherInFlight.set(false);
+                    gatherSlot.compareAndSet(epoch, 0);
                 }
             });
         } catch (java.util.concurrent.RejectedExecutionException e) {
-            gatherInFlight.set(false);
+            gatherSlot.compareAndSet(epoch, 0);
+        }
+    }
+
+    /**
+     * Invalidates any in-flight facts gather and cancels the facts punctuator, so nothing
+     * from this incarnation can act on a revived successor. On the revival path this runs
+     * before the successor's {@code init}, which repeats the same reset.
+     */
+    @Override
+    public void close() {
+        incarnation.incrementAndGet();
+        gathered.set(null);
+        gatherSlot.set(0);
+        if (factsPunctuator != null) {
+            factsPunctuator.cancel();
+            factsPunctuator = null;
         }
     }
 
@@ -215,7 +273,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         Map<ChannelId, Long> hints = probeHints();
         io.github.tobyjamesclements.parsley.core.PositionFacts facts;
         try {
-            facts = factsSource.gather(engine.receivedChannelSet(), hints,
+            facts = factsSource.gatherForSeed(engine.receivedChannelSet(), hints,
                     engine.frontierSnapshot().byChannel().keySet());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -298,6 +356,17 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                 ? null : emission.channel().keySerde().serializer().serialize(topic, headers, emission.key());
         byte[] valueBytes = emission.value() == null
                 ? null : emission.channel().valueSerde().serializer().serialize(topic, headers, emission.value());
+        // The emission's own headers were checked at construction, but the serializers were
+        // just handed the mutable collection; re-check before the genuine stamp goes on, so
+        // a header-writing serializer fails here instead of poisoning every receiver.
+        for (Header header : headers) {
+            if (header.key().startsWith(io.github.tobyjamesclements.parsley.core.CausesCodec.RESERVED_HEADER_PREFIX)) {
+                throw new ParsleyFailClosedException(
+                        ParsleyFailClosedException.Reason.RESERVED_HEADER_USED,
+                        definition.name() + ": serializer for " + topic + " wrote reserved header '"
+                                + header.key() + "'");
+            }
+        }
         headers.add(new RecordHeader(io.github.tobyjamesclements.parsley.core.CausesCodec.HEADER_KEY, engine.causesHeaderForEmission()));
         context.forward(new Record<>(keyBytes, valueBytes, timestamp, headers), ProcessTopology.sinkName(topic));
     }

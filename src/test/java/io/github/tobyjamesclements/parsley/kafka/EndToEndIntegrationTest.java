@@ -260,6 +260,123 @@ class EndToEndIntegrationTest {
         }
     }
 
+    /**
+     * A task holding an undelivered effect migrates to a second instance without loss or
+     * redelivery — the one leg of "restarts, rebalances and partition reassignment" a
+     * single-instance restart does not cross.
+     *
+     * <p>The second instance may start while the first runs because its bootstrap takes the
+     * read-only fast path: the first instance's bootstrap already committed initial
+     * positions, and only a commit requires joining the group (D48).
+     */
+    @Test
+    void heldMessageSurvivesTaskMigrationBetweenInstances() throws Exception {
+        createTopics("mig-a", "mig-b");
+        Channel<String, String> a = Channel.of("mig-a", Serdes.String(), Serdes.String());
+        Channel<String, String> b = Channel.of("mig-b", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition pm = ProcessDefinition.named("pm")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .receives(b, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        produce("mig-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("mig-a"), 0), 0L)));
+
+        Parsley first = Parsley.start(instanceConfig("mig", "mig-1"), pm);
+        try {
+            awaitFedAndHeld("mig-pm", "mig-b", delivered);
+
+            try (Parsley second = Parsley.start(instanceConfig("mig", "mig-2"), pm)) {
+                first.close();
+                produce("mig-a", "k", "A");
+                await("A then B on the surviving instance", () -> delivered.size() == 2, Duration.ofSeconds(120));
+                Thread.sleep(2_000);
+                assertEquals(List.of("A", "B"), List.copyOf(delivered),
+                        "the migrated hold must deliver in causal order, exactly once");
+            }
+        } finally {
+            first.close();
+        }
+    }
+
+    private static ParsleyConfig instanceConfig(String prefix, String instanceDir) {
+        return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
+                .stateDir(stateDir.resolve(instanceDir).toString())
+                .factsInterval(Duration.ofMillis(500))
+                .build();
+    }
+
+    /** Held message survives losing all local state: ordering state restores from the changelog. */
+    @Test
+    void heldMessageSurvivesAStateDirWipeByChangelogRestore() throws Exception {
+        createTopics("wipe-a", "wipe-b");
+        Channel<String, String> a = Channel.of("wipe-a", Serdes.String(), Serdes.String());
+        Channel<String, String> b = Channel.of("wipe-b", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition pw = ProcessDefinition.named("pw")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .receives(b, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        produce("wipe-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("wipe-a"), 0), 0L)));
+
+        try (Parsley parsley = Parsley.start(config("wipe"), pw)) {
+            awaitFedAndHeld("wipe-pw", "wipe-b", delivered);
+        }
+
+        deleteRecursively(stateDir.resolve("wipe"));
+
+        try (Parsley parsley = Parsley.start(config("wipe"), pw)) {
+            produce("wipe-a", "k", "A");
+            await("A then B after the wipe", () -> delivered.size() == 2, Duration.ofSeconds(120));
+            assertEquals(List.of("A", "B"), List.copyOf(delivered),
+                    "the hold and its order must be rebuilt entirely from the changelog");
+        }
+    }
+
+    /**
+     * Establishes the held premise by evidence rather than elapsed time: the process's
+     * committed read position on the effect's topic reaches past it — so it was fed and its
+     * step committed — while nothing has been delivered. A fixed sleep would let a slow
+     * runner pass the emptiness assertion without the effect ever having been fed.
+     */
+    private static void awaitFedAndHeld(String groupId, String topic, ConcurrentLinkedQueue<String> delivered) {
+        await("the effect to be fed and committed", () -> {
+            try {
+                var committed = admin.listConsumerGroupOffsets(groupId).partitionsToOffsetAndMetadata()
+                        .get(30, TimeUnit.SECONDS);
+                var offset = committed.get(new org.apache.kafka.common.TopicPartition(topic, 0));
+                return offset != null && offset.offset() >= 1;
+            } catch (Exception e) {
+                return false; // transient admin failure: not evidence either way, poll again
+            }
+        }, Duration.ofSeconds(60));
+        assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
+    }
+
+    private static void deleteRecursively(java.nio.file.Path root) throws Exception {
+        if (!java.nio.file.Files.exists(root)) {
+            return;
+        }
+        try (var paths = java.nio.file.Files.walk(root)) {
+            for (java.nio.file.Path path : paths.sorted(java.util.Comparator.reverseOrder()).toList()) {
+                java.nio.file.Files.delete(path);
+            }
+        }
+    }
+
     /** Cause on aborted positions resolves from read position reports. */
     @Test
     void causeOnAbortedPositionsResolvesFromReadPositionReports() throws Exception {

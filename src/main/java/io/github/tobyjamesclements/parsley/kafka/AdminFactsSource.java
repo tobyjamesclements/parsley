@@ -4,6 +4,7 @@ import org.apache.kafka.clients.admin.Admin;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.kafka.clients.admin.ListOffsetsOptions;
+import org.apache.kafka.clients.admin.ListOffsetsResult;
 import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.IsolationLevel;
@@ -43,8 +44,17 @@ import io.github.tobyjamesclements.parsley.core.PositionFacts;
 class AdminFactsSource implements FactsSource {
     private static final Logger LOG = LoggerFactory.getLogger(AdminFactsSource.class);
     private static final long TIMEOUT_SECONDS = 10;
+    /** How long a startup seed may wait for the source before starting unseeded. */
+    private static final long SEED_WAIT_MILLIS = 5_000;
 
-    private enum NameVerdict {
+    /**
+     * Serialises rounds: one instance serves every task of a process, and the admin client
+     * is queried in batches. A lock rather than a monitor, so the seed path can bound its
+     * wait instead of stacking initialising tasks behind a slow broker.
+     */
+    private final java.util.concurrent.locks.ReentrantLock rounds = new java.util.concurrent.locks.ReentrantLock();
+
+    enum NameVerdict {
         SAME_ID,
 
         RECREATED,
@@ -91,18 +101,49 @@ class AdminFactsSource implements FactsSource {
         this.clock = clock;
     }
 
+    @Override
+    public PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
+                                Set<ChannelId> frontierChannels) throws Exception {
+        rounds.lockInterruptibly();
+        try {
+            return gatherRound(receivedChannels, fedUpToHints, frontierChannels);
+        } finally {
+            rounds.unlock();
+        }
+    }
+
     /**
      * {@inheritDoc}
      *
-     * <p>Synchronized because one instance serves every task of a process, and the admin
-     * client is queried in batches.
+     * <p>Waits a bounded five seconds for the source; a task initialising while another
+     * round grinds against a slow broker starts unseeded rather than stalling the stream
+     * thread, and the first background round arrives within an interval.
      */
     @Override
-    public synchronized PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
-                                             Set<ChannelId> frontierChannels) throws Exception {
+    public PositionFacts gatherForSeed(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
+                                       Set<ChannelId> frontierChannels) throws Exception {
+        if (!rounds.tryLock(SEED_WAIT_MILLIS, TimeUnit.MILLISECONDS)) {
+            LOG.warn("{}: facts source busy; starting unseeded, the first background round will seed instead",
+                    groupId);
+            return PositionFacts.EMPTY;
+        }
+        try {
+            return gatherRound(receivedChannels, fedUpToHints, frontierChannels);
+        } finally {
+            rounds.unlock();
+        }
+    }
+
+    private PositionFacts gatherRound(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
+                                      Set<ChannelId> frontierChannels) throws Exception {
         if (closed) {
             return PositionFacts.EMPTY;
         }
+        return completeRound(receivedChannels, fedUpToHints, frontierChannels);
+    }
+
+    private PositionFacts completeRound(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
+                                        Set<ChannelId> frontierChannels) throws Exception {
         Set<UUID> topicIds = new HashSet<>();
         for (ChannelId channel : receivedChannels) {
             topicIds.add(channel.topicId());
@@ -128,7 +169,20 @@ class AdminFactsSource implements FactsSource {
         Set<UUID> undescribed = new HashSet<>(topicIds);
         undescribed.removeAll(confirmedDead);
         undescribed.removeAll(confirmedRecreated);
-        Map<UUID, String> liveNames = describeByIds(undescribed);
+        // The observation stage: if the round aborts before this round's name answers have
+        // landed, every open confirmation window loses its continuity — the anchor must not
+        // survive an outage and let a stale name-gone answer after recovery confirm death
+        // from two isolated observations. A failure in the later position queries does not
+        // clear the windows: the observations this round were real and affirmative, and
+        // erasing them would let a recurring late-stage failure keep a genuinely dead
+        // channel unconfirmable forever.
+        Map<UUID, String> liveNames;
+        try {
+            liveNames = describeByIds(undescribed);
+        } catch (Exception e) {
+            unknownSince.clear();
+            throw e;
+        }
 
         Set<UUID> unknownIds = new HashSet<>(undescribed);
         unknownIds.removeAll(liveNames.keySet());
@@ -169,6 +223,12 @@ class AdminFactsSource implements FactsSource {
                         if (now - since >= window) {
                             markDead(id);
                         }
+                    } else {
+                        // The name was asked about but the answer did not arrive, so the
+                        // name-gone observation is no longer continuous. The window restarts:
+                        // a dead verdict is confirmed only by an unbroken run of affirmative
+                        // name-gone answers, never by two isolated ones spanning an outage.
+                        unknownSince.remove(id);
                     }
                 }
             }
@@ -195,18 +255,31 @@ class AdminFactsSource implements FactsSource {
                 offsetQueries.put(tp, OffsetSpec.earliest());
             }
         }
+        // Per partition rather than batched: one leaderless partition must confine its loss
+        // to its own channel, not black out the whole round — the round is also the only
+        // mid-run carrier of the dead and recreated verdicts computed above.
         Map<TopicPartition, Long> logStartByPartition = new HashMap<>();
         if (!offsetQueries.isEmpty()) {
-            admin.listOffsets(offsetQueries, new ListOffsetsOptions(IsolationLevel.READ_COMMITTED)).all()
-                    .get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                    .forEach((tp, info) -> logStartByPartition.put(tp, info.offset()));
+            Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> futures =
+                    earliestOffsets(offsetQueries);
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
+            for (var entry : futures.entrySet()) {
+                try {
+                    long remaining = Math.max(1L, deadline - System.nanoTime());
+                    logStartByPartition.put(entry.getKey(),
+                            entry.getValue().get(remaining, TimeUnit.NANOSECONDS).offset());
+                } catch (InterruptedException e) {
+                    throw e;
+                } catch (Exception e) {
+                    LOG.warn("{}: earliest-offset query failed for {}; withholding its facts this round",
+                            groupId, entry.getKey(), e);
+                }
+            }
         }
 
         Map<UUID, String> confirmedNames = describeByIds(liveNames.keySet());
 
-        Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> committed =
-                admin.listConsumerGroupOffsets(groupId).partitionsToOffsetAndMetadata()
-                        .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> committed = committedOffsets();
 
         Map<ChannelId, Long> committedNextRead = new TreeMap<>();
         Map<ChannelId, Long> logStart = new TreeMap<>();
@@ -260,7 +333,27 @@ class AdminFactsSource implements FactsSource {
         topicNamesById.remove(id);
     }
 
-    private Map<String, Object> describeByNames(Set<String> names) {
+    /**
+     * Queries the earliest readable offset for each partition, one future per partition so a
+     * single unavailable partition fails alone.
+     */
+    Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsets(
+            Map<TopicPartition, OffsetSpec> queries) {
+        ListOffsetsResult result = admin.listOffsets(queries, new ListOffsetsOptions(IsolationLevel.READ_COMMITTED));
+        Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> futures = new HashMap<>();
+        for (TopicPartition tp : queries.keySet()) {
+            futures.put(tp, result.partitionResult(tp));
+        }
+        return futures;
+    }
+
+    /** Fetches the group's committed read positions from the coordinator. */
+    Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> committedOffsets() throws Exception {
+        return admin.listConsumerGroupOffsets(groupId).partitionsToOffsetAndMetadata()
+                .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+    }
+
+    Map<String, Object> describeByNames(Set<String> names) {
         Map<String, Object> outcome = new HashMap<>();
         if (names.isEmpty()) {
             return outcome;
@@ -405,9 +498,14 @@ class AdminFactsSource implements FactsSource {
         }
     }
 
-    synchronized void close() {
-        closed = true;
-        closeProbe();
+    void close() {
+        rounds.lock();
+        try {
+            closed = true;
+            closeProbe();
+        } finally {
+            rounds.unlock();
+        }
     }
 
     Map<UUID, String> describeByIds(Set<UUID> topicIds) throws Exception {

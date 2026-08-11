@@ -48,11 +48,15 @@ public final class ParsleyRuntime implements AutoCloseable {
     private static final long TIMEOUT_SECONDS = 30;
 
     private final Admin admin;
-    private final Map<String, KafkaStreams> streamsByProcess = new LinkedHashMap<>();
+    // Populated by start() and read by status()/healthy()/close() from monitoring threads,
+    // so these are concurrent like failuresByProcess; insertion order is preserved for
+    // status reporting.
+    private final Map<String, KafkaStreams> streamsByProcess =
+            java.util.Collections.synchronizedMap(new LinkedHashMap<>());
     private final java.util.concurrent.ConcurrentHashMap<String, Throwable> failuresByProcess =
             new java.util.concurrent.ConcurrentHashMap<>();
-    private final List<KafkaStreams> streams = new ArrayList<>();
-    private final List<AdminFactsSource> factsSources = new ArrayList<>();
+    private final List<KafkaStreams> streams = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final List<AdminFactsSource> factsSources = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     private final java.util.concurrent.ExecutorService factsExecutor =
             java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {

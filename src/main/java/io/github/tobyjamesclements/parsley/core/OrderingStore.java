@@ -36,7 +36,13 @@ public interface OrderingStore {
     void delete(byte[] key);
 
     /**
-     * Visits every entry whose key begins with {@code prefix}.
+     * Visits every entry whose key begins with {@code prefix}, in unsigned lexicographic
+     * key order.
+     *
+     * <p>The order is load-bearing: held-message keys place the position after the channel,
+     * so an in-order scan yields each channel's hold-back buffer oldest first, and restore
+     * depends on that. The engine verifies per-channel position order during restore and
+     * refuses state visited out of order.
      *
      * @param prefix   the key prefix to match
      * @param consumer invoked once per matching entry

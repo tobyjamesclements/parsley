@@ -1629,7 +1629,10 @@ injectable; the topology tests use a same-thread executor, keeping their punctua
 **Cost**
 
 Facts land up to one interval later than they were gathered — liveness latency the lower-bound argument makes
-free of ordering consequences. Startup's seeding round remains synchronous (one-time, off the per-record path).
+free of ordering consequences. Startup's seeding round remains synchronous while the source is free (one-time,
+off the per-record path); when another round holds the source, the seed waits a bounded five seconds and starts
+unseeded — facts are lower bounds, so the cost is evidence deferred to the first background round, and a slow
+broker no longer stacks every initialising task's seed against the poll interval (audit finding M1).
 
 ### D55 — Per-process status: state plus refusal reason, readable programmatically
 

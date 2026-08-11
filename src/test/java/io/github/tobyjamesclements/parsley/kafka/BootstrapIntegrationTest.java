@@ -156,6 +156,34 @@ class BootstrapIntegrationTest {
         return new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(causes)));
     }
 
+    /**
+     * Bootstrap membership stays dynamic: a static-membership config cannot defeat
+     * leave-on-close. A static member sends no LeaveGroup when closed, so its slot would
+     * hold the group — under the consumer protocol — for the full session timeout, failing
+     * the Streams start that immediately follows bootstrap.
+     */
+    @Test
+    void bootstrapMemberLeavesOnCloseDespiteStaticMembershipConfig() throws Exception {
+        createTopics(new NewTopic("m2-in", 1, (short) 1));
+        Map<String, Object> clientProps = new HashMap<>();
+        clientProps.put("bootstrap.servers", cluster.bootstrapServers());
+        clientProps.put(ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, "static-1");
+        clientProps.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 60_000);
+
+        try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, "m2-group")) {
+            committer.join(Set.of("m2-in"), Duration.ofSeconds(30));
+        }
+
+        await("the closed bootstrap member to have left the group", () -> {
+            try {
+                return admin.describeConsumerGroups(List.of("m2-group")).all()
+                        .get(30, TimeUnit.SECONDS).get("m2-group").members().isEmpty();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, Duration.ofSeconds(10));
+    }
+
     /** Stale bootstrap commit is fenced by group membership. */
     @Test
     void staleBootstrapCommitIsFencedByGroupMembership() throws Exception {
@@ -191,6 +219,37 @@ class BootstrapIntegrationTest {
         var committed = admin.listConsumerGroupOffsets("fence-group").partitionsToOffsetAndMetadata()
                 .get(30, TimeUnit.SECONDS);
         assertEquals(7, committed.get(tp).offset(), "the newer lifetime's offsets stand untouched");
+    }
+
+    /**
+     * The ordering changelog is created compacted. Changelog restore — and the F2 refusal's
+     * premise that the version entry at the head of the changelog outlives every rewrite —
+     * both rest on this policy, so its presence is asserted rather than assumed.
+     */
+    @Test
+    void orderingChangelogIsCreatedCompacted() throws Exception {
+        createTopics(new NewTopic("clog-in", 1, (short) 1));
+        Channel<String, String> in = Channel.of("clog-in", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition p = ProcessDefinition.named("pc")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("clog"), p)) {
+            produce("clog-in", null, "k", "v");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+        }
+
+        var resource = new org.apache.kafka.common.config.ConfigResource(
+                org.apache.kafka.common.config.ConfigResource.Type.TOPIC,
+                "clog-pc-__parsley.ordering-changelog");
+        var config = admin.describeConfigs(List.of(resource)).all().get(30, TimeUnit.SECONDS).get(resource);
+        assertEquals("compact",
+                config.get(org.apache.kafka.common.config.TopicConfig.CLEANUP_POLICY_CONFIG).value(),
+                "the ordering changelog must be compacted; state restore depends on it");
     }
 
     /** Expired offsets restart from earliest not the declared latest. */
