@@ -6,6 +6,8 @@ import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.util.Collection;
@@ -21,6 +23,8 @@ import java.util.Set;
  * group. Assigned partitions are paused on assignment, so this member never fetches a record.
  */
 final class GroupMembershipCommitter implements AutoCloseable {
+    private static final Logger LOG = LoggerFactory.getLogger(GroupMembershipCommitter.class);
+
     private final KafkaConsumer<byte[], byte[]> consumer;
 
     /**
@@ -36,13 +40,21 @@ final class GroupMembershipCommitter implements AutoCloseable {
         // This member must vacate the group the moment it closes — the Streams start that
         // follows joins the same group under a different protocol. A static member sends no
         // LeaveGroup on close, so an inherited instance id would hold the group for the full
-        // session timeout; and the session timeout itself is capped so even an ungraceful
-        // exit clears quickly.
-        props.remove(ConsumerConfig.GROUP_INSTANCE_ID_CONFIG);
+        // session timeout; membership here is always dynamic, and the graceful close's
+        // LeaveGroup is what vacates the group. The session timeout matters only for an
+        // ungraceful exit: it defaults short, but an explicitly configured value is kept,
+        // because brokers may enforce a minimum above the default.
+        if (props.remove(ConsumerConfig.GROUP_INSTANCE_ID_CONFIG) != null) {
+            LOG.warn("{}: ignoring configured group.instance.id for the bootstrap member; static membership"
+                    + " would hold the group past close and fail the Streams start that follows", groupId);
+        }
         Object sessionTimeout = props.get(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG);
-        int sessionTimeoutMs = sessionTimeout == null
-                ? 10_000 : Math.min(Integer.parseInt(String.valueOf(sessionTimeout)), 10_000);
-        props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, sessionTimeoutMs);
+        if (sessionTimeout == null) {
+            props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 10_000);
+        } else {
+            LOG.info("{}: bootstrap member inherits session.timeout.ms={}; an ungraceful bootstrap exit"
+                    + " holds the group for that long", groupId, sessionTimeout);
+        }
         props.putIfAbsent(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 30_000);
         this.consumer = new KafkaConsumer<>(props, new ByteArrayDeserializer(), new ByteArrayDeserializer());
     }

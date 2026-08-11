@@ -287,10 +287,12 @@ final class StoreCodec {
                 byte[] headerKey = readSizedBytes(buffer, "header key");
                 int valueLength = buffer.getInt();
                 byte[] headerValue = null;
-                if (valueLength >= 0) {
-                    if (valueLength > buffer.remaining()) {
+                if (valueLength != -1) {
+                    // -1 is the one null sentinel encodeHeld writes; any other negative is
+                    // corruption, not an alternate spelling of null.
+                    if (valueLength < 0 || valueLength > buffer.remaining()) {
                         throw corrupt("header value length " + valueLength
-                                + " exceeds " + buffer.remaining() + " bytes remaining");
+                                + " with " + buffer.remaining() + " bytes remaining");
                     }
                     headerValue = new byte[valueLength];
                     buffer.get(headerValue);

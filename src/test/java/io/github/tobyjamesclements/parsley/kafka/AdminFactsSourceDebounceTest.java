@@ -36,6 +36,7 @@ class AdminFactsSourceDebounceTest {
     static final class ScriptedFacts extends AdminFactsSource {
         final AtomicLong nowMillis;
         volatile boolean nameGoneThisRound;
+        volatile boolean abortThisRound;
 
         private ScriptedFacts(AtomicLong nowMillis) {
             super(null, "g", Map.of(Z_ID, "z"), Map.of(), WINDOW_MILLIS, nowMillis::get);
@@ -47,7 +48,10 @@ class AdminFactsSourceDebounceTest {
         }
 
         @Override
-        Map<UUID, String> describeByIds(Set<UUID> topicIds) {
+        Map<UUID, String> describeByIds(Set<UUID> topicIds) throws Exception {
+            if (abortThisRound) {
+                throw new org.apache.kafka.common.errors.TimeoutException("broker unreachable");
+            }
             return Map.of();
         }
 
@@ -76,6 +80,21 @@ class AdminFactsSourceDebounceTest {
             nameGoneThisRound = nameGone;
             return gather(Set.of(R), Map.of(), Set.of());
         }
+
+        void abortedRound(long atMillis) {
+            nowMillis.set(atMillis);
+            abortThisRound = true;
+            try {
+                gather(Set.of(R), Map.of(), Set.of());
+                throw new AssertionError("the aborted round must propagate its failure");
+            } catch (AssertionError e) {
+                throw e;
+            } catch (Exception expected) {
+                // the outage: the round failed outright, observing nothing
+            } finally {
+                abortThisRound = false;
+            }
+        }
     }
 
     @Test
@@ -86,6 +105,22 @@ class AdminFactsSourceDebounceTest {
         assertTrue(facts.round(10_000, false).deadChannels().isEmpty(), "the outage breaks the window");
         assertTrue(facts.round(20_000, true).deadChannels().isEmpty(),
                 "an isolated re-observation after the outage must reopen the window, not mature the old one");
+    }
+
+    /**
+     * A real broker outage aborts rounds outright — thrown describes, not completed rounds
+     * with unavailable answers — and must break the window's continuity just the same.
+     */
+    @Test
+    void isolatedNameGoneAnswersSpanningAbortedRoundsDoNotConfirmDeath() throws Exception {
+        ScriptedFacts facts = new ScriptedFacts();
+
+        assertTrue(facts.round(0, true).deadChannels().isEmpty(), "first observation opens the window");
+        for (long at = 200; at <= 9_800; at += 200) {
+            facts.abortedRound(at);
+        }
+        assertTrue(facts.round(20_000, true).deadChannels().isEmpty(),
+                "an isolated re-observation after aborted rounds must reopen the window, not mature the old one");
     }
 
     @Test

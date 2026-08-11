@@ -290,8 +290,7 @@ class EndToEndIntegrationTest {
 
         Parsley first = Parsley.start(instanceConfig("mig", "mig-1"), pm);
         try {
-            Thread.sleep(5_000);
-            assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
+            awaitFedAndHeld("mig-pm", "mig-b", delivered);
 
             try (Parsley second = Parsley.start(instanceConfig("mig", "mig-2"), pm)) {
                 first.close();
@@ -334,8 +333,7 @@ class EndToEndIntegrationTest {
         produce("wipe-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("wipe-a"), 0), 0L)));
 
         try (Parsley parsley = Parsley.start(config("wipe"), pw)) {
-            Thread.sleep(5_000);
-            assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
+            awaitFedAndHeld("wipe-pw", "wipe-b", delivered);
         }
 
         deleteRecursively(stateDir.resolve("wipe"));
@@ -346,6 +344,26 @@ class EndToEndIntegrationTest {
             assertEquals(List.of("A", "B"), List.copyOf(delivered),
                     "the hold and its order must be rebuilt entirely from the changelog");
         }
+    }
+
+    /**
+     * Establishes the held premise by evidence rather than elapsed time: the process's
+     * committed read position on the effect's topic reaches past it — so it was fed and its
+     * step committed — while nothing has been delivered. A fixed sleep would let a slow
+     * runner pass the emptiness assertion without the effect ever having been fed.
+     */
+    private static void awaitFedAndHeld(String groupId, String topic, ConcurrentLinkedQueue<String> delivered) {
+        await("the effect to be fed and committed", () -> {
+            try {
+                var committed = admin.listConsumerGroupOffsets(groupId).partitionsToOffsetAndMetadata()
+                        .get(30, TimeUnit.SECONDS);
+                var offset = committed.get(new org.apache.kafka.common.TopicPartition(topic, 0));
+                return offset != null && offset.offset() >= 1;
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, Duration.ofSeconds(60));
+        assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
     }
 
     private static void deleteRecursively(java.nio.file.Path root) throws Exception {

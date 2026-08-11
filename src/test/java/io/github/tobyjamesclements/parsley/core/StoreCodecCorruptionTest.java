@@ -116,6 +116,12 @@ class StoreCodecCorruptionTest {
         refusal(patched(29, Integer.MIN_VALUE));
     }
 
+    /** Only -1 spells null; a non-canonical negative is corruption, not an alternate null. */
+    @Test
+    void nonSentinelNegativeHeaderValueLengthRaisesTheRefusal() {
+        refusal(patched(29, -2));
+    }
+
     @Test
     void miscountedCausesRaiseTheRefusal() {
         byte[] blob = validBlob();

@@ -139,6 +139,21 @@ class AdminFactsSource implements FactsSource {
         if (closed) {
             return PositionFacts.EMPTY;
         }
+        try {
+            return completeRound(receivedChannels, fedUpToHints, frontierChannels);
+        } catch (Exception e) {
+            // A round that aborts — a broker outage surfaces here as thrown describes or
+            // offset queries — observed nothing, so every open confirmation window loses
+            // its continuity. Without this, the window anchor survives the outage and the
+            // first stale name-gone answer after recovery confirms death from two isolated
+            // observations, which is the fail-open direction the debounce guards.
+            unknownSince.clear();
+            throw e;
+        }
+    }
+
+    private PositionFacts completeRound(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
+                                        Set<ChannelId> frontierChannels) throws Exception {
         Set<UUID> topicIds = new HashSet<>();
         for (ChannelId channel : receivedChannels) {
             topicIds.add(channel.topicId());

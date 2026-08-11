@@ -111,8 +111,7 @@ class BrokerBounceIntegrationTest {
                 .factsInterval(Duration.ofMillis(500))
                 .build();
         try (Parsley parsley = Parsley.start(config, pb)) {
-            Thread.sleep(5_000);
-            assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
+            awaitFedAndHeld("bounce-pb", "bounce-b", delivered);
 
             var broker = cluster.brokers().values().iterator().next();
             broker.shutdown();
@@ -131,6 +130,25 @@ class BrokerBounceIntegrationTest {
                     "after recovery, real evidence releases the hold in causal order, exactly once");
             assertTrue(parsley.healthy(), "the process must ride out the bounce without failing");
         }
+    }
+
+    /**
+     * Establishes the held premise by evidence rather than elapsed time: the committed read
+     * position passed the effect while nothing was delivered.
+     */
+    private static void awaitFedAndHeld(String groupId, String topic,
+                                        ConcurrentLinkedQueue<String> delivered) {
+        await("the effect to be fed and committed", () -> {
+            try {
+                var committed = admin.listConsumerGroupOffsets(groupId).partitionsToOffsetAndMetadata()
+                        .get(30, TimeUnit.SECONDS);
+                var offset = committed.get(new org.apache.kafka.common.TopicPartition(topic, 0));
+                return offset != null && offset.offset() >= 1;
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, Duration.ofSeconds(60));
+        assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
     }
 
     private static UUID topicId(String topic) throws Exception {
