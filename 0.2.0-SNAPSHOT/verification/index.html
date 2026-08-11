@@ -899,19 +899,31 @@ restarts and read-position reports. Runs are seeded and deterministic, so a fail
 reproduces exactly from its seed. <code>CausalOrderPropertyTest</code> sweeps seeds 1 to 300.</p>
 <p>An oracle tracks real happened-before outside the engine and asserts causal order, absence of
 duplicates, FIFO per channel, and quiescent liveness, meaning everything received is
-eventually delivered.</p>
+eventually delivered. Causal order is checked twice: over delivered pairs at the end of a
+run, and at the moment of each delivery — every true cause must already be delivered,
+settled by evidence the simulated world corroborates, or lie within the delivered past the
+engine is entitled to drop behind. The delivery-time check exists for the case the pair
+check cannot see: a premature delivery whose cause never delivers, because the delivery
+itself advanced the clamp that later drops the cause.</p>
 <p><strong>Sabotage meta-tests.</strong> The same suite runs against deliberately broken engines through a
 test-only hook, asserting that the oracle fails. The <code>Sabotage</code> modes each disable one
 guarantee: the dependency check, the FIFO hold, the duplicate drop on refeed, the treatment
 of undecodable metadata, persistence of held messages, truncation handling, and others.</p>
 <p>This is the evidence that the tests would catch a violation. <code>SabotageMetaTest</code> pins one
-targeted case per mode, and a randomised sweep records the margin by which the oracle catches
-each broken engine.</p>
+targeted case per mode — for the refusal-disarming modes, both that the sabotage disarms the
+refusal and a pinned seed on which the oracle catches the resulting violation — and a
+randomised sweep records the margin by which the oracle catches each broken engine. One mode
+is the exception: <code>DELIVER_PAST_DEAD_HOLDS</code> is reached by no random seed (calibrated at 0 in
+300), so its oracle evidence is a deterministic scenario constructing the causal inversion,
+and it carries no sweep floor.</p>
 <p><strong>Streams wiring.</strong> <code>TopologyTestDriver</code> tests for the header format on the wire, byte-exact
-key and value pass-through, Schema-Registry-format serdes, punctuator fact ingestion through
-an injected facts source, and store persistence across driver restarts.</p>
+key and value pass-through, Schema-Registry-format serdes, and punctuator fact ingestion
+through an injected facts source.</p>
 <p><strong>Integration.</strong> Embedded KRaft broker tests for commit and abort behaviour under
-exactly-once semantics, restart with state restore, aborted-transaction gaps and trailing
+exactly-once semantics, restart with state restore, restart after a state-dir wipe with the
+ordering state rebuilt entirely from its changelog, migration of a task holding an
+undelivered effect between two live instances, a full broker bounce with a held message
+neither lost nor freed by the outage, aborted-transaction gaps and trailing
 runs, log truncation, and a plain <code>read_committed</code> consumer decoding output with application
 serdes alone.</p>
 <h2 id="standard-of-evidence">Standard of evidence</h2>

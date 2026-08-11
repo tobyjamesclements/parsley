@@ -949,7 +949,7 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 </tr>
 <tr>
 <td><code>UNKNOWN_ORDERING_STATE_FORMAT</code></td>
-<td>Stored state carries a format version this build cannot read</td>
+<td>Stored state cannot be trusted: a format version this build cannot read, state present without its version entry (the changelog head has been lost), a corrupt entry — malformed key, wrong-length value, or a held blob whose lengths do not match its bytes — or held messages restored out of position order</td>
 </tr>
 <tr>
 <td><code>EMISSION_TO_UNDECLARED_CHANNEL</code></td>
