@@ -37,6 +37,7 @@ class AdminFactsSourceDebounceTest {
         final AtomicLong nowMillis;
         volatile boolean nameGoneThisRound;
         volatile boolean abortThisRound;
+        volatile boolean failPositionsThisRound;
 
         private ScriptedFacts(AtomicLong nowMillis) {
             super(null, "g", Map.of(Z_ID, "z"), Map.of(), WINDOW_MILLIS, nowMillis::get);
@@ -72,6 +73,9 @@ class AdminFactsSourceDebounceTest {
 
         @Override
         Map<TopicPartition, OffsetAndMetadata> committedOffsets() {
+            if (failPositionsThisRound) {
+                throw new org.apache.kafka.common.errors.TimeoutException("group coordinator unreachable");
+            }
             return Map.of();
         }
 
@@ -93,6 +97,23 @@ class AdminFactsSourceDebounceTest {
                 // the outage: the round failed outright, observing nothing
             } finally {
                 abortThisRound = false;
+            }
+        }
+
+        /** A round whose name observations land but whose position queries then fail. */
+        void lateAbortedRound(long atMillis, boolean nameGone) {
+            nowMillis.set(atMillis);
+            nameGoneThisRound = nameGone;
+            failPositionsThisRound = true;
+            try {
+                gather(Set.of(R), Map.of(), Set.of());
+                throw new AssertionError("the late-aborted round must propagate its failure");
+            } catch (AssertionError e) {
+                throw e;
+            } catch (Exception expected) {
+                // the round aborted after its observations landed
+            } finally {
+                failPositionsThisRound = false;
             }
         }
     }
@@ -121,6 +142,23 @@ class AdminFactsSourceDebounceTest {
         }
         assertTrue(facts.round(20_000, true).deadChannels().isEmpty(),
                 "an isolated re-observation after aborted rounds must reopen the window, not mature the old one");
+    }
+
+    /**
+     * The converse bound on the abort reset: a round whose name observations landed — and
+     * were affirmative — before a later position query failed has not broken continuity.
+     * Were such rounds to clear the windows, a recurring late-stage failure (a degraded
+     * group coordinator with a healthy metadata plane) would keep a genuinely dead channel
+     * unconfirmable forever.
+     */
+    @Test
+    void lateStageAbortsDoNotBreakConfirmationContinuity() throws Exception {
+        ScriptedFacts facts = new ScriptedFacts();
+
+        assertTrue(facts.round(0, true).deadChannels().isEmpty(), "first observation opens the window");
+        facts.lateAbortedRound(400, true);
+        assertEquals(Set.of(R), facts.round(WINDOW_MILLIS + 200, true).deadChannels(),
+                "an unbroken affirmative run must confirm death despite late-stage aborts between rounds");
     }
 
     @Test

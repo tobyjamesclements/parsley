@@ -116,10 +116,20 @@ class StoreCodecCorruptionTest {
         refusal(patched(29, Integer.MIN_VALUE));
     }
 
-    /** Only -1 spells null; a non-canonical negative is corruption, not an alternate null. */
+    /**
+     * Only -1 spells null; a non-canonical negative is corruption, not an alternate null.
+     * Patched over an actual null sentinel so the blob is otherwise perfectly aligned — a
+     * decoder accepting any negative as null would decode this without complaint.
+     */
     @Test
     void nonSentinelNegativeHeaderValueLengthRaisesTheRefusal() {
-        refusal(patched(29, -2));
+        byte[] blob = StoreCodec.encodeHeld(0L, null, new byte[0],
+                List.of(new HeaderKV("n", null)), Causes.of(Map.of()));
+        // version@0, timestamp@1, flags@9, valueLen@10, headerCount@14, headerKeyLen@18,
+        // key 'n'@22, headerValueLen@23 — the encoder's one null spelling.
+        assertEquals(-1, ByteBuffer.wrap(blob).getInt(23), "the layout premise must hold");
+        ByteBuffer.wrap(blob).putInt(23, -2);
+        refusal(blob);
     }
 
     @Test

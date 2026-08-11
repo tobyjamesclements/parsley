@@ -139,17 +139,7 @@ class AdminFactsSource implements FactsSource {
         if (closed) {
             return PositionFacts.EMPTY;
         }
-        try {
-            return completeRound(receivedChannels, fedUpToHints, frontierChannels);
-        } catch (Exception e) {
-            // A round that aborts — a broker outage surfaces here as thrown describes or
-            // offset queries — observed nothing, so every open confirmation window loses
-            // its continuity. Without this, the window anchor survives the outage and the
-            // first stale name-gone answer after recovery confirms death from two isolated
-            // observations, which is the fail-open direction the debounce guards.
-            unknownSince.clear();
-            throw e;
-        }
+        return completeRound(receivedChannels, fedUpToHints, frontierChannels);
     }
 
     private PositionFacts completeRound(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
@@ -179,7 +169,20 @@ class AdminFactsSource implements FactsSource {
         Set<UUID> undescribed = new HashSet<>(topicIds);
         undescribed.removeAll(confirmedDead);
         undescribed.removeAll(confirmedRecreated);
-        Map<UUID, String> liveNames = describeByIds(undescribed);
+        // The observation stage: if the round aborts before this round's name answers have
+        // landed, every open confirmation window loses its continuity — the anchor must not
+        // survive an outage and let a stale name-gone answer after recovery confirm death
+        // from two isolated observations. A failure in the later position queries does not
+        // clear the windows: the observations this round were real and affirmative, and
+        // erasing them would let a recurring late-stage failure keep a genuinely dead
+        // channel unconfirmable forever.
+        Map<UUID, String> liveNames;
+        try {
+            liveNames = describeByIds(undescribed);
+        } catch (Exception e) {
+            unknownSince.clear();
+            throw e;
+        }
 
         Set<UUID> unknownIds = new HashSet<>(undescribed);
         unknownIds.removeAll(liveNames.keySet());

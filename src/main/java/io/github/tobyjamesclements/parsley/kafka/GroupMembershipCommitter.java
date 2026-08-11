@@ -48,10 +48,23 @@ final class GroupMembershipCommitter implements AutoCloseable {
             LOG.warn("{}: ignoring configured group.instance.id for the bootstrap member; static membership"
                     + " would hold the group past close and fail the Streams start that follows", groupId);
         }
-        Object sessionTimeout = props.get(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG);
+        Object sessionTimeout = null;
+        for (String key : new String[] {
+                org.apache.kafka.streams.StreamsConfig.mainConsumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
+                org.apache.kafka.streams.StreamsConfig.consumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
+                ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG}) {
+            if (sessionTimeout == null) {
+                sessionTimeout = props.get(key);
+            }
+        }
         if (sessionTimeout == null) {
             props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 10_000);
         } else {
+            // Resolved across the Streams spellings too: a broker may enforce a minimum
+            // above the default, and a timeout configured the idiomatic prefixed way must
+            // reach this plain consumer or the join is rejected outright.
+            props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG,
+                    Integer.parseInt(String.valueOf(sessionTimeout)));
             LOG.info("{}: bootstrap member inherits session.timeout.ms={}; an ungraceful bootstrap exit"
                     + " holds the group for that long", groupId, sessionTimeout);
         }

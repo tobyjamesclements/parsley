@@ -360,7 +360,7 @@ class EndToEndIntegrationTest {
                 var offset = committed.get(new org.apache.kafka.common.TopicPartition(topic, 0));
                 return offset != null && offset.offset() >= 1;
             } catch (Exception e) {
-                throw new RuntimeException(e);
+                return false; // transient admin failure: not evidence either way, poll again
             }
         }, Duration.ofSeconds(60));
         assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
