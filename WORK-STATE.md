@@ -82,6 +82,16 @@ finding per commit, each with pinning tests, full suite run before each push.
   stays synchronous when the source is free, starts unseeded when it is not. D54 cost
   note amended. Pinned by
   `AdminFactsSourceDegradationTest#aBusySourceYieldsAnUnseededStartInsteadOfAStall`.
+- **§3.9** — `BrokerBounceIntegrationTest` (dedicated cluster): a held effect survives a
+  full broker shutdown/startup, the outage manufactures no releasing evidence, real
+  evidence after recovery releases it in order exactly once, process healthy throughout.
+  verification.md integration list updated.
+
+## Status
+
+Every item from the audit is closed: F1-F4, T1/T2, C1/C2, M1-M4, and test gaps
+§3.3-§3.9. Nothing remains on the remediation list. This file and VENDORING-AUDIT.md
+are working documents for the branch — decide their fate before the vendor handoff.
 
 All four confirmed audit findings (F1-F4) and both P1 test gaps (T1 §3.1, T2 §3.2,
 corruption pins §3.3) are now closed. Remaining triage candidates: C1/C2 hardenings,
@@ -89,8 +99,6 @@ M1-M4 minors, P2/P3 gaps §3.4-§3.9.
 
 ## To do (in order) — hardening pass
 
-- **§3.9** — broker-bounce belt-and-braces test. Lowest priority; audit verified the
-  feared fail-open path is structurally unreachable.
 
 ## Verification protocol per fix
 

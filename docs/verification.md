@@ -42,7 +42,8 @@ through an injected facts source.
 **Integration.** Embedded KRaft broker tests for commit and abort behaviour under
 exactly-once semantics, restart with state restore, restart after a state-dir wipe with the
 ordering state rebuilt entirely from its changelog, migration of a task holding an
-undelivered effect between two live instances, aborted-transaction gaps and trailing
+undelivered effect between two live instances, a full broker bounce with a held message
+neither lost nor freed by the outage, aborted-transaction gaps and trailing
 runs, log truncation, and a plain `read_committed` consumer decoding output with application
 serdes alone.
 
