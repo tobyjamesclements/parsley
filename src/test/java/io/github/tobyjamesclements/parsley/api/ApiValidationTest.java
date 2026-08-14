@@ -21,7 +21,7 @@ class ApiValidationTest {
     @Test
     void reservedStoreNamesAreUnconstructible() {
         assertThrows(IllegalArgumentException.class,
-                () -> StoreDef.of("__parsley.anything", Serdes.String(), Serdes.String()),
+                () -> Store.of("__parsley.anything", Serdes.String(), Serdes.String()),
                 "application state may never alias ordering state (SPEC Structural 8)");
     }
 

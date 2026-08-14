@@ -26,7 +26,7 @@ import io.github.tobyjamesclements.parsley.api.Delivery;
 import io.github.tobyjamesclements.parsley.api.Effects;
 import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
 import io.github.tobyjamesclements.parsley.api.StateReader;
-import io.github.tobyjamesclements.parsley.api.StoreDef;
+import io.github.tobyjamesclements.parsley.api.Store;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.DeliverableMessage;
 import io.github.tobyjamesclements.parsley.core.HeaderKV;
@@ -150,8 +150,8 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                 topicByChannel, new StreamsOrderingStore(orderingStore), metadataBudgetBytes);
 
         appStores.clear();
-        for (StoreDef<?, ?> def : definition.stores()) {
-            appStores.put(def.name(), context.getStateStore(def.name()));
+        for (Store<?, ?> store : definition.stores()) {
+            appStores.put(store.name(), context.getStateStore(store.name()));
         }
         stateReader = new StoreStateReader();
 
@@ -329,18 +329,18 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     }
 
     private <K, V> void applyWrite(Effects.StateWrite<K, V> write) {
-        StoreDef<K, V> def = write.store();
-        if (definition.store(def.name()) != def) {
+        Store<K, V> declared = write.store();
+        if (definition.store(declared.name()) != declared) {
             throw new IllegalStateException(
-                    definition.name() + ": state write to undeclared store " + def.name());
+                    definition.name() + ": state write to undeclared store " + declared.name());
         }
-        KeyValueStore<Bytes, byte[]> store = appStores.get(def.name());
-        String serdeTopic = storeSerdeTopic(def.name());
-        byte[] keyBytes = def.keySerde().serializer().serialize(serdeTopic, write.key());
+        KeyValueStore<Bytes, byte[]> store = appStores.get(declared.name());
+        String serdeTopic = storeSerdeTopic(declared.name());
+        byte[] keyBytes = declared.keySerde().serializer().serialize(serdeTopic, write.key());
         if (write.value() == null) {
             store.delete(Bytes.wrap(keyBytes));
         } else {
-            store.put(Bytes.wrap(keyBytes), def.valueSerde().serializer().serialize(serdeTopic, write.value()));
+            store.put(Bytes.wrap(keyBytes), declared.valueSerde().serializer().serialize(serdeTopic, write.value()));
         }
     }
 
@@ -385,7 +385,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
 
     private final class StoreStateReader implements StateReader {
         @Override
-        public <K, V> V get(StoreDef<K, V> store, K key) {
+        public <K, V> V get(Store<K, V> store, K key) {
             if (definition.store(store.name()) != store) {
                 throw new IllegalStateException(
                         definition.name() + ": state read from undeclared store " + store.name());

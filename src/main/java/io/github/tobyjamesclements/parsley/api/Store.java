@@ -10,10 +10,10 @@ import org.apache.kafka.common.serialization.Serde;
  *
  * @param <K> key type
  * @param <V> value type
- * @see ProcessDefinition.Builder#stores(StoreDef...)
+ * @see ProcessDefinition.Builder#stores(Store...)
  * @see StateReader
  */
-public final class StoreDef<K, V> {
+public final class Store<K, V> {
 
     /** Name prefix Parsley reserves for its own stores. */
     public static final String RESERVED_PREFIX = "__parsley.";
@@ -22,7 +22,7 @@ public final class StoreDef<K, V> {
     private final Serde<K> keySerde;
     private final Serde<V> valueSerde;
 
-    private StoreDef(String name, Serde<K> keySerde, Serde<V> valueSerde) {
+    private Store(String name, Serde<K> keySerde, Serde<V> valueSerde) {
         if (name == null || name.isBlank()) {
             throw new IllegalArgumentException("store name must be non-blank");
         }
@@ -46,8 +46,8 @@ public final class StoreDef<K, V> {
      * @throws IllegalArgumentException if {@code name} is null, blank, or begins with
      *                                  {@link #RESERVED_PREFIX}
      */
-    public static <K, V> StoreDef<K, V> of(String name, Serde<K> keySerde, Serde<V> valueSerde) {
-        return new StoreDef<>(name, keySerde, valueSerde);
+    public static <K, V> Store<K, V> of(String name, Serde<K> keySerde, Serde<V> valueSerde) {
+        return new Store<>(name, keySerde, valueSerde);
     }
 
     /**
@@ -84,6 +84,6 @@ public final class StoreDef<K, V> {
      */
     @Override
     public String toString() {
-        return "StoreDef(" + name + ")";
+        return "Store(" + name + ")";
     }
 }

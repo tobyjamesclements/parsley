@@ -60,7 +60,7 @@ public final class Effects {
      * @param <K>   key type
      * @param <V>   value type
      */
-    public record StateWrite<K, V>(StoreDef<K, V> store, K key, V value) {
+    public record StateWrite<K, V>(Store<K, V> store, K key, V value) {
     }
 
     private static final Effects NONE = new Effects(List.of(), List.of());
@@ -161,9 +161,9 @@ public final class Effects {
          * @param <V>   value type
          * @return this builder
          * @throws IllegalArgumentException if {@code value} is null
-         * @see #delete(StoreDef, Object)
+         * @see #delete(Store, Object)
          */
-        public <K, V> Builder put(StoreDef<K, V> store, K key, V value) {
+        public <K, V> Builder put(Store<K, V> store, K key, V value) {
             if (value == null) {
                 throw new IllegalArgumentException("use delete() to remove a key");
             }
@@ -180,7 +180,7 @@ public final class Effects {
          * @param <V>   value type
          * @return this builder
          */
-        public <K, V> Builder delete(StoreDef<K, V> store, K key) {
+        public <K, V> Builder delete(Store<K, V> store, K key) {
             writes.add(new StateWrite<>(store, key, null));
             return this;
         }

@@ -18,5 +18,5 @@ public interface StateReader {
      * @return the stored value, or {@code null} when the key is absent
      * @throws IllegalArgumentException if the process did not declare {@code store}
      */
-    <K, V> V get(StoreDef<K, V> store, K key);
+    <K, V> V get(Store<K, V> store, K key);
 }

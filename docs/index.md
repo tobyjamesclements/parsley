@@ -27,7 +27,7 @@ timeout, and a held message is released only by evidence.
 ```java
 var orders    = Channel.of("orders", Serdes.String(), orderSerde);
 var shipments = Channel.of("shipments", Serdes.String(), shipmentSerde);
-var inventory = StoreDef.of("inventory", Serdes.String(), Serdes.Long());
+var inventory = Store.of("inventory", Serdes.String(), Serdes.Long());
 
 var shipper = ProcessDefinition.named("shipper")
     .receives(orders, (delivery, state) -> {

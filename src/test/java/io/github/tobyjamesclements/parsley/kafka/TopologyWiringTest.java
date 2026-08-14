@@ -27,7 +27,7 @@ import java.util.UUID;
 import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Effects;
 import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
-import io.github.tobyjamesclements.parsley.api.StoreDef;
+import io.github.tobyjamesclements.parsley.api.Store;
 import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
@@ -274,7 +274,7 @@ class TopologyWiringTest {
     void applicationStateReadsSeeEarlierWritesAndTombstonesPassThrough() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
-        StoreDef<String, String> store = StoreDef.of("app-store", Serdes.String(), Serdes.String());
+        Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
         ProcessDefinition definition = ProcessDefinition.named("p")
                 .receives(in1, (delivery, state) -> {
                     String seen = state.get(store, "count");
@@ -348,8 +348,8 @@ class TopologyWiringTest {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
         Channel<String, String> out2 = Channel.of("in2", Serdes.String(), Serdes.String());
-        StoreDef<String, String> storeA = StoreDef.of("store-a", Serdes.String(), Serdes.String());
-        StoreDef<String, String> storeB = StoreDef.of("store-b", Serdes.String(), Serdes.String());
+        Store<String, String> storeA = Store.of("store-a", Serdes.String(), Serdes.String());
+        Store<String, String> storeB = Store.of("store-b", Serdes.String(), Serdes.String());
         ProcessDefinition definition = ProcessDefinition.named("p")
                 .receives(in1, (delivery, state) -> {
                     String a = state.get(storeA, "k");

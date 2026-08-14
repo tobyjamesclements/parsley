@@ -32,10 +32,10 @@ public final class ProcessDefinition {
     private final String name;
     private final Map<String, Input<?, ?>> inputsByTopic;
     private final Map<String, Channel<?, ?>> sendsByTopic;
-    private final Map<String, StoreDef<?, ?>> storesByName;
+    private final Map<String, Store<?, ?>> storesByName;
 
     private ProcessDefinition(String name, Map<String, Input<?, ?>> inputsByTopic,
-                              Map<String, Channel<?, ?>> sendsByTopic, Map<String, StoreDef<?, ?>> storesByName) {
+                              Map<String, Channel<?, ?>> sendsByTopic, Map<String, Store<?, ?>> storesByName) {
         this.name = name;
         this.inputsByTopic = Map.copyOf(inputsByTopic);
         this.sendsByTopic = Map.copyOf(sendsByTopic);
@@ -111,7 +111,7 @@ public final class ProcessDefinition {
      *
      * @return the stores this process owns, in declaration order
      */
-    public List<StoreDef<?, ?>> stores() {
+    public List<Store<?, ?>> stores() {
         return List.copyOf(storesByName.values());
     }
 
@@ -121,7 +121,7 @@ public final class ProcessDefinition {
      * @param name a store name
      * @return the store declared under {@code name}, or {@code null}
      */
-    public StoreDef<?, ?> store(String name) {
+    public Store<?, ?> store(String name) {
         return storesByName.get(name);
     }
 
@@ -130,7 +130,7 @@ public final class ProcessDefinition {
         private final String name;
         private final Map<String, Input<?, ?>> inputs = new LinkedHashMap<>();
         private final Map<String, Channel<?, ?>> sends = new LinkedHashMap<>();
-        private final Map<String, StoreDef<?, ?>> stores = new LinkedHashMap<>();
+        private final Map<String, Store<?, ?>> stores = new LinkedHashMap<>();
         private final Set<String> storeNames = new LinkedHashSet<>();
 
         private Builder(String name) {
@@ -170,16 +170,16 @@ public final class ProcessDefinition {
         /**
          * Declares the stores this process owns.
          *
-         * @param defs the stores to declare
+         * @param stores the stores to declare
          * @return this builder
          * @throws IllegalArgumentException if a store name is declared twice
          */
-        public Builder stores(StoreDef<?, ?>... defs) {
-            for (StoreDef<?, ?> def : defs) {
-                if (!storeNames.add(def.name())) {
-                    throw new IllegalArgumentException(name + " already declares store " + def.name());
+        public Builder stores(Store<?, ?>... stores) {
+            for (Store<?, ?> store : stores) {
+                if (!storeNames.add(store.name())) {
+                    throw new IllegalArgumentException(name + " already declares store " + store.name());
                 }
-                stores.put(def.name(), def);
+                this.stores.put(store.name(), store);
             }
             return this;
         }
