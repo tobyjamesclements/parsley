@@ -5,7 +5,9 @@ Names that earned a recommendation during the pre-vendoring audit, its remediati
 below is a name that, in practice, forced an explanation — a reviewer misread it, a fix
 went wrong partly because of what it implied, or every discussion of it had to start by
 restating what it actually means. None of these renames are applied here; internal names
-can be renamed freely, and the one public-surface item is flagged as a fork decision.
+can be renamed freely. The two public-surface items get opposite treatment, each argued in
+place: `StoreDef` → `Store` is recommended (and applied at vendoring, when it is free),
+while the refusal-reason constant is flagged as a fork decision and left alone.
 
 ## Recommended renames
 
@@ -34,6 +36,12 @@ thread. "Gathered" (a bare past participle) says how it got there, not what it i
 review discussion independently reached for "the pending-round slot", and the revival test
 even names its reflection accessor `pendingRound()`. Let the field carry the name everyone
 already uses for it.
+
+A caveat that applies to this entry and the previous one: `ProcessorRevivalTest` reaches
+both fields by name string — `getDeclaredField("incarnation")` and
+`getDeclaredField("gathered")` — so either rename compiles cleanly with the strings stale
+and fails only when the test runs. Update the strings in the same commit, and note that #2
+must unify on `incarnation` (as recommended), not `epoch`, or the first lookup breaks too.
 
 ### 4. `AdminFactsSource.gatherRound` / `completeRound` — collapse to one method
 
@@ -80,6 +88,34 @@ duplication exists to keep the production enum package-private, which is sound; 
 is that adding a mode requires touching both and nothing checks they stay aligned. If both
 must exist, name them so the mirroring is explicit (e.g. keep the names but add the
 alignment assertion the bridge silently assumes), or expose one through the factory.
+
+### 10. `StoreDef` → `Store` — and the rule that decides when `Definition` is earned
+
+The api package declared the same genus of thing three ways: `Channel` (no suffix),
+`StoreDef` (abbreviated suffix), `ProcessDefinition` (full suffix). The audit flagged the
+drift (§5.2); the resolution is not to level the suffixes but to notice the distinction
+the code already makes. The test: **does the object double as the runtime handle, or is it
+purely declarative input?**
+
+`StoreDef` is a handle everywhere it matters — `StateReader.get(store, key)`,
+`Effects.Builder.put(store, key, value)`, `StateWrite(store, …)` — and the parameter in
+every one of those signatures was already named `store`. The same reasoning that keeps
+`Channel` suffix-free (you send *on the channel*) applies: you write *to the store*. So:
+`Store`. Collision risk is negligible; the api package hides Kafka Streams, so no
+`StateStore`/`Stores` shares scope with application code.
+
+`ProcessDefinition` keeps its suffix for two independent reasons. The declared/running
+split is real there and nowhere else: a definition is consumed by `Parsley.start` and
+never seen again, while the running process has its own representations (`ProcessStatus`,
+keyed by name) — for channels and stores no such split exists, so a distinguishing suffix
+would distinguish nothing. And bare `Process` would silently shadow the auto-imported
+`java.lang.Process` in every file that names it.
+
+The teachable rule this leaves: declarations you also hold at runtime are bare nouns
+(`Channel`, `Store`); the one purely-declarative type keeps `Definition`. Unlike every
+other public-surface candidate, this rename is compile-time coupling only — no reflection,
+no serialized names, store *names* are strings and the type name never touches the wire —
+which is why it is applied at vendoring, the last moment it is free.
 
 ## Flagged, not recommended: the public surface
 
