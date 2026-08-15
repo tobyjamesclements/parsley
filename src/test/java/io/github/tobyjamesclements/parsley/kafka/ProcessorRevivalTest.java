@@ -64,7 +64,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * its cause.
  *
  * <p>The stale-round defence is layered: a deposit guard on the executor thread, and the
- * authoritative epoch check where the stream thread applies a round. The interleaving the
+ * authoritative incarnation check where the stream thread applies a round. The interleaving the
  * apply-time check exists for is narrower than any schedule a test can construct, so the
  * tests that pin it plant the round directly through reflection.
  */
@@ -270,7 +270,7 @@ class ProcessorRevivalTest {
     }
 
     /**
-     * Pins the slot release: only the epoch that acquired the gather slot may free it. A
+     * Pins the slot release: only the incarnation that acquired the gather slot may free it. A
      * superseded gather completing while the successor's own gather holds the slot must not
      * free it, or every later punctuation would stack a further gather.
      */
@@ -359,7 +359,7 @@ class ProcessorRevivalTest {
     }
 
     private Object pendingRound() throws Exception {
-        return gatheredField().get();
+        return pendingRoundField().get();
     }
 
     private long currentIncarnation() throws Exception {
@@ -368,16 +368,16 @@ class ProcessorRevivalTest {
         return ((AtomicLong) field.get(processor)).get();
     }
 
-    private void plantRound(long epoch, PositionFacts facts) throws Exception {
+    private void plantRound(long incarnation, PositionFacts facts) throws Exception {
         Class<?> roundClass = Class.forName(ParsleyProcessor.class.getName() + "$GatheredRound");
         Constructor<?> constructor = roundClass.getDeclaredConstructor(long.class, PositionFacts.class);
         constructor.setAccessible(true);
-        gatheredField().set(constructor.newInstance(epoch, facts));
+        pendingRoundField().set(constructor.newInstance(incarnation, facts));
     }
 
     @SuppressWarnings("unchecked")
-    private AtomicReference<Object> gatheredField() throws Exception {
-        Field field = ParsleyProcessor.class.getDeclaredField("gathered");
+    private AtomicReference<Object> pendingRoundField() throws Exception {
+        Field field = ParsleyProcessor.class.getDeclaredField("pendingRound");
         field.setAccessible(true);
         return (AtomicReference<Object>) field.get(processor);
     }

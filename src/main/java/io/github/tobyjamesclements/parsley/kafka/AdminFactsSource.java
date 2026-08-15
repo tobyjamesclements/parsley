@@ -52,7 +52,7 @@ class AdminFactsSource implements FactsSource {
      * is queried in batches. A lock rather than a monitor, so the seed path can bound its
      * wait instead of stacking initialising tasks behind a slow broker.
      */
-    private final java.util.concurrent.locks.ReentrantLock rounds = new java.util.concurrent.locks.ReentrantLock();
+    private final java.util.concurrent.locks.ReentrantLock roundLock = new java.util.concurrent.locks.ReentrantLock();
 
     enum NameVerdict {
         SAME_ID,
@@ -71,7 +71,7 @@ class AdminFactsSource implements FactsSource {
     private final Map<String, Object> probeConsumerProperties;
     private final Map<UUID, String> topicNamesById = new HashMap<>();
 
-    private final Map<UUID, Long> unknownSince = new HashMap<>();
+    private final Map<UUID, Long> affirmedGoneSince = new HashMap<>();
 
     private final Set<UUID> confirmedDead = new HashSet<>();
 
@@ -104,11 +104,11 @@ class AdminFactsSource implements FactsSource {
     @Override
     public PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
                                 Set<ChannelId> frontierChannels) throws Exception {
-        rounds.lockInterruptibly();
+        roundLock.lockInterruptibly();
         try {
             return gatherRound(receivedChannels, fedUpToHints, frontierChannels);
         } finally {
-            rounds.unlock();
+            roundLock.unlock();
         }
     }
 
@@ -122,7 +122,7 @@ class AdminFactsSource implements FactsSource {
     @Override
     public PositionFacts gatherForSeed(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
                                        Set<ChannelId> frontierChannels) throws Exception {
-        if (!rounds.tryLock(SEED_WAIT_MILLIS, TimeUnit.MILLISECONDS)) {
+        if (!roundLock.tryLock(SEED_WAIT_MILLIS, TimeUnit.MILLISECONDS)) {
             LOG.warn("{}: facts source busy; starting unseeded, the first background round will seed instead",
                     groupId);
             return PositionFacts.EMPTY;
@@ -130,7 +130,7 @@ class AdminFactsSource implements FactsSource {
         try {
             return gatherRound(receivedChannels, fedUpToHints, frontierChannels);
         } finally {
-            rounds.unlock();
+            roundLock.unlock();
         }
     }
 
@@ -139,11 +139,6 @@ class AdminFactsSource implements FactsSource {
         if (closed) {
             return PositionFacts.EMPTY;
         }
-        return completeRound(receivedChannels, fedUpToHints, frontierChannels);
-    }
-
-    private PositionFacts completeRound(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
-                                        Set<ChannelId> frontierChannels) throws Exception {
         Set<UUID> topicIds = new HashSet<>();
         for (ChannelId channel : receivedChannels) {
             topicIds.add(channel.topicId());
@@ -180,7 +175,7 @@ class AdminFactsSource implements FactsSource {
         try {
             liveNames = describeByIds(undescribed);
         } catch (Exception e) {
-            unknownSince.clear();
+            affirmedGoneSince.clear();
             throw e;
         }
 
@@ -209,17 +204,17 @@ class AdminFactsSource implements FactsSource {
             String lastKnown = topicNamesById.get(id);
             NameVerdict verdict = classifyName(byNameOutcome, lastKnown, id);
             switch (verdict) {
-                case SAME_ID -> unknownSince.remove(id);
+                case SAME_ID -> affirmedGoneSince.remove(id);
                 case RECREATED -> markRecreated(id);
                 case DENIED -> {
-                    unknownSince.remove(id);
+                    affirmedGoneSince.remove(id);
                     LOG.warn("{}: describe denied for topic '{}' ({}); treating as denied, not dead",
                             groupId, lastKnown, id);
                 }
                 case NAME_GONE, UNAVAILABLE -> {
                     if (verdict == NameVerdict.NAME_GONE || lastKnown == null) {
                         long window = lastKnown == null ? 4 * deadConfirmationMillis : deadConfirmationMillis;
-                        long since = unknownSince.computeIfAbsent(id, i -> now);
+                        long since = affirmedGoneSince.computeIfAbsent(id, i -> now);
                         if (now - since >= window) {
                             markDead(id);
                         }
@@ -228,7 +223,7 @@ class AdminFactsSource implements FactsSource {
                         // name-gone observation is no longer continuous. The window restarts:
                         // a dead verdict is confirmed only by an unbroken run of affirmative
                         // name-gone answers, never by two isolated ones spanning an outage.
-                        unknownSince.remove(id);
+                        affirmedGoneSince.remove(id);
                     }
                 }
             }
@@ -242,7 +237,7 @@ class AdminFactsSource implements FactsSource {
         Set<UUID> deadTopicIds = new HashSet<>(confirmedDead);
         Set<UUID> recreatedTopicIds = new HashSet<>(confirmedRecreated);
         for (UUID id : liveNames.keySet()) {
-            unknownSince.remove(id);
+            affirmedGoneSince.remove(id);
         }
 
         Map<TopicPartition, OffsetSpec> offsetQueries = new HashMap<>();
@@ -261,7 +256,7 @@ class AdminFactsSource implements FactsSource {
         Map<TopicPartition, Long> logStartByPartition = new HashMap<>();
         if (!offsetQueries.isEmpty()) {
             Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> futures =
-                    earliestOffsets(offsetQueries);
+                    earliestOffsetFutures(offsetQueries);
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
             for (var entry : futures.entrySet()) {
                 try {
@@ -315,7 +310,7 @@ class AdminFactsSource implements FactsSource {
 
     private void markDead(UUID id) {
         confirmedDead.add(id);
-        unknownSince.remove(id);
+        affirmedGoneSince.remove(id);
 
         if (!pinnedIds.contains(id)) {
             topicNamesById.remove(id);
@@ -329,7 +324,7 @@ class AdminFactsSource implements FactsSource {
     }
 
     private void forget(UUID id) {
-        unknownSince.remove(id);
+        affirmedGoneSince.remove(id);
         topicNamesById.remove(id);
     }
 
@@ -337,7 +332,7 @@ class AdminFactsSource implements FactsSource {
      * Queries the earliest readable offset for each partition, one future per partition so a
      * single unavailable partition fails alone.
      */
-    Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsets(
+    Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsetFutures(
             Map<TopicPartition, OffsetSpec> queries) {
         ListOffsetsResult result = admin.listOffsets(queries, new ListOffsetsOptions(IsolationLevel.READ_COMMITTED));
         Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> futures = new HashMap<>();
@@ -499,12 +494,12 @@ class AdminFactsSource implements FactsSource {
     }
 
     void close() {
-        rounds.lock();
+        roundLock.lock();
         try {
             closed = true;
             closeProbe();
         } finally {
-            rounds.unlock();
+            roundLock.unlock();
         }
     }
 

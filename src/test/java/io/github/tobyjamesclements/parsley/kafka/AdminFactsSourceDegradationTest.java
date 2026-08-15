@@ -68,7 +68,7 @@ class AdminFactsSourceDegradationTest {
         }
 
         @Override
-        Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsets(
+        Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsetFutures(
                 Map<TopicPartition, OffsetSpec> queries) {
             Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> futures = new HashMap<>();
             for (TopicPartition tp : queries.keySet()) {
@@ -112,7 +112,7 @@ class AdminFactsSourceDegradationTest {
             }
 
             @Override
-            Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsets(
+            Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsetFutures(
                     Map<TopicPartition, OffsetSpec> queries) {
                 return Map.of();
             }

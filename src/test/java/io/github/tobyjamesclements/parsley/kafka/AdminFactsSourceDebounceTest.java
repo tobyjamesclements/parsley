@@ -66,7 +66,7 @@ class AdminFactsSourceDebounceTest {
         }
 
         @Override
-        Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsets(
+        Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsetFutures(
                 Map<TopicPartition, OffsetSpec> queries) {
             return Map.of();
         }
