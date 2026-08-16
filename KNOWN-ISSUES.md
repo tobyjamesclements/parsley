@@ -79,6 +79,34 @@ not rediscovered as surprises.
    own emission rather than a poisoned topic downstream — intended, but worth knowing when
    wrapping header-writing serializers.
 
+## Naming items still open
+
+The naming work the audit and reviews recommended was applied and recorded as
+`DECISIONS.md` D72 (the public `StoreDef` → `Store` rename and rule, and seven internal
+renames). Three items were deliberately not applied and remain open.
+
+10. **Four scripted `FactsSource` fakes, four naming styles.** `FakeFacts`,
+    `ControllableFacts`, `DegradedFacts` and `ScriptedFacts` are the same idea — a
+    `FactsSource` whose answers the test scripts — at different levels of control.
+    Converging on one convention (`Scripted*` fits the most capable) and, where practical,
+    one shared fixture would let the next test author extend rather than invent a fifth.
+
+11. **`Sabotage.Mode` and `EngineTestFactory.SabotageMode` are mirrored enums bridged by
+    `valueOf(mode.name())`.** The duplication keeps the production enum package-private,
+    which is sound; the cost is that adding a mode touches both and nothing checks they
+    stay aligned. A constant renamed in one fails only at runtime. Before touching either,
+    add the alignment assertion the bridge silently assumes — or expose one enum through
+    the factory.
+
+12. **`ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT` now classifies
+    more than its name says** — unknown format version, changelog-head loss, corrupt
+    entries, holds restored out of scan order; the doc row honestly reads "stored state
+    cannot be trusted". A truer name would be `ORDERING_STATE_UNTRUSTED`, but `Reason` is
+    public API and D55 establishes that supervisors key on `refusalReason`, so renaming
+    breaks the integrations the fail-closed contract exists to serve. Keep the name, lean
+    on the `docs/failing-closed.md` row, and revisit only at a moment the fork is already
+    breaking its supervision interface.
+
 ## A note on unused members
 
 This is a library: parts of its surface exist for hosts, integrators and the test harness
