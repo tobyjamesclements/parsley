@@ -2292,5 +2292,6 @@ status components are refused at construction.
 What would catch a violation: `ApiValidationTest` fails if any declaration-site check is
 removed, and `TopologyWiringTest#emissionThroughALookAlikeChannelInstanceFailsTheStep`
 fails if the send seam reverts to name matching. Item 4 stays open in `KNOWN-ISSUES.md`
-for the ground this pass did not cover: `Parsley.start`'s broker-facing contract under a
-hostile broker, and serde misbehaviour beyond nullness.
+(arriving with PR #90; until that lands the file lives on its draft branch) for the ground
+this pass did not cover: `Parsley.start`'s broker-facing contract under a hostile broker,
+and serde misbehaviour beyond nullness.

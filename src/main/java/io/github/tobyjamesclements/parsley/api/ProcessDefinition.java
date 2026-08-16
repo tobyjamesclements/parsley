@@ -153,14 +153,24 @@ public final class ProcessDefinition {
         }
 
         /**
-         * Declares the channels this process may send on. Repeats are ignored.
+         * Declares the channels this process may send on. Repeats of the same channel are
+         * ignored; the same topic through a different {@code Channel} instance is refused,
+         * because emissions must use the declared instance and a silently dropped duplicate
+         * would surface as a fail-closed refusal at first emission.
          *
          * @param channels the channels to declare
          * @return this builder
+         * @throws IllegalArgumentException if a topic is declared through two different
+         *                                  {@code Channel} instances
          */
         public Builder sends(Channel<?, ?>... channels) {
             for (Channel<?, ?> channel : channels) {
-                sends.putIfAbsent(channel.topic(), channel);
+                Channel<?, ?> existing = sends.putIfAbsent(channel.topic(), channel);
+                if (existing != null && existing != channel) {
+                    throw new IllegalArgumentException(name + " already declares sending on "
+                            + channel.topic() + " through a different Channel instance; emissions"
+                            + " must use the declared instance, so declare each send topic once");
+                }
             }
             return this;
         }

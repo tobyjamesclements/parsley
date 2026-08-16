@@ -23,9 +23,10 @@ public final class Store<K, V> {
     private final Serde<V> valueSerde;
 
     private Store(String name, Serde<K> keySerde, Serde<V> valueSerde) {
-        if (name == null || !name.matches("[a-zA-Z0-9._-]{1,249}")) {
-            throw new IllegalArgumentException("store name must be [a-zA-Z0-9._-] and at most 249"
-                    + " characters, since it names the store's changelog topic: " + name);
+        if (name == null || !name.matches("[a-zA-Z0-9._-]{1,249}") || name.equals(".") || name.equals("..")) {
+            throw new IllegalArgumentException("store name must be [a-zA-Z0-9._-], at most 249"
+                    + " characters and not '.' or '..', since it names the store's changelog topic"
+                    + " and its local directory: " + name);
         }
         if (name.startsWith(RESERVED_PREFIX)) {
             throw new IllegalArgumentException("store name may not use the reserved prefix " + RESERVED_PREFIX);

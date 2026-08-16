@@ -173,8 +173,9 @@ public final class ParsleyRuntime implements AutoCloseable {
         Set<String> internal = new HashSet<>();
         for (ProcessDefinition definition : definitions) {
             String applicationId = config.applicationIdPrefix() + "-" + definition.name();
-            internal.add(changelogName(applicationId, ProcessTopology.ORDERING_STORE));
-            definition.stores().forEach(store -> internal.add(changelogName(applicationId, store.name())));
+            internal.add(usableChangelogName(changelogName(applicationId, ProcessTopology.ORDERING_STORE)));
+            definition.stores().forEach(store ->
+                    internal.add(usableChangelogName(changelogName(applicationId, store.name()))));
         }
         for (String topic : declaredTopics(definitions)) {
             if (topic.contains("__parsley.") || internal.contains(topic)) {
@@ -230,6 +231,20 @@ public final class ParsleyRuntime implements AutoCloseable {
 
     private static String changelogName(String applicationId, String storeName) {
         return applicationId + "-" + storeName + "-changelog";
+    }
+
+    /**
+     * Each name component is validated at declaration, but only here are they composed;
+     * a composite beyond Kafka's topic-name limit would otherwise fail deep inside Streams
+     * internal-topic creation.
+     */
+    private static String usableChangelogName(String changelog) {
+        if (changelog.length() > 249) {
+            throw new IllegalArgumentException("changelog topic name '" + changelog + "' exceeds"
+                    + " Kafka's 249-character limit; shorten the applicationIdPrefix, process name"
+                    + " or store name");
+        }
+        return changelog;
     }
 
     private java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelog(String applicationId) {

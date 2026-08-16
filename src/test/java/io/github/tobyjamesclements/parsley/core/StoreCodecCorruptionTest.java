@@ -247,9 +247,7 @@ class StoreCodecCorruptionTest {
         engine.onReceive(new ReceivedMessage(CH, 0L, 1L, new byte[] {'k'}, new byte[] {'v'}, List.of()));
 
         MemoryOrderingStore stripped = new MemoryOrderingStore();
-        byte[] tags = {StoreCodec.TAG_FED_UP_TO, StoreCodec.TAG_FRONTIER, StoreCodec.TAG_DELIVERED_PAST,
-                StoreCodec.TAG_NAME_BINDING, StoreCodec.TAG_HELD};
-        for (byte tag : tags) {
+        for (byte tag : StoreCodec.STATE_TAGS) {
             original.scanPrefix(StoreCodec.tagPrefix(tag), stripped::put);
         }
 

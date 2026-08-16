@@ -122,9 +122,41 @@ class ApiValidationTest {
                 () -> Store.of("has space", Serdes.String(), Serdes.String()),
                 "a store name becomes its changelog topic name and must satisfy the same rules");
         assertThrows(IllegalArgumentException.class,
+                () -> Store.of("..", Serdes.String(), Serdes.String()),
+                "'.' and '..' would resolve the store's local directory outside its task directory");
+        assertThrows(IllegalArgumentException.class,
                 () -> ParsleyConfig.builder("broker:9092", "has space"),
                 "the prefix becomes part of every changelog topic name and must satisfy the same"
                         + " rules, matching the validation process names already get");
+    }
+
+    /** A send topic declared through two different channel instances is refused. */
+    @Test
+    void sendTopicDeclaredThroughTwoInstancesIsRefused() {
+        Channel<String, String> in = Channel.of("in", Serdes.String(), Serdes.String());
+        Channel<String, String> declared = Channel.of("out", Serdes.String(), Serdes.String());
+        Channel<String, String> lookAlike = Channel.of("out", Serdes.String(), Serdes.String());
+        ProcessDefinition.Builder builder = ProcessDefinition.named("p")
+                .receives(in, (d, s) -> Effects.none())
+                .sends(declared);
+        assertThrows(IllegalArgumentException.class, () -> builder.sends(lookAlike),
+                "a silently dropped duplicate would surface as a fail-closed refusal at first"
+                        + " emission through the dropped instance");
+        builder.sends(declared).build();
+    }
+
+    /** Overlong changelog names are refused before any broker contact. */
+    @Test
+    void overlongChangelogNamesAreRefusedBeforeAnyBrokerContact() {
+        Channel<String, String> in = Channel.of("t", Serdes.String(), Serdes.String());
+        ProcessDefinition p = ProcessDefinition.named("p")
+                .receives(in, (d, s) -> Effects.none())
+                .build();
+        assertThrows(IllegalArgumentException.class,
+                () -> Parsley.start(ParsleyConfig.builder("unreachable:1", "a".repeat(240)).build(), p),
+                "each component passes its own check, but the composed changelog topic name"
+                        + " exceeds Kafka's 249-character limit and would fail inside Streams"
+                        + " internal-topic creation");
     }
 
     /** Null effect targets are refused when the effect is declared. */

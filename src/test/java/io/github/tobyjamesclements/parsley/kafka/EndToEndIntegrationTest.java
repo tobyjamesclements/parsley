@@ -110,16 +110,7 @@ class EndToEndIntegrationTest {
     }
 
     private static void produce(String topic, String key, String value, RecordHeader... headers) {
-        Properties props = new Properties();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, cluster.bootstrapServers());
-        try (var producer = new KafkaProducer<>(props, new StringSerializer(), new StringSerializer())) {
-            ProducerRecord<String, String> record = new ProducerRecord<>(topic, key, value);
-            for (RecordHeader header : headers) {
-                record.headers().add(header);
-            }
-            producer.send(record);
-            producer.flush();
-        }
+        ClusterTestSupport.produce(cluster.bootstrapServers(), topic, key, value, headers);
     }
 
     private static void produceAborted(String topic, String value) {
@@ -157,25 +148,11 @@ class EndToEndIntegrationTest {
     }
 
     private static UUID topicId(String topic) throws Exception {
-        var description = admin.describeTopics(List.of(topic)).allTopicNames().get(30, TimeUnit.SECONDS).get(topic);
-        return new UUID(description.topicId().getMostSignificantBits(),
-                description.topicId().getLeastSignificantBits());
+        return ClusterTestSupport.topicId(admin, topic);
     }
 
     private static void await(String what, BooleanSupplier condition, Duration timeout) {
-        long deadline = System.nanoTime() + timeout.toNanos();
-        while (System.nanoTime() < deadline) {
-            if (condition.getAsBoolean()) {
-                return;
-            }
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new AssertionError("interrupted awaiting " + what);
-            }
-        }
-        throw new AssertionError("timed out awaiting " + what);
+        ClusterTestSupport.await(what, condition, timeout);
     }
 
     private static RecordHeader causesHeader(Map<ChannelId, Long> causes) {
@@ -346,24 +323,8 @@ class EndToEndIntegrationTest {
         }
     }
 
-    /**
-     * Establishes the held premise by evidence rather than elapsed time: the process's
-     * committed read position on the effect's topic reaches past it — so it was fed and its
-     * step committed — while nothing has been delivered. A fixed sleep would let a slow
-     * runner pass the emptiness assertion without the effect ever having been fed.
-     */
     private static void awaitFedAndHeld(String groupId, String topic, ConcurrentLinkedQueue<String> delivered) {
-        await("the effect to be fed and committed", () -> {
-            try {
-                var committed = admin.listConsumerGroupOffsets(groupId).partitionsToOffsetAndMetadata()
-                        .get(30, TimeUnit.SECONDS);
-                var offset = committed.get(new org.apache.kafka.common.TopicPartition(topic, 0));
-                return offset != null && offset.offset() >= 1;
-            } catch (Exception e) {
-                return false; // transient admin failure: not evidence either way, poll again
-            }
-        }, Duration.ofSeconds(60));
-        assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
+        ClusterTestSupport.awaitFedAndHeld(admin, groupId, topic, delivered);
     }
 
     private static void deleteRecursively(java.nio.file.Path root) throws Exception {
