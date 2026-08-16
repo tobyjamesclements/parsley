@@ -11,7 +11,7 @@ while the refusal-reason constant is flagged as a fork decision and left alone.
 
 ## Recommended renames
 
-### 1. `AdminFactsSource.unknownSince` → `affirmedGoneSince`
+### 1. `AdminFactsSource.unknownSince` → `deadWindowSince` (corrected from `affirmedGoneSince`)
 
 The strongest recommendation, because the name contributed to a defect. The field anchors
 the dead-channel confirmation window, which D44 defines as an unbroken run of
@@ -21,6 +21,13 @@ rounds with no answer) and the bug's first fix over-corrected (clearing it on ro
 answers had landed). Both review rounds spent their sharpest findings re-deriving this
 field's intended semantics. A name that says what opens and extends the window —
 an affirmed gone answer — makes the continuity rule self-evident at every use site.
+
+*Correction, found in review of the applied rename:* `affirmedGoneSince` over-corrects the
+same way the M4 fix did. For an id whose name was never learned, an entry is anchored by an
+UNAVAILABLE verdict — no affirmative answer exists or can exist, which is exactly why that
+path waits a longer window before `markDead`. A name asserting affirmation would invite
+collapsing that special case as redundant. The applied name is `deadWindowSince`: anchored
+on what the field does — opens the dead-confirmation window — which is true on both paths.
 
 ### 2. `ParsleyProcessor`: `incarnation` field vs `epoch` locals — one term
 
