@@ -2263,3 +2263,34 @@ No behaviour changes. Wire format and store key bytes are untouched (the codec r
 method names only), so `EVIDENCE.md` is unchanged; the one coupling the compiler cannot
 see — `ProcessorRevivalTest`'s reflective field lookups — fails the suite if the names
 drift, which is the pin these renames need.
+
+### D73 — The api/ surface validates at declaration (closes KNOWN-ISSUES item 4's first pass)
+
+**Context**
+
+KNOWN-ISSUES item 4 named the `api/` validation surface as the audit's most valuable
+unexamined ground. The focused pass found the surface enforcing well at the effect seams
+(undeclared emissions refused fail-closed, stores identity-checked on read and write, the
+config deny-list covering every prefixed spelling) while accepting declaration mistakes
+that surfaced late or silently: a null `startingAt` position compared unequal to EARLIEST
+at commit time and silently meant LATEST; null serdes died as NPEs on the stream thread at
+first use; a malformed `applicationIdPrefix` failed deep inside Streams internal-topic
+creation; and emissions were matched by topic name where stores were matched by identity,
+so a look-alike `Channel` instance could carry undeclared serdes onto a declared topic.
+
+**Decision**
+
+Declaration mistakes fail at the declaration site with `IllegalArgumentException`.
+`Channel.of`/`Store.of` refuse null serdes; `startingAt` refuses null; names that feed
+Kafka topic names — channel topics, store names (via their changelogs), and
+`applicationIdPrefix` — are validated against Kafka's topic-name rules, extending the
+regex process names already had. The send seam adopts the store seam's identity rule: an
+emission must carry the very `Channel` instance passed to `sends(...)`, refused under the
+existing `EMISSION_TO_UNDECLARED_CHANNEL` reason otherwise. Null effect targets and null
+status components are refused at construction.
+
+What would catch a violation: `ApiValidationTest` fails if any declaration-site check is
+removed, and `TopologyWiringTest#emissionThroughALookAlikeChannelInstanceFailsTheStep`
+fails if the send seam reverts to name matching. Item 4 stays open in `KNOWN-ISSUES.md`
+for the ground this pass did not cover: `Parsley.start`'s broker-facing contract under a
+hostile broker, and serde misbehaviour beyond nullness.
