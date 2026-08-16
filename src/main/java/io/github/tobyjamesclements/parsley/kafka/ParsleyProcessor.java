@@ -26,7 +26,7 @@ import io.github.tobyjamesclements.parsley.api.Delivery;
 import io.github.tobyjamesclements.parsley.api.Effects;
 import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
 import io.github.tobyjamesclements.parsley.api.StateReader;
-import io.github.tobyjamesclements.parsley.api.StoreDef;
+import io.github.tobyjamesclements.parsley.api.Store;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.DeliverableMessage;
 import io.github.tobyjamesclements.parsley.core.HeaderKV;
@@ -60,13 +60,13 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
 
     private final java.util.concurrent.atomic.AtomicLong incarnation =
             new java.util.concurrent.atomic.AtomicLong();
-    private final java.util.concurrent.atomic.AtomicReference<GatheredRound> gathered =
+    private final java.util.concurrent.atomic.AtomicReference<GatheredRound> pendingRound =
             new java.util.concurrent.atomic.AtomicReference<>();
     /**
-     * The gather slot: zero when no gather is in flight, otherwise the epoch that launched
-     * the one that is. Acquired and freed by compare-and-set, so only the epoch that
-     * acquired the slot can free it — a superseded gather completing after a revival cannot
-     * free the slot a successor incarnation's own gather holds.
+     * The gather slot: zero when no gather is in flight, otherwise the incarnation that
+     * launched the one that is. Acquired and freed by compare-and-set, so only the
+     * incarnation that acquired the slot can free it — a superseded gather completing after
+     * a revival cannot free the slot a successor incarnation's own gather holds.
      */
     private final java.util.concurrent.atomic.AtomicLong gatherSlot =
             new java.util.concurrent.atomic.AtomicLong();
@@ -81,7 +81,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      * feed progress that was rolled back; a probe answering them must not reach the restored
      * engine as durable truth.
      */
-    private record GatheredRound(long epoch, io.github.tobyjamesclements.parsley.core.PositionFacts facts) {}
+    private record GatheredRound(long incarnation, io.github.tobyjamesclements.parsley.core.PositionFacts facts) {}
 
     private ProcessorContext<byte[], byte[]> context;
     private ProcessEngine engine;
@@ -124,7 +124,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         // rolled-back progress: its facts rounds are invalidated, its punctuator cancelled,
         // and the gather slot freed.
         incarnation.incrementAndGet();
-        gathered.set(null);
+        pendingRound.set(null);
         gatherSlot.set(0);
         if (factsPunctuator != null) {
             factsPunctuator.cancel();
@@ -150,8 +150,8 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                 topicByChannel, new StreamsOrderingStore(orderingStore), metadataBudgetBytes);
 
         appStores.clear();
-        for (StoreDef<?, ?> def : definition.stores()) {
-            appStores.put(def.name(), context.getStateStore(def.name()));
+        for (Store<?, ?> store : definition.stores()) {
+            appStores.put(store.name(), context.getStateStore(store.name()));
         }
         stateReader = new StoreStateReader();
 
@@ -167,15 +167,15 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     }
 
     private void applyGatheredFacts() {
-        GatheredRound round = gathered.getAndSet(null);
-        if (round != null && round.epoch() == incarnation.get()) {
+        GatheredRound round = pendingRound.getAndSet(null);
+        if (round != null && round.incarnation() == incarnation.get()) {
             engine.onFacts(round.facts());
         }
     }
 
     private void startGatherIfIdle() {
-        long epoch = incarnation.get();
-        if (!gatherSlot.compareAndSet(0, epoch)) {
+        long launchIncarnation = incarnation.get();
+        if (!gatherSlot.compareAndSet(0, launchIncarnation)) {
             return;
         }
         java.util.Set<ChannelId> received = java.util.Set.copyOf(engine.receivedChannelSet());
@@ -187,20 +187,21 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                     io.github.tobyjamesclements.parsley.core.PositionFacts facts =
                             factsSource.gather(received, hints, frontier);
                     // Best-effort: a deposit racing a concurrent re-initialisation can still
-                    // leave a superseded round behind; the apply-time epoch check discards it.
-                    if (incarnation.get() == epoch) {
-                        gathered.set(new GatheredRound(epoch, facts));
+                    // leave a superseded round behind; the apply-time incarnation check
+                    // discards it.
+                    if (incarnation.get() == launchIncarnation) {
+                        pendingRound.set(new GatheredRound(launchIncarnation, facts));
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 } catch (Exception e) {
                     LOG.warn("{}: position facts unavailable, retrying next round", definition.name(), e);
                 } finally {
-                    gatherSlot.compareAndSet(epoch, 0);
+                    gatherSlot.compareAndSet(launchIncarnation, 0);
                 }
             });
         } catch (java.util.concurrent.RejectedExecutionException e) {
-            gatherSlot.compareAndSet(epoch, 0);
+            gatherSlot.compareAndSet(launchIncarnation, 0);
         }
     }
 
@@ -212,7 +213,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     @Override
     public void close() {
         incarnation.incrementAndGet();
-        gathered.set(null);
+        pendingRound.set(null);
         gatherSlot.set(0);
         if (factsPunctuator != null) {
             factsPunctuator.cancel();
@@ -240,7 +241,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      */
     @Override
     public void process(Record<byte[], byte[]> record) {
-        if (gathered.get() != null) {
+        if (pendingRound.get() != null) {
             applyGatheredFacts();
         }
         RecordMetadata metadata = context.recordMetadata().orElseThrow(() ->
@@ -329,18 +330,18 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     }
 
     private <K, V> void applyWrite(Effects.StateWrite<K, V> write) {
-        StoreDef<K, V> def = write.store();
-        if (definition.store(def.name()) != def) {
+        Store<K, V> declared = write.store();
+        if (definition.store(declared.name()) != declared) {
             throw new IllegalStateException(
-                    definition.name() + ": state write to undeclared store " + def.name());
+                    definition.name() + ": state write to undeclared store " + declared.name());
         }
-        KeyValueStore<Bytes, byte[]> store = appStores.get(def.name());
-        String serdeTopic = storeSerdeTopic(def.name());
-        byte[] keyBytes = def.keySerde().serializer().serialize(serdeTopic, write.key());
+        KeyValueStore<Bytes, byte[]> store = appStores.get(declared.name());
+        String serdeTopic = storeSerdeTopic(declared.name());
+        byte[] keyBytes = declared.keySerde().serializer().serialize(serdeTopic, write.key());
         if (write.value() == null) {
             store.delete(Bytes.wrap(keyBytes));
         } else {
-            store.put(Bytes.wrap(keyBytes), def.valueSerde().serializer().serialize(serdeTopic, write.value()));
+            store.put(Bytes.wrap(keyBytes), declared.valueSerde().serializer().serialize(serdeTopic, write.value()));
         }
     }
 
@@ -385,7 +386,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
 
     private final class StoreStateReader implements StateReader {
         @Override
-        public <K, V> V get(StoreDef<K, V> store, K key) {
+        public <K, V> V get(Store<K, V> store, K key) {
             if (definition.store(store.name()) != store) {
                 throw new IllegalStateException(
                         definition.name() + ": state read from undeclared store " + store.name());

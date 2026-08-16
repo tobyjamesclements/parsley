@@ -2227,3 +2227,39 @@ Avro-encoded bodies would not be caught. `EVIDENCE.md` row 5 says so.
 
 Recorded above. The dependency count for the test suite falls by one, and nothing outside the
 one test changed.
+
+### D72 — Names applied at vendoring (implements ASSESSMENT §5.2's decide-now)
+
+**Context**
+
+ASSESSMENT §5.2 found the semantic layer drifting where it costs most — the public API —
+and closed with the asymmetry that makes this a vendoring decision: public renames are
+breaking later, so decide now or record the deviation. PR #90's `NAMING.md` carries the
+audit-derived recommendations; this entry records what was decided and applied, so the
+resolution is traceable in-tree rather than only in an unmerged draft.
+
+**Decision**
+
+`StoreDef` → `Store`, and the rule that decides the suffix question: a declaration that
+doubles as the runtime handle is a bare noun (`Channel`, `Store` — the parameter at every
+use site was already `store`), while the one purely declarative type keeps `Definition`.
+`ProcessDefinition` keeps its name both because the declared/running split is real only
+for processes (`Parsley.start` consumes the definition; the running process reports as
+`ProcessStatus`) and because bare `Process` would shadow the auto-imported
+`java.lang.Process`. `ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT` is
+deliberately kept: D55 establishes supervisors key on `refusalReason`, and renaming it
+breaks the integrations the fail-closed contract exists to serve.
+
+Internal renames applied in the same change, per `NAMING.md` entries 1–7: `pendingRound`,
+one `incarnation` term through the revival machinery, `roundLock`, `earliestOffsetFutures`,
+`channelOfEntryKey`, and the `gatherRound`/`completeRound` merge — with one correction the
+review of the change itself surfaced: entry 1's proposed `affirmedGoneSince` overclaims
+for an id whose name was never learned, where the window is anchored by an UNAVAILABLE
+verdict rather than any affirmed answer (the reason that path waits the longer window).
+The applied name is `deadWindowSince`: anchored on what the field does — opens the
+dead-confirmation window — which is true on both paths.
+
+No behaviour changes. Wire format and store key bytes are untouched (the codec renames are
+method names only), so `EVIDENCE.md` is unchanged; the one coupling the compiler cannot
+see — `ProcessorRevivalTest`'s reflective field lookups — fails the suite if the names
+drift, which is the pin these renames need.

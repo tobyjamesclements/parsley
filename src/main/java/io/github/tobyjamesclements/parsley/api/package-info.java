@@ -2,7 +2,7 @@
  * The declaration surface: what an application writes.
  *
  * <p>An application declares {@link io.github.tobyjamesclements.parsley.api.Channel} typed
- * topics, {@link io.github.tobyjamesclements.parsley.api.StoreDef} typed stores, and one
+ * topics, {@link io.github.tobyjamesclements.parsley.api.Store} typed stores, and one
  * {@link io.github.tobyjamesclements.parsley.api.ProcessDefinition} per process. Logic is a
  * {@link io.github.tobyjamesclements.parsley.api.Handler}, which receives a
  * {@link io.github.tobyjamesclements.parsley.api.Delivery} and returns

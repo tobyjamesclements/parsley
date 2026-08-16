@@ -7,7 +7,7 @@ The generated Javadoc for this version is published alongside this site.
 ## Packages
 
 `io.github.tobyjamesclements.parsley.api` is the declaration surface. An application declares
-`Channel` typed topics, `StoreDef` typed stores, and one `ProcessDefinition` per process.
+`Channel` typed topics, `Store` typed stores, and one `ProcessDefinition` per process.
 Logic is a `Handler`, receiving a `Delivery` and returning `Effects`.
 
 `io.github.tobyjamesclements.parsley.core` is the protocol, independent of any host. It names

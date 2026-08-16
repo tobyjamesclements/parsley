@@ -113,7 +113,7 @@ final class StoreCodec {
      *         {@link ParsleyFailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
      *         key is not the exact length that builder writes
      */
-    static ChannelId channelOfChannelKey(byte[] key) {
+    static ChannelId channelOfEntryKey(byte[] key) {
         if (key.length != 1 + ChannelId.ENCODED_LENGTH) {
             throw new ParsleyFailClosedException(
                     ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,

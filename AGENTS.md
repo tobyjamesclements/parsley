@@ -50,7 +50,7 @@ by reordering, skipping, or adding a timeout. Where the guarantee cannot be uphe
   names no host type, and `CorePurityTest` enforces it by scanning the directory: no clock,
   no network, no Kafka (SPEC Structural 9). Keep it that way.
 - `…/parsley/api`, the public, statically-typed declaration surface: `Parsley`,
-  `ParsleyConfig`, `ProcessDefinition`, `Channel`, `StoreDef`, `Handler`, `Delivery`,
+  `ParsleyConfig`, `ProcessDefinition`, `Channel`, `Store`, `Handler`, `Delivery`,
   `Effects`, `StateReader`, `ProcessStatus`.
 - `…/parsley/kafka`, the Kafka Streams adapter: byte topologies (`ProcessTopology`,
   `ParsleyProcessor`), position facts from the admin client (`AdminFactsSource`), the

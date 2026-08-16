@@ -170,11 +170,11 @@ class StoreCodecCorruptionTest {
     @Test
     void malformedChannelKeysRaiseTheRefusal() {
         byte[] shortKey = {StoreCodec.TAG_FED_UP_TO, 1, 2, 3};
-        assertThrows(ParsleyFailClosedException.class, () -> StoreCodec.channelOfChannelKey(shortKey));
+        assertThrows(ParsleyFailClosedException.class, () -> StoreCodec.channelOfEntryKey(shortKey));
         byte[] longKey = new byte[1 + ChannelId.ENCODED_LENGTH + 1];
         longKey[0] = StoreCodec.TAG_FRONTIER;
-        assertThrows(ParsleyFailClosedException.class, () -> StoreCodec.channelOfChannelKey(longKey));
-        assertEquals(CH, StoreCodec.channelOfChannelKey(StoreCodec.channelKey(StoreCodec.TAG_FED_UP_TO, CH)));
+        assertThrows(ParsleyFailClosedException.class, () -> StoreCodec.channelOfEntryKey(longKey));
+        assertEquals(CH, StoreCodec.channelOfEntryKey(StoreCodec.channelKey(StoreCodec.TAG_FED_UP_TO, CH)));
     }
 
     @Test

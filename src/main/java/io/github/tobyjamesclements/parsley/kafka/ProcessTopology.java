@@ -10,7 +10,7 @@ import java.time.Duration;
 import java.util.Map;
 
 import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
-import io.github.tobyjamesclements.parsley.api.StoreDef;
+import io.github.tobyjamesclements.parsley.api.Store;
 
 /**
  * Builds the Kafka Streams topology for one process.
@@ -92,7 +92,7 @@ final class ProcessTopology {
         topology.addStateStore(Stores.keyValueStoreBuilder(
                 Stores.persistentKeyValueStore(ORDERING_STORE), Serdes.Bytes(), Serdes.ByteArray())
                 .withLoggingEnabled(Map.of("cleanup.policy", "compact")), PROCESSOR);
-        for (StoreDef<?, ?> store : definition.stores()) {
+        for (Store<?, ?> store : definition.stores()) {
             topology.addStateStore(Stores.keyValueStoreBuilder(
                     Stores.persistentKeyValueStore(store.name()), Serdes.Bytes(), Serdes.ByteArray()), PROCESSOR);
         }
