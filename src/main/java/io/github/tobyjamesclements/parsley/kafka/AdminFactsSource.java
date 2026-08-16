@@ -71,7 +71,12 @@ class AdminFactsSource implements FactsSource {
     private final Map<String, Object> probeConsumerProperties;
     private final Map<UUID, String> topicNamesById = new HashMap<>();
 
-    private final Map<UUID, Long> affirmedGoneSince = new HashMap<>();
+    /**
+     * Anchors each open dead-confirmation window. Opened and extended by an affirmed
+     * name-gone answer — except for an id whose name was never learned, where no answer is
+     * possible and the entry rides the longer window instead.
+     */
+    private final Map<UUID, Long> deadWindowSince = new HashMap<>();
 
     private final Set<UUID> confirmedDead = new HashSet<>();
 
@@ -175,7 +180,7 @@ class AdminFactsSource implements FactsSource {
         try {
             liveNames = describeByIds(undescribed);
         } catch (Exception e) {
-            affirmedGoneSince.clear();
+            deadWindowSince.clear();
             throw e;
         }
 
@@ -204,17 +209,17 @@ class AdminFactsSource implements FactsSource {
             String lastKnown = topicNamesById.get(id);
             NameVerdict verdict = classifyName(byNameOutcome, lastKnown, id);
             switch (verdict) {
-                case SAME_ID -> affirmedGoneSince.remove(id);
+                case SAME_ID -> deadWindowSince.remove(id);
                 case RECREATED -> markRecreated(id);
                 case DENIED -> {
-                    affirmedGoneSince.remove(id);
+                    deadWindowSince.remove(id);
                     LOG.warn("{}: describe denied for topic '{}' ({}); treating as denied, not dead",
                             groupId, lastKnown, id);
                 }
                 case NAME_GONE, UNAVAILABLE -> {
                     if (verdict == NameVerdict.NAME_GONE || lastKnown == null) {
                         long window = lastKnown == null ? 4 * deadConfirmationMillis : deadConfirmationMillis;
-                        long since = affirmedGoneSince.computeIfAbsent(id, i -> now);
+                        long since = deadWindowSince.computeIfAbsent(id, i -> now);
                         if (now - since >= window) {
                             markDead(id);
                         }
@@ -223,7 +228,7 @@ class AdminFactsSource implements FactsSource {
                         // name-gone observation is no longer continuous. The window restarts:
                         // a dead verdict is confirmed only by an unbroken run of affirmative
                         // name-gone answers, never by two isolated ones spanning an outage.
-                        affirmedGoneSince.remove(id);
+                        deadWindowSince.remove(id);
                     }
                 }
             }
@@ -237,7 +242,7 @@ class AdminFactsSource implements FactsSource {
         Set<UUID> deadTopicIds = new HashSet<>(confirmedDead);
         Set<UUID> recreatedTopicIds = new HashSet<>(confirmedRecreated);
         for (UUID id : liveNames.keySet()) {
-            affirmedGoneSince.remove(id);
+            deadWindowSince.remove(id);
         }
 
         Map<TopicPartition, OffsetSpec> offsetQueries = new HashMap<>();
@@ -310,7 +315,7 @@ class AdminFactsSource implements FactsSource {
 
     private void markDead(UUID id) {
         confirmedDead.add(id);
-        affirmedGoneSince.remove(id);
+        deadWindowSince.remove(id);
 
         if (!pinnedIds.contains(id)) {
             topicNamesById.remove(id);
@@ -324,7 +329,7 @@ class AdminFactsSource implements FactsSource {
     }
 
     private void forget(UUID id) {
-        affirmedGoneSince.remove(id);
+        deadWindowSince.remove(id);
         topicNamesById.remove(id);
     }
 

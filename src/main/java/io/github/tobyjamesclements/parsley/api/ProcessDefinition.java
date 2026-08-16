@@ -1,7 +1,6 @@
 package io.github.tobyjamesclements.parsley.api;
 
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -131,7 +130,6 @@ public final class ProcessDefinition {
         private final Map<String, Input<?, ?>> inputs = new LinkedHashMap<>();
         private final Map<String, Channel<?, ?>> sends = new LinkedHashMap<>();
         private final Map<String, Store<?, ?>> stores = new LinkedHashMap<>();
-        private final Set<String> storeNames = new LinkedHashSet<>();
 
         private Builder(String name) {
             this.name = name;
@@ -176,10 +174,9 @@ public final class ProcessDefinition {
          */
         public Builder stores(Store<?, ?>... stores) {
             for (Store<?, ?> store : stores) {
-                if (!storeNames.add(store.name())) {
+                if (this.stores.putIfAbsent(store.name(), store) != null) {
                     throw new IllegalArgumentException(name + " already declares store " + store.name());
                 }
-                this.stores.put(store.name(), store);
             }
             return this;
         }
