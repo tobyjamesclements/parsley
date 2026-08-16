@@ -20,6 +20,16 @@ public record ProcessStatus(
         Optional<ParsleyFailClosedException.Reason> refusalReason,
         Optional<String> failureDetail) {
 
+    /**
+     * @throws IllegalArgumentException if any component is null; absence is expressed
+     *         through the empty {@code Optional}s
+     */
+    public ProcessStatus {
+        if (process == null || state == null || refusalReason == null || failureDetail == null) {
+            throw new IllegalArgumentException("every component of a status must be non-null");
+        }
+    }
+
     /** Lifecycle state of a process. */
     public enum State {
         /** Delivering, or waiting for causes to arrive. */

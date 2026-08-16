@@ -347,10 +347,20 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
 
     private <K, V> void send(Effects.Emission<K, V> emission, long timestamp) {
         String topic = emission.channel().topic();
-        if (definition.sendChannel(topic) == null) {
+        Channel<?, ?> declared = definition.sendChannel(topic);
+        if (declared == null) {
             throw new ParsleyFailClosedException(
                     ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL,
                     definition.name() + " emitted to undeclared channel " + topic);
+        }
+        // Identity, not topic name: the emission serializes with its channel's serdes, so a
+        // look-alike instance would bypass what sends(...) declared — the same rule the
+        // store seam applies to reads and writes.
+        if (declared != emission.channel()) {
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL,
+                    definition.name() + " emitted on " + topic + " through a channel other than the"
+                            + " declared one; emissions must use the Channel instance passed to sends(...)");
         }
         RecordHeaders headers = toKafkaHeaders(emission.headers());
         byte[] keyBytes = emission.key() == null

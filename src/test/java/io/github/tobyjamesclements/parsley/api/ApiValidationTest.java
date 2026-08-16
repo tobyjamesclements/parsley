@@ -86,4 +86,65 @@ class ApiValidationTest {
         assertThrows(IllegalArgumentException.class, () -> ProcessDefinition.named("p").build(),
                 "a process with no received channels can never deliver");
     }
+
+    /** Null serdes are refused at declaration, not at first use on the stream thread. */
+    @Test
+    void nullSerdesAreRefusedAtDeclaration() {
+        assertThrows(IllegalArgumentException.class, () -> Channel.of("t", null, Serdes.String()),
+                "a null key serde would otherwise surface as an NPE on the stream thread");
+        assertThrows(IllegalArgumentException.class, () -> Channel.of("t", Serdes.String(), null),
+                "a null value serde would otherwise surface as an NPE on the stream thread");
+        assertThrows(IllegalArgumentException.class, () -> Store.of("s", null, Serdes.String()),
+                "a null store key serde would otherwise surface at the first state access");
+        assertThrows(IllegalArgumentException.class, () -> Store.of("s", Serdes.String(), null),
+                "a null store value serde would otherwise surface at the first state access");
+    }
+
+    /** A null starting position is refused rather than silently meaning LATEST. */
+    @Test
+    void nullStartingPositionIsRefusedNotDefaulted() {
+        Channel<String, String> channel = Channel.of("t", Serdes.String(), Serdes.String());
+        assertThrows(IllegalArgumentException.class, () -> channel.startingAt(null),
+                "null compared unequal to EARLIEST at commit time, which would silently skip"
+                        + " every retained message");
+    }
+
+    /** Names that feed Kafka topic names must satisfy Kafka's topic-name rules. */
+    @Test
+    void namesFeedingKafkaTopicsAreValidatedAsTopicNames() {
+        assertThrows(IllegalArgumentException.class,
+                () -> Channel.of("has space", Serdes.String(), Serdes.String()),
+                "an invalid topic name should fail at declaration, not at topic resolution");
+        assertThrows(IllegalArgumentException.class,
+                () -> Channel.of("a".repeat(250), Serdes.String(), Serdes.String()),
+                "a topic name beyond Kafka's 249-character limit is unusable");
+        assertThrows(IllegalArgumentException.class,
+                () -> Store.of("has space", Serdes.String(), Serdes.String()),
+                "a store name becomes its changelog topic name and must satisfy the same rules");
+        assertThrows(IllegalArgumentException.class,
+                () -> ParsleyConfig.builder("broker:9092", "has space"),
+                "the prefix becomes part of every changelog topic name and must satisfy the same"
+                        + " rules, matching the validation process names already get");
+    }
+
+    /** Null effect targets are refused when the effect is declared. */
+    @Test
+    void nullEffectTargetsAreRefusedAtConstruction() {
+        assertThrows(IllegalArgumentException.class,
+                () -> Effects.builder().send(null, "k", "v"),
+                "a null channel would otherwise fail at commit time inside the step");
+        assertThrows(IllegalArgumentException.class,
+                () -> Effects.builder().send(Channel.of("t", Serdes.String(), Serdes.String()),
+                        "k", "v", null),
+                "null headers would otherwise fail as a bare NPE in the copy");
+        assertThrows(IllegalArgumentException.class,
+                () -> Effects.builder().put(null, "k", "v"),
+                "a null store would otherwise fail at commit time inside the step");
+        assertThrows(IllegalArgumentException.class,
+                () -> Effects.builder().delete(null, "k"),
+                "a null store would otherwise fail at commit time inside the step");
+        assertThrows(IllegalArgumentException.class,
+                () -> ParsleyConfig.builder("broker:9092", "p").streamsProperty(null, "v"),
+                "a null property key would otherwise NPE inside the deny-list check");
+    }
 }

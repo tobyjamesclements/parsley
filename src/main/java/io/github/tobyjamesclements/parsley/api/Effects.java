@@ -35,10 +35,17 @@ public final class Effects {
         /**
          * Copies the headers and rejects any using the reserved prefix.
          *
+         * @throws IllegalArgumentException if {@code channel} or {@code headers} is null
          * @throws io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException
          *         if any header uses {@link CausesCodec#RESERVED_HEADER_PREFIX}
          */
         public Emission {
+            if (channel == null) {
+                throw new IllegalArgumentException("channel must be non-null");
+            }
+            if (headers == null) {
+                throw new IllegalArgumentException("headers must be non-null; pass List.of() for none");
+            }
             headers = List.copyOf(headers);
             for (HeaderKV header : headers) {
                 if (header.key().startsWith(CausesCodec.RESERVED_HEADER_PREFIX)) {
@@ -61,6 +68,14 @@ public final class Effects {
      * @param <V>   value type
      */
     public record StateWrite<K, V>(Store<K, V> store, K key, V value) {
+        /**
+         * @throws IllegalArgumentException if {@code store} is null
+         */
+        public StateWrite {
+            if (store == null) {
+                throw new IllegalArgumentException("store must be non-null");
+            }
+        }
     }
 
     private static final Effects NONE = new Effects(List.of(), List.of());

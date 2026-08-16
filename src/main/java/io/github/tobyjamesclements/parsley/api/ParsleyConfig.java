@@ -132,8 +132,10 @@ public final class ParsleyConfig {
             if (bootstrapServers == null || bootstrapServers.isBlank()) {
                 throw new IllegalArgumentException("bootstrapServers must be non-blank");
             }
-            if (applicationIdPrefix == null || applicationIdPrefix.isBlank()) {
-                throw new IllegalArgumentException("applicationIdPrefix must be non-blank");
+            if (applicationIdPrefix == null || !applicationIdPrefix.matches("[a-zA-Z0-9._-]+")) {
+                throw new IllegalArgumentException("applicationIdPrefix must be non-blank and"
+                        + " [a-zA-Z0-9._-]+, since it prefixes application ids and changelog topic"
+                        + " names: " + applicationIdPrefix);
             }
             this.bootstrapServers = bootstrapServers;
             this.applicationIdPrefix = applicationIdPrefix;
@@ -198,6 +200,9 @@ public final class ParsleyConfig {
          *         {@code processing.guarantee} or {@code isolation.level}
          */
         public Builder streamsProperty(String key, Object value) {
+            if (key == null) {
+                throw new IllegalArgumentException("property key must be non-null");
+            }
             if (FORBIDDEN_KEYS.contains(key) || FORBIDDEN_SUFFIXES.stream().anyMatch(key::endsWith)) {
                 throw new IllegalArgumentException("property " + key + " is owned by parsley and cannot be overridden");
             }

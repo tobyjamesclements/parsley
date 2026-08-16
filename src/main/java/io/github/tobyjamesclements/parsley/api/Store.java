@@ -23,11 +23,18 @@ public final class Store<K, V> {
     private final Serde<V> valueSerde;
 
     private Store(String name, Serde<K> keySerde, Serde<V> valueSerde) {
-        if (name == null || name.isBlank()) {
-            throw new IllegalArgumentException("store name must be non-blank");
+        if (name == null || !name.matches("[a-zA-Z0-9._-]{1,249}")) {
+            throw new IllegalArgumentException("store name must be [a-zA-Z0-9._-] and at most 249"
+                    + " characters, since it names the store's changelog topic: " + name);
         }
         if (name.startsWith(RESERVED_PREFIX)) {
             throw new IllegalArgumentException("store name may not use the reserved prefix " + RESERVED_PREFIX);
+        }
+        if (keySerde == null) {
+            throw new IllegalArgumentException(name + ": keySerde must be non-null");
+        }
+        if (valueSerde == null) {
+            throw new IllegalArgumentException(name + ": valueSerde must be non-null");
         }
         this.name = name;
         this.keySerde = keySerde;
@@ -43,8 +50,8 @@ public final class Store<K, V> {
      * @param <K>        key type
      * @param <V>        value type
      * @return the store definition
-     * @throws IllegalArgumentException if {@code name} is null, blank, or begins with
-     *                                  {@link #RESERVED_PREFIX}
+     * @throws IllegalArgumentException if {@code name} is null, malformed, or begins with
+     *                                  {@link #RESERVED_PREFIX}, or a serde is null
      */
     public static <K, V> Store<K, V> of(String name, Serde<K> keySerde, Serde<V> valueSerde) {
         return new Store<>(name, keySerde, valueSerde);

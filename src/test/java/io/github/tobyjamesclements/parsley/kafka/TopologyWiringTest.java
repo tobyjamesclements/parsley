@@ -269,6 +269,26 @@ class TopologyWiringTest {
                 () -> "expected EMISSION_TO_UNDECLARED_CHANNEL in " + thrown);
     }
 
+    /** Emission through a look-alike channel instance fails the step. */
+    @Test
+    void emissionThroughALookAlikeChannelInstanceFailsTheStep() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Channel<String, String> declared = Channel.of("out", Serdes.String(), Serdes.String());
+        Channel<String, String> lookAlike = Channel.of("out", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) ->
+                        Effects.builder().send(lookAlike, "k", "v").build())
+                .sends(declared)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL),
+                () -> "an emission serializes with its own channel's serdes, so only the instance"
+                        + " passed to sends(...) carries the declared contract; got " + thrown);
+    }
+
     /** Application state reads see earlier writes and tombstones pass through. */
     @Test
     void applicationStateReadsSeeEarlierWritesAndTombstonesPassThrough() {
