@@ -9,8 +9,11 @@ import java.util.regex.Pattern;
  * store names, process names, the application-id prefix — is validated here, so the rule
  * cannot drift between declaration sites. The kafka layer bounds composed changelog names
  * to the same limit at its one composition point ({@code ProcessTopology.changelogName}),
- * which cannot reference this class across packages; the two limits are pinned to agree by
- * the declaration-site and composed-name refusal tests.
+ * which cannot reference this class across packages; each side of that mirror is pinned at
+ * the 249/250 boundary ({@code ApiValidationTest#channelTopicAtExactlyTheLengthLimitIsAccepted}
+ * with {@code #channelTopicsBeyondKafkasLengthLimitAreRefused} here,
+ * {@code TopologyWiringTest#composedChangelogNameIsBoundedAtExactlyKafkasLimit} there), so
+ * the two cannot drift apart with the suite green.
  */
 final class KafkaNames {
 

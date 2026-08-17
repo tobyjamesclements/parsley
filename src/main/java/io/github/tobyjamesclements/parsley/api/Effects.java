@@ -154,6 +154,7 @@ public final class Effects {
          * @param <K>     key type
          * @param <V>     value type
          * @return this builder
+         * @throws IllegalArgumentException if {@code channel} is null
          */
         public <K, V> Builder send(Channel<K, V> channel, K key, V value) {
             emissions.add(new Emission<>(channel, key, value, List.of()));
@@ -170,6 +171,8 @@ public final class Effects {
          * @param <K>     key type
          * @param <V>     value type
          * @return this builder
+         * @throws IllegalArgumentException if {@code channel} or {@code headers} is null,
+         *         or {@code headers} contains a null element
          * @throws io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException
          *         if a header uses the reserved prefix
          */

@@ -59,9 +59,17 @@ final class ClusterTestSupport {
                 .setConfigProp("group.initial.rebalance.delay.ms", "0");
         extraConfigProps.forEach(builder::setConfigProp);
         KafkaClusterTestKit cluster = builder.build();
-        cluster.format();
-        cluster.startup();
-        cluster.waitForReadyBrokers();
+        try {
+            cluster.format();
+            cluster.startup();
+            cluster.waitForReadyBrokers();
+        } catch (Exception e) {
+            // The caller's field is never assigned on failure, so its @AfterAll cannot
+            // release a half-started broker; close it here or its non-daemon threads and
+            // bound ports outlive this suite into the rest of the surefire fork.
+            cluster.close();
+            throw e;
+        }
         return cluster;
     }
 

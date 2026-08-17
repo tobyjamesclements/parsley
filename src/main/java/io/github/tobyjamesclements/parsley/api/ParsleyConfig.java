@@ -59,7 +59,10 @@ public final class ParsleyConfig {
      * @param applicationIdPrefix prefix for each process's Kafka application id, which
      *                            identifies its committed state across restarts
      * @return a builder
-     * @throws IllegalArgumentException if either argument is null or blank
+     * @throws IllegalArgumentException if {@code bootstrapServers} is null or blank, or
+     *         {@code applicationIdPrefix} is not a valid Kafka topic-name component
+     *         ([a-zA-Z0-9._-], at most 249 characters, not '.' or '..'), since it prefixes
+     *         changelog topic names
      */
     public static Builder builder(String bootstrapServers, String applicationIdPrefix) {
         return new Builder(bootstrapServers, applicationIdPrefix);

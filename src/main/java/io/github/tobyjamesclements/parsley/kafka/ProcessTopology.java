@@ -29,8 +29,10 @@ final class ProcessTopology {
 
     /**
      * Kafka's topic-name length limit. Mirrors {@code KafkaNames.MAX_TOPIC_NAME_LENGTH} in
-     * {@code api}, which is package-private there; the declaration-site and composed-name
-     * refusal tests pin the two to agree.
+     * {@code api}, which is package-private there;
+     * {@code TopologyWiringTest#composedChangelogNameIsBoundedAtExactlyKafkasLimit} pins
+     * this side of the mirror at the 249/250 boundary, matching the declaration-site pin
+     * in {@code ApiValidationTest}, so the two cannot drift apart with the suite green.
      */
     private static final int MAX_TOPIC_NAME_LENGTH = 249;
 

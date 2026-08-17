@@ -270,6 +270,23 @@ class TopologyWiringTest {
                 () -> "expected EMISSION_TO_UNDECLARED_CHANNEL in " + thrown);
     }
 
+    /** The composed changelog name is bounded at exactly Kafka's limit. */
+    @Test
+    void composedChangelogNameIsBoundedAtExactlyKafkasLimit() {
+        String applicationId = "app";
+        // applicationId + "-" + store + "-changelog" == 249 characters exactly.
+        String storeAtLimit = "s".repeat(249 - applicationId.length() - 1 - "-changelog".length());
+        assertEquals(249, ProcessTopology.changelogName(applicationId, storeAtLimit).length(),
+                "a composite at exactly 249 characters is Kafka-legal and must compose");
+        assertThrows(IllegalArgumentException.class,
+                () -> ProcessTopology.changelogName(applicationId, storeAtLimit + "s"),
+                "one character past Kafka's limit must refuse; this is the kafka-side boundary"
+                        + " pin that keeps ProcessTopology's mirrored limit agreeing with"
+                        + " KafkaNames' declaration-site limit, which"
+                        + " ApiValidationTest#channelTopicAtExactlyTheLengthLimitIsAccepted pins"
+                        + " at the same boundary");
+    }
+
     /** A look-alike emission serializes with the declared channel's serdes. */
     @Test
     void lookAlikeEmissionSerializesWithTheDeclaredSerdes() {

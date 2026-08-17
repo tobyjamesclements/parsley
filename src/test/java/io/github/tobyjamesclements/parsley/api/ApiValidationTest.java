@@ -103,8 +103,10 @@ class ApiValidationTest {
                 "\"app-orders\" + \"audit-log\" and \"app-orders-audit\" + \"log\" compose the"
                         + " same changelog topic; silently deduping it would have two Streams"
                         + " applications restoring each other's records");
-        assertTrue(e.getMessage().contains("orders") && e.getMessage().contains("orders-audit"),
-                "the refusal names both colliding processes: " + e.getMessage());
+        assertTrue(e.getMessage().contains("processes orders and orders-audit"),
+                "the refusal names both colliding processes — \"orders\" alone is a substring"
+                        + " of \"orders-audit\", so the pin must require the owner's own"
+                        + " mention: " + e.getMessage());
     }
 
     /** Guarantee bearing configuration is unoverridable. */

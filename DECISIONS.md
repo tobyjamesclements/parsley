@@ -2264,7 +2264,7 @@ method names only), so `EVIDENCE.md` is unchanged; the one coupling the compiler
 see — `ProcessorRevivalTest`'s reflective field lookups — fails the suite if the names
 drift, which is the pin these renames need.
 
-### D73 — The api/ surface validates at declaration; the send seam resolves the declared channel by name (resolves ASSESSMENT §1.14 and §1.15's send-set bullet)
+### D73 — The api/ surface validates at declaration; the send seam resolves the declared channel by name (supersedes D62's serde-supply and duplicate-sends choices; resolves ASSESSMENT §1.14 and §1.15's send-set bullet)
 
 **Context**
 
@@ -2318,7 +2318,13 @@ channel's serdes — the way the store seam already writes with its declared sto
 emission instance contributes only the topic name, so a look-alike has no serdes to
 smuggle and reference identity has nothing left to protect; an emission naming a topic
 outside the declared send set still fails the step (`EMISSION_TO_UNDECLARED_CHANNEL`,
-SPEC Structural 19). The store seams keep the identity rule and gain their own reason,
+SPEC Structural 19). This keeps D62's name-matching core but supersedes two of its
+choices: the emission's own `Channel` no longer supplies the serdes (the declared
+channel's are consulted instead — the option D62 never weighed, having compared
+name-matching only against identity-matching), and `sends(...)` now refuses one topic
+declared through two instances, the alternative D62 declined while the first-kept
+instance "was never consulted for emissions" — a premise this entry's serde rule
+invalidates. The store seams keep the identity rule and gain their own reason,
 `STATE_ACCESS_TO_UNDECLARED_STORE`, in place of a bare `IllegalStateException` that
 `ParsleyFailClosedException.findIn` could not surface through `status()`. The asymmetry
 between the seams is deliberate: a store *read* returns a value the caller casts to the
