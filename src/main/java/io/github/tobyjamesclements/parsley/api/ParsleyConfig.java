@@ -132,10 +132,10 @@ public final class ParsleyConfig {
             if (bootstrapServers == null || bootstrapServers.isBlank()) {
                 throw new IllegalArgumentException("bootstrapServers must be non-blank");
             }
-            if (applicationIdPrefix == null || !applicationIdPrefix.matches("[a-zA-Z0-9._-]+")) {
-                throw new IllegalArgumentException("applicationIdPrefix must be non-blank and"
-                        + " [a-zA-Z0-9._-]+, since it prefixes application ids and changelog topic"
-                        + " names: " + applicationIdPrefix);
+            if (!KafkaNames.isValidTopicName(applicationIdPrefix)) {
+                throw new IllegalArgumentException("applicationIdPrefix must be a valid Kafka"
+                        + " topic-name component (" + KafkaNames.RULE + "), since it prefixes"
+                        + " application ids and changelog topic names: " + applicationIdPrefix);
             }
             this.bootstrapServers = bootstrapServers;
             this.applicationIdPrefix = applicationIdPrefix;
@@ -161,9 +161,12 @@ public final class ParsleyConfig {
          *
          * @param factsInterval a positive duration
          * @return this builder
-         * @throws IllegalArgumentException if {@code factsInterval} is zero or negative
+         * @throws IllegalArgumentException if {@code factsInterval} is null, zero or negative
          */
         public Builder factsInterval(Duration factsInterval) {
+            if (factsInterval == null) {
+                throw new IllegalArgumentException("factsInterval must be non-null");
+            }
             if (factsInterval.isNegative() || factsInterval.isZero()) {
                 throw new IllegalArgumentException("factsInterval must be positive");
             }
@@ -196,12 +199,17 @@ public final class ParsleyConfig {
          * @param key   the property name
          * @param value the property value
          * @return this builder
-         * @throws IllegalArgumentException if {@code key} is one Parsley owns, such as
-         *         {@code processing.guarantee} or {@code isolation.level}
+         * @throws IllegalArgumentException if {@code key} or {@code value} is null, or
+         *         {@code key} is one Parsley owns, such as {@code processing.guarantee}
+         *         or {@code isolation.level}
          */
         public Builder streamsProperty(String key, Object value) {
             if (key == null) {
                 throw new IllegalArgumentException("property key must be non-null");
+            }
+            if (value == null) {
+                throw new IllegalArgumentException("property " + key + " must have a non-null"
+                        + " value; a null would only surface as an unattributed NPE at build()");
             }
             if (FORBIDDEN_KEYS.contains(key) || FORBIDDEN_SUFFIXES.stream().anyMatch(key::endsWith)) {
                 throw new IllegalArgumentException("property " + key + " is owned by parsley and cannot be overridden");

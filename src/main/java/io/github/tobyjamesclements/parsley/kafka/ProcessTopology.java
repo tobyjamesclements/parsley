@@ -24,10 +24,42 @@ import io.github.tobyjamesclements.parsley.api.Store;
 final class ProcessTopology {
 
     /** Name of the store holding ordering state. */
-    static final String ORDERING_STORE = "__parsley.ordering";
+    static final String ORDERING_STORE = Store.RESERVED_PREFIX + "ordering";
     private static final String PROCESSOR = "process";
 
+    /**
+     * Kafka's topic-name length limit. Mirrors {@code KafkaNames.MAX_TOPIC_NAME_LENGTH} in
+     * {@code api}, which is package-private there; the declaration-site and composed-name
+     * refusal tests pin the two to agree.
+     */
+    private static final int MAX_TOPIC_NAME_LENGTH = 249;
+
     private ProcessTopology() {
+    }
+
+    /**
+     * The one composition of a store's changelog topic name. Every site that needs the
+     * name — validation and description at start, the held-message scan, and the serde
+     * topic the processor hands to serializers — composes it here, so the spelling cannot
+     * drift: a diverging serde topic would silently change schema-registry subjects.
+     *
+     * <p>Each component is validated at declaration, but only here are they composed; a
+     * composite beyond Kafka's limit would otherwise fail deep inside Streams
+     * internal-topic creation.
+     *
+     * @param applicationId the process's Kafka application id
+     * @param storeName     a declared store name, or {@link #ORDERING_STORE}
+     * @return the changelog topic name
+     * @throws IllegalArgumentException if the composite exceeds Kafka's topic-name limit
+     */
+    static String changelogName(String applicationId, String storeName) {
+        String changelog = applicationId + "-" + storeName + "-changelog";
+        if (changelog.length() > MAX_TOPIC_NAME_LENGTH) {
+            throw new IllegalArgumentException("changelog topic name '" + changelog + "' exceeds"
+                    + " Kafka's " + MAX_TOPIC_NAME_LENGTH + "-character limit; shorten the"
+                    + " applicationIdPrefix, process name or store name");
+        }
+        return changelog;
     }
 
     /**

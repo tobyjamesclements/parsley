@@ -193,7 +193,7 @@ public final class ProcessEngine {
      * here would adopt the remainder as complete and silently under-express causes.
      */
     private void refuseUnversionedState() {
-        for (byte tag : StoreCodec.STATE_TAGS) {
+        for (byte tag : StoreCodec.stateTags()) {
             store.scanPrefix(StoreCodec.tagPrefix(tag), (key, value) -> {
                 throw new ParsleyFailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                         "process " + processName + ": ordering state present without its format version entry;"

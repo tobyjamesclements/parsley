@@ -31,6 +31,32 @@ class StoreCodecCorruptionTest {
     private static final ChannelId CH = new ChannelId(new UUID(1, 2), 0);
     private static final int CAUSE_ENTRY = ChannelId.ENCODED_LENGTH + Long.BYTES;
 
+    /**
+     * A tag constant added to {@link StoreCodec} without an entry in {@code STATE_TAGS}
+     * marks state the changelog-head-loss refusal never scans, so that state silently
+     * escapes the unversioned-state check. This pin reflects over the {@code TAG_} fields
+     * so a new tag fails here, by name, rather than drifting — the same shape as
+     * {@code SabotageModeAlignmentTest}.
+     */
+    @Test
+    void stateTagsCoverEveryTagConstantExceptVersion() throws Exception {
+        java.util.Set<Byte> declaredTags = new java.util.TreeSet<>();
+        for (java.lang.reflect.Field field : StoreCodec.class.getDeclaredFields()) {
+            if (field.getName().startsWith("TAG_") && !field.getName().equals("TAG_VERSION")) {
+                field.setAccessible(true);
+                declaredTags.add(field.getByte(null));
+            }
+        }
+        java.util.Set<Byte> stateTags = new java.util.TreeSet<>();
+        for (byte tag : StoreCodec.stateTags()) {
+            stateTags.add(tag);
+        }
+        assertEquals(declaredTags, stateTags,
+                "STATE_TAGS must equal the TAG_ constants minus TAG_VERSION; the"
+                        + " unversioned-state refusal scans exactly this set");
+        assertFalse(declaredTags.isEmpty(), "the reflection must have found the TAG_ constants");
+    }
+
     /** A valid blob: key "k", value "v", one header ("h", [1]), one cause. */
     private static byte[] validBlob() {
         return StoreCodec.encodeHeld(7L, new byte[] {'k'}, new byte[] {'v'},
@@ -247,7 +273,7 @@ class StoreCodecCorruptionTest {
         engine.onReceive(new ReceivedMessage(CH, 0L, 1L, new byte[] {'k'}, new byte[] {'v'}, List.of()));
 
         MemoryOrderingStore stripped = new MemoryOrderingStore();
-        for (byte tag : StoreCodec.STATE_TAGS) {
+        for (byte tag : StoreCodec.stateTags()) {
             original.scanPrefix(StoreCodec.tagPrefix(tag), stripped::put);
         }
 

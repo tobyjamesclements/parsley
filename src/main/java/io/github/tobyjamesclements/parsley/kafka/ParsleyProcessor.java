@@ -321,6 +321,16 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         if (effects == null) {
             throw new IllegalStateException(definition.name() + ": handler for " + topic + " returned null effects");
         }
+        // Refuse before applying: whether every effect targets a declared store or channel
+        // is a pure function of the definition and the returned Effects, so an undeclared
+        // target must not leave earlier writes in RocksDB or earlier emissions forwarded,
+        // relying on the EOS abort alone to unwind them.
+        for (Effects.StateWrite<?, ?> write : effects.writes()) {
+            requireDeclaredStore(write.store(), "state write");
+        }
+        for (Effects.Emission<?, ?> emission : effects.emissions()) {
+            declaredSendChannel(emission.channel().topic());
+        }
         for (Effects.StateWrite<?, ?> write : effects.writes()) {
             applyWrite(write);
         }
@@ -329,12 +339,36 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         }
     }
 
+    /**
+     * The store seam matches by identity where the send seam matches by name: a store read
+     * returns a value the caller casts to the passed instance's types, so resolving a
+     * look-alike store by name would smuggle a differently-typed codec into the
+     * application's own frame. An emission is write-only and has no such path back.
+     */
+    private void requireDeclaredStore(Store<?, ?> store, String access) {
+        if (definition.store(store.name()) != store) {
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE,
+                    definition.name() + ": " + access + " targets a store not declared by stores(...): "
+                            + store.name()
+                            + (definition.store(store.name()) == null
+                                    ? "" : " (a Store instance other than the declared one)"));
+        }
+    }
+
+    private Channel<?, ?> declaredSendChannel(String topic) {
+        Channel<?, ?> declared = definition.sendChannel(topic);
+        if (declared == null) {
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL,
+                    definition.name() + " emitted to undeclared channel " + topic);
+        }
+        return declared;
+    }
+
     private <K, V> void applyWrite(Effects.StateWrite<K, V> write) {
         Store<K, V> declared = write.store();
-        if (definition.store(declared.name()) != declared) {
-            throw new IllegalStateException(
-                    definition.name() + ": state write to undeclared store " + declared.name());
-        }
+        requireDeclaredStore(declared, "state write");
         KeyValueStore<Bytes, byte[]> store = appStores.get(declared.name());
         String serdeTopic = storeSerdeTopic(declared.name());
         byte[] keyBytes = declared.keySerde().serializer().serialize(serdeTopic, write.key());
@@ -345,28 +379,19 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         }
     }
 
-    private <K, V> void send(Effects.Emission<K, V> emission, long timestamp) {
+    private void send(Effects.Emission<?, ?> emission, long timestamp) {
         String topic = emission.channel().topic();
-        Channel<?, ?> declared = definition.sendChannel(topic);
-        if (declared == null) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL,
-                    definition.name() + " emitted to undeclared channel " + topic);
-        }
-        // Identity, not topic name: the emission serializes with its channel's serdes, so a
-        // look-alike instance would bypass what sends(...) declared — the same rule the
-        // store seam applies to reads and writes.
-        if (declared != emission.channel()) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL,
-                    definition.name() + " emitted on " + topic + " through a channel other than the"
-                            + " declared one; emissions must use the Channel instance passed to sends(...)");
-        }
+        Channel<?, ?> declared = declaredSendChannel(topic);
         RecordHeaders headers = toKafkaHeaders(emission.headers());
+        // The declared channel's serdes produce the bytes, the way the store seam writes
+        // with its declared store: name resolution decides the codec, so a second Channel
+        // instance for a declared topic has no serdes to smuggle past sends(...). A
+        // type-level mismatch between the instances surfaces as the declared serializer's
+        // own ClassCastException, failing the step.
         byte[] keyBytes = emission.key() == null
-                ? null : emission.channel().keySerde().serializer().serialize(topic, headers, emission.key());
+                ? null : serialize(declared.keySerde(), topic, headers, emission.key());
         byte[] valueBytes = emission.value() == null
-                ? null : emission.channel().valueSerde().serializer().serialize(topic, headers, emission.value());
+                ? null : serialize(declared.valueSerde(), topic, headers, emission.value());
         // The emission's own headers were checked at construction, but the serializers were
         // just handed the mutable collection; re-check before the genuine stamp goes on, so
         // a header-writing serializer fails here instead of poisoning every receiver.
@@ -383,7 +408,14 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     }
 
     private String storeSerdeTopic(String storeName) {
-        return context.applicationId() + "-" + storeName + "-changelog";
+        return ProcessTopology.changelogName(context.applicationId(), storeName);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static byte[] serialize(org.apache.kafka.common.serialization.Serde<?> serde, String topic,
+                                    RecordHeaders headers, Object data) {
+        return ((org.apache.kafka.common.serialization.Serializer<Object>) serde.serializer())
+                .serialize(topic, headers, data);
     }
 
     private static RecordHeaders toKafkaHeaders(List<HeaderKV> headers) {
@@ -397,10 +429,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private final class StoreStateReader implements StateReader {
         @Override
         public <K, V> V get(Store<K, V> store, K key) {
-            if (definition.store(store.name()) != store) {
-                throw new IllegalStateException(
-                        definition.name() + ": state read from undeclared store " + store.name());
-            }
+            requireDeclaredStore(store, "state read");
             String serdeTopic = storeSerdeTopic(store.name());
             byte[] keyBytes = store.keySerde().serializer().serialize(serdeTopic, key);
             byte[] valueBytes = appStores.get(store.name()).get(Bytes.wrap(keyBytes));

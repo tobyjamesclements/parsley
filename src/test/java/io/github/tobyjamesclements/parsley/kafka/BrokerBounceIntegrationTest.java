@@ -2,14 +2,9 @@ package io.github.tobyjamesclements.parsley.kafka;
 
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.test.KafkaClusterTestKit;
-import org.apache.kafka.common.test.TestKitNodes;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -20,11 +15,9 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BooleanSupplier;
 
 import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Effects;
@@ -57,31 +50,13 @@ class BrokerBounceIntegrationTest {
 
     @BeforeAll
     static void startCluster() throws Exception {
-        cluster = new KafkaClusterTestKit.Builder(
-                new TestKitNodes.Builder()
-                        .setCombined(true)
-                        .setNumBrokerNodes(1)
-                        .setNumControllerNodes(1)
-                        .build())
-                .setConfigProp("offsets.topic.replication.factor", "1")
-                .setConfigProp("transaction.state.log.replication.factor", "1")
-                .setConfigProp("transaction.state.log.min.isr", "1")
-                .setConfigProp("group.initial.rebalance.delay.ms", "0")
-                .build();
-        cluster.format();
-        cluster.startup();
-        cluster.waitForReadyBrokers();
+        cluster = ClusterTestSupport.startCluster(Map.of());
         admin = Admin.create(Map.of("bootstrap.servers", cluster.bootstrapServers()));
     }
 
     @AfterAll
     static void stopCluster() throws Exception {
-        if (admin != null) {
-            admin.close();
-        }
-        if (cluster != null) {
-            cluster.close();
-        }
+        ClusterTestSupport.stopCluster(cluster, admin);
     }
 
     @Test
@@ -102,8 +77,8 @@ class BrokerBounceIntegrationTest {
                 })
                 .build();
 
-        UUID aTopicId = topicId("bounce-a");
-        produce("bounce-b", "k", "B", new RecordHeader(CausesCodec.HEADER_KEY,
+        UUID aTopicId = ClusterTestSupport.topicId(admin, "bounce-a");
+        ClusterTestSupport.produce(cluster.bootstrapServers(), "bounce-b", "k", "B", new RecordHeader(CausesCodec.HEADER_KEY,
                 CausesCodec.encode(Causes.of(Map.of(new ChannelId(aTopicId, 0), 0L)))));
 
         ParsleyConfig config = ParsleyConfig.builder(cluster.bootstrapServers(), "bounce")
@@ -111,7 +86,7 @@ class BrokerBounceIntegrationTest {
                 .factsInterval(Duration.ofMillis(500))
                 .build();
         try (Parsley parsley = Parsley.start(config, pb)) {
-            awaitFedAndHeld("bounce-pb", "bounce-b", delivered);
+            ClusterTestSupport.awaitFedAndHeld(admin, "bounce-pb", "bounce-b", delivered);
 
             var broker = cluster.brokers().values().iterator().next();
             broker.shutdown();
@@ -124,28 +99,13 @@ class BrokerBounceIntegrationTest {
             assertEquals(List.of(), List.copyOf(delivered),
                     "the outage and recovery must not manufacture evidence that frees the hold");
 
-            produce("bounce-a", "k", "A");
-            await("A then B after the bounce", () -> delivered.size() == 2, Duration.ofSeconds(120));
+            ClusterTestSupport.produce(cluster.bootstrapServers(), "bounce-a", "k", "A");
+            ClusterTestSupport.await("A then B after the bounce", () -> delivered.size() == 2,
+                    Duration.ofSeconds(120));
             assertEquals(List.of("A", "B"), List.copyOf(delivered),
                     "after recovery, real evidence releases the hold in causal order, exactly once");
             assertTrue(parsley.healthy(), "the process must ride out the bounce without failing");
         }
     }
 
-    private static void awaitFedAndHeld(String groupId, String topic,
-                                        ConcurrentLinkedQueue<String> delivered) {
-        ClusterTestSupport.awaitFedAndHeld(admin, groupId, topic, delivered);
-    }
-
-    private static UUID topicId(String topic) throws Exception {
-        return ClusterTestSupport.topicId(admin, topic);
-    }
-
-    private static void produce(String topic, String key, String value, RecordHeader... headers) {
-        ClusterTestSupport.produce(cluster.bootstrapServers(), topic, key, value, headers);
-    }
-
-    private static void await(String what, BooleanSupplier condition, Duration timeout) {
-        ClusterTestSupport.await(what, condition, timeout);
-    }
 }

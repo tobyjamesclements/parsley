@@ -1,7 +1,6 @@
 package io.github.tobyjamesclements.parsley.kafka;
 
 import org.apache.kafka.common.test.KafkaClusterTestKit;
-import org.apache.kafka.common.test.TestKitNodes;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.RecordsToDelete;
@@ -14,8 +13,6 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeader;
-import org.apache.kafka.common.serialization.ByteArrayDeserializer;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -66,32 +63,13 @@ class EndToEndIntegrationTest {
 
     @BeforeAll
     static void startCluster() throws Exception {
-        cluster = new KafkaClusterTestKit.Builder(
-                new TestKitNodes.Builder()
-                        .setCombined(true)
-                        .setNumBrokerNodes(1)
-                        .setNumControllerNodes(1)
-                        .build())
-                .setConfigProp("offsets.topic.replication.factor", "1")
-                .setConfigProp("transaction.state.log.replication.factor", "1")
-                .setConfigProp("transaction.state.log.min.isr", "1")
-                .setConfigProp("group.initial.rebalance.delay.ms", "0")
-                .setConfigProp("log.retention.check.interval.ms", "500")
-                .build();
-        cluster.format();
-        cluster.startup();
-        cluster.waitForReadyBrokers();
+        cluster = ClusterTestSupport.startCluster(Map.of("log.retention.check.interval.ms", "500"));
         admin = Admin.create(Map.of("bootstrap.servers", cluster.bootstrapServers()));
     }
 
     @AfterAll
     static void stopCluster() throws Exception {
-        if (admin != null) {
-            admin.close();
-        }
-        if (cluster != null) {
-            cluster.close();
-        }
+        ClusterTestSupport.stopCluster(cluster, admin);
     }
 
     private static void createTopics(String... names) throws Exception {

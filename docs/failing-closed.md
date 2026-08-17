@@ -28,7 +28,8 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 | `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES` | A received topic was deleted while its messages remain held |
 | `TASK_WIDTH_CHANGED` | The task count changed, so ordering state no longer matches its partitioning |
 | `UNKNOWN_ORDERING_STATE_FORMAT` | Stored state cannot be trusted: a format version this build cannot read, state present without its version entry (the changelog head has been lost), a corrupt entry — malformed key, wrong-length value, or a held blob whose lengths do not match its bytes — or held messages restored out of position order |
-| `EMISSION_TO_UNDECLARED_CHANNEL` | A handler emitted on a channel its process never declared |
+| `EMISSION_TO_UNDECLARED_CHANNEL` | A handler emitted on a topic outside its process's declared send set. Membership is by topic name: an emission on a declared topic is sent (serialized with the declared channel's serdes) whatever `Channel` instance carried it |
+| `STATE_ACCESS_TO_UNDECLARED_STORE` | Application logic read or wrote a store its process never declared, or used a `Store` instance other than the declared one. Every effect target is validated before any write applies, so the refusal leaves no partial step behind |
 | `RESERVED_HEADER_USED` | An application header used the reserved prefix |
 | `APPLICATION_PAYLOAD_UNDECODABLE` | A payload could not be decoded by its declared serde |
 | `SUBSTRATE_MISCONFIGURED` | The substrate is configured in a way the guarantee cannot survive |

@@ -35,7 +35,8 @@ public final class Effects {
         /**
          * Copies the headers and rejects any using the reserved prefix.
          *
-         * @throws IllegalArgumentException if {@code channel} or {@code headers} is null
+         * @throws IllegalArgumentException if {@code channel} or {@code headers} is null,
+         *         or {@code headers} contains a null element
          * @throws io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException
          *         if any header uses {@link CausesCodec#RESERVED_HEADER_PREFIX}
          */
@@ -45,6 +46,12 @@ public final class Effects {
             }
             if (headers == null) {
                 throw new IllegalArgumentException("headers must be non-null; pass List.of() for none");
+            }
+            for (HeaderKV header : headers) {
+                if (header == null) {
+                    throw new IllegalArgumentException(channel.topic()
+                            + ": headers may not contain a null element");
+                }
             }
             headers = List.copyOf(headers);
             for (HeaderKV header : headers) {
@@ -69,11 +76,16 @@ public final class Effects {
      */
     public record StateWrite<K, V>(Store<K, V> store, K key, V value) {
         /**
-         * @throws IllegalArgumentException if {@code store} is null
+         * @throws IllegalArgumentException if {@code store} or {@code key} is null; a null
+         *         key cannot address a store entry and would only surface as the state
+         *         backend's own NPE on the stream thread
          */
         public StateWrite {
             if (store == null) {
                 throw new IllegalArgumentException("store must be non-null");
+            }
+            if (key == null) {
+                throw new IllegalArgumentException(store.name() + ": state write key must be non-null");
             }
         }
     }
@@ -175,7 +187,8 @@ public final class Effects {
          * @param <K>   key type
          * @param <V>   value type
          * @return this builder
-         * @throws IllegalArgumentException if {@code value} is null
+         * @throws IllegalArgumentException if {@code store}, {@code key} or {@code value}
+         *                                  is null
          * @see #delete(Store, Object)
          */
         public <K, V> Builder put(Store<K, V> store, K key, V value) {
@@ -194,6 +207,7 @@ public final class Effects {
          * @param <K>   key type
          * @param <V>   value type
          * @return this builder
+         * @throws IllegalArgumentException if {@code store} or {@code key} is null
          */
         public <K, V> Builder delete(Store<K, V> store, K key) {
             writes.add(new StateWrite<>(store, key, null));

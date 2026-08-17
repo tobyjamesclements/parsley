@@ -32,6 +32,8 @@ public final class ParsleyFailClosedException extends RuntimeException {
         UNKNOWN_ORDERING_STATE_FORMAT,
         /** A handler emitted on a channel its process never declared. */
         EMISSION_TO_UNDECLARED_CHANNEL,
+        /** Application logic read or wrote a store its process never declared. */
+        STATE_ACCESS_TO_UNDECLARED_STORE,
         /** An application header used the prefix reserved for causal metadata. */
         RESERVED_HEADER_USED,
         /** An application payload could not be decoded by its declared serde. */
