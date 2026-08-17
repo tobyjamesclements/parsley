@@ -29,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.ParsleyConfig;
 import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
+import io.github.tobyjamesclements.parsley.api.Store;
 import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
 
 /**
@@ -170,17 +171,40 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     private static void refuseReservedTopicNames(ParsleyConfig config, List<ProcessDefinition> definitions) {
-        Set<String> internal = new HashSet<>();
+        // Composed changelog names must be distinct across every process: process names
+        // are distinct, but composition can still collide ("app-orders" + "audit-log" and
+        // "app-orders-audit" + "log" both give app-orders-audit-log-changelog), and a
+        // silently deduped collision would have two Streams applications sharing one
+        // changelog, each restoring the other's records.
+        Map<String, String> ownerByChangelog = new HashMap<>();
         for (ProcessDefinition definition : definitions) {
             String applicationId = config.applicationIdPrefix() + "-" + definition.name();
-            internal.add(changelogName(applicationId, ProcessTopology.ORDERING_STORE));
-            definition.stores().forEach(store -> internal.add(changelogName(applicationId, store.name())));
+            registerChangelog(ownerByChangelog,
+                    ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE),
+                    definition.name());
+            for (Store<?, ?> store : definition.stores()) {
+                registerChangelog(ownerByChangelog,
+                        ProcessTopology.changelogName(applicationId, store.name()),
+                        definition.name());
+            }
         }
+        // Reserved-namespace containment is not re-checked here: every declared topic came
+        // through Channel's constructor, which refuses it, so a runtime re-check would be
+        // unreachable and unpinnable. Only the composed-name collision can arise at start.
         for (String topic : declaredTopics(definitions)) {
-            if (topic.contains("__parsley.") || internal.contains(topic)) {
+            if (ownerByChangelog.containsKey(topic)) {
                 throw new IllegalArgumentException("topic '" + topic + "' collides with parsley's internal"
                         + " namespace; choose another name");
             }
+        }
+    }
+
+    private static void registerChangelog(Map<String, String> ownerByChangelog, String changelog, String process) {
+        String owner = ownerByChangelog.putIfAbsent(changelog, process);
+        if (owner != null) {
+            throw new IllegalArgumentException("processes " + owner + " and " + process
+                    + " compose the same changelog topic '" + changelog + "'; rename a process or"
+                    + " store so every changelog name is distinct");
         }
     }
 
@@ -228,12 +252,8 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    private static String changelogName(String applicationId, String storeName) {
-        return applicationId + "-" + storeName + "-changelog";
-    }
-
     private java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelog(String applicationId) {
-        String changelog = changelogName(applicationId, ProcessTopology.ORDERING_STORE);
+        String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
         try {
             return java.util.Optional.of(admin.describeTopics(List.of(changelog)).allTopicNames()
                     .get(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(changelog));
@@ -273,7 +293,7 @@ public final class ParsleyRuntime implements AutoCloseable {
         if (!priorState) {
             return;
         }
-        String changelog = changelogName(applicationId, ProcessTopology.ORDERING_STORE);
+        String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
         Map<String, Object> props = new HashMap<>(clientProps);
         props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);

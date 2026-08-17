@@ -36,6 +36,27 @@ final class StoreCodec {
     /** Tag for a held message. */
     static final byte TAG_HELD = 'h';
 
+    /**
+     * Every state tag except {@link #TAG_VERSION}. The unversioned-state refusal iterates
+     * this set; a new tag must be added here, or the state it marks silently escapes the
+     * changelog-head-loss check. {@code StoreCodecCorruptionTest#stateTagsCoverEveryTagConstantExceptVersion}
+     * pins the set against the {@code TAG_} constants by reflection, so a tag added above
+     * without an entry here fails the build rather than drifting.
+     */
+    private static final byte[] STATE_TAGS = {TAG_FED_UP_TO, TAG_FRONTIER, TAG_DELIVERED_PAST,
+            TAG_NAME_BINDING, TAG_HELD};
+
+    /**
+     * Returns every state tag except {@link #TAG_VERSION}, as a copy: the backing array
+     * sits on the fail-closed path, and a shared mutable reference would let one caller
+     * silently weaken the refusal for every other.
+     *
+     * @return every state tag except {@link #TAG_VERSION}
+     */
+    static byte[] stateTags() {
+        return STATE_TAGS.clone();
+    }
+
     /** Version of the key layout as a whole. */
     static final byte STORE_FORMAT_VERSION = 1;
     /** Version of the held-message value encoding. */

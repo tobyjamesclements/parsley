@@ -30,8 +30,22 @@ public final class Channel<K, V> {
     private final InitialPosition initialPosition;
 
     private Channel(String topic, Serde<K> keySerde, Serde<V> valueSerde, InitialPosition initialPosition) {
-        if (topic == null || topic.isBlank()) {
-            throw new IllegalArgumentException("topic must be non-blank");
+        if (!KafkaNames.isValidTopicName(topic)) {
+            throw new IllegalArgumentException("topic must be a valid Kafka topic name ("
+                    + KafkaNames.RULE + "): " + topic);
+        }
+        if (topic.contains(Store.RESERVED_PREFIX)) {
+            throw new IllegalArgumentException("topic may not contain the reserved namespace "
+                    + Store.RESERVED_PREFIX + ", which parsley uses for its own topics: " + topic);
+        }
+        if (keySerde == null) {
+            throw new IllegalArgumentException(topic + ": keySerde must be non-null");
+        }
+        if (valueSerde == null) {
+            throw new IllegalArgumentException(topic + ": valueSerde must be non-null");
+        }
+        if (initialPosition == null) {
+            throw new IllegalArgumentException(topic + ": initialPosition must be non-null");
         }
         this.topic = topic;
         this.keySerde = keySerde;
@@ -48,7 +62,9 @@ public final class Channel<K, V> {
      * @param <K>        key type
      * @param <V>        value type
      * @return the channel
-     * @throws IllegalArgumentException if {@code topic} is null or blank
+     * @throws IllegalArgumentException if {@code topic} is not a valid Kafka topic name,
+     *                                  contains the reserved {@link Store#RESERVED_PREFIX}
+     *                                  namespace, or a serde is null
      */
     public static <K, V> Channel<K, V> of(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
         return new Channel<>(topic, keySerde, valueSerde, InitialPosition.EARLIEST);
@@ -62,6 +78,7 @@ public final class Channel<K, V> {
      *
      * @param initialPosition where to begin reading
      * @return a new channel, leaving this one unchanged
+     * @throws IllegalArgumentException if {@code initialPosition} is null
      */
     public Channel<K, V> startingAt(InitialPosition initialPosition) {
         return new Channel<>(topic, keySerde, valueSerde, initialPosition);

@@ -35,6 +35,7 @@ import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
 import io.github.tobyjamesclements.parsley.core.PositionFacts;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -267,6 +268,280 @@ class TopologyWiringTest {
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
         assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL),
                 () -> "expected EMISSION_TO_UNDECLARED_CHANNEL in " + thrown);
+    }
+
+    /** The composed changelog name is bounded at exactly Kafka's limit. */
+    @Test
+    void composedChangelogNameIsBoundedAtExactlyKafkasLimit() {
+        String applicationId = "app";
+        // applicationId + "-" + store + "-changelog" == 249 characters exactly.
+        String storeAtLimit = "s".repeat(249 - applicationId.length() - 1 - "-changelog".length());
+        assertEquals(249, ProcessTopology.changelogName(applicationId, storeAtLimit).length(),
+                "a composite at exactly 249 characters is Kafka-legal and must compose");
+        assertThrows(IllegalArgumentException.class,
+                () -> ProcessTopology.changelogName(applicationId, storeAtLimit + "s"),
+                "one character past Kafka's limit must refuse; this is the kafka-side boundary"
+                        + " pin that keeps ProcessTopology's mirrored limit agreeing with"
+                        + " KafkaNames' declaration-site limit, which"
+                        + " ApiValidationTest#channelTopicAtExactlyTheLengthLimitIsAccepted pins"
+                        + " at the same boundary");
+    }
+
+    /** A look-alike emission serializes with the declared channel's serdes. */
+    @Test
+    void lookAlikeEmissionSerializesWithTheDeclaredSerdes() {
+        org.apache.kafka.common.serialization.Serializer<String> shouting = new StringSerializer() {
+            @Override
+            public byte[] serialize(String topic, String data) {
+                return data == null ? null : data.toUpperCase(java.util.Locale.ROOT)
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            }
+        };
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Channel<String, String> declared = Channel.of("out", Serdes.String(),
+                Serdes.serdeFrom(shouting, new org.apache.kafka.common.serialization.StringDeserializer()));
+        Channel<String, String> lookAlike = Channel.of("out", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) ->
+                        Effects.builder().send(lookAlike, "k", "v").build())
+                .sends(declared)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes()));
+        TestOutputTopic<byte[], byte[]> outTopic =
+                driver.createOutputTopic("out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
+        assertArrayEquals("V".getBytes(), outTopic.readRecord().value(),
+                "the send seam resolves the declared channel by name and its serdes produce the"
+                        + " bytes, so a second Channel instance for a declared topic has no serdes"
+                        + " to smuggle past sends(...)");
+    }
+
+    /** An emission through a factory-built equal channel instance is sent, not refused. */
+    @Test
+    void emissionThroughAFactoryBuiltChannelInstanceIsSent() {
+        java.util.function.Supplier<Channel<String, String>> outChannel =
+                () -> Channel.of("out", Serdes.String(), Serdes.String());
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) ->
+                        Effects.builder().send(outChannel.get(), delivery.key(), delivery.value()).build())
+                .sends(outChannel.get())
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes()));
+        TestOutputTopic<byte[], byte[]> outTopic =
+                driver.createOutputTopic("out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
+        assertArrayEquals("v".getBytes(), outTopic.readRecord().value(),
+                "a Channel.of factory called at both sends(...) and send(...) names the same"
+                        + " declared topic; an emission on a declared topic must be sent"
+                        + " (SPEC Structural 19)");
+    }
+
+    /** A self-loop re-emitting via the delivered channel instance is sent, not refused. */
+    @Test
+    void selfLoopReEmissionViaTheDeliveredChannelInstanceIsSent() {
+        Channel<String, String> loop = Channel.of("loop", Serdes.String(), Serdes.String());
+        List<String> delivered = new ArrayList<>();
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(loop.startingAt(Channel.InitialPosition.LATEST), (delivery, state) -> {
+                    delivered.add(delivery.value());
+                    return "seed".equals(delivery.value())
+                            ? Effects.builder().send(delivery.channel(), delivery.key(), "echo").build()
+                            : Effects.none();
+                })
+                .sends(loop)
+                .build();
+        newDriver(definition, new FakeFacts(), Map.of("loop", new TopicInfo(new UUID(100, 9), 1)));
+
+        input("loop").pipeInput(new TestRecord<>("k".getBytes(), "seed".getBytes()));
+        assertEquals(List.of("seed", "echo"), delivered,
+                "receives(channel.startingAt(...)) and sends(channel) are distinct instances of"
+                        + " one declared topic, so a handler re-emitting via delivery.channel()"
+                        + " must be sent, not refused");
+    }
+
+    /** A type-mismatched look-alike emission fails closed before any write applies. */
+    @Test
+    void typeMismatchedLookAlikeEmissionFailsClosedBeforeAnyWriteApplies() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Channel<String, Long> declared = Channel.of("out", Serdes.String(), Serdes.Long());
+        Channel<String, String> lookAlike = Channel.of("out", Serdes.String(), Serdes.String());
+        Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> Effects.builder()
+                        .put(store, "k", "v")
+                        .send(lookAlike, "k", "v")
+                        .build())
+                .sends(declared)
+                .stores(store)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
+                () -> "the declared Long serializer cannot serialize the look-alike's String;"
+                        + " the stop must carry its own reason, not a bare ClassCastException; got " + thrown);
+        try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
+            assertFalse(all.hasNext(),
+                    "emissions are serialized in the planning phase, so a serialization refusal"
+                            + " must fire before any state write reaches the store");
+        }
+    }
+
+    /** A swallowed undeclared-store read still fails the step. */
+    @Test
+    void swallowedUndeclaredStoreReadStillFailsTheStep() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
+        Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    try {
+                        state.get(lookAlike, "k");
+                    } catch (RuntimeException swallowed) {
+                        // an application fallback path: the refusal must not be swallowable
+                    }
+                    return Effects.builder().put(declared, "k", "v").build();
+                })
+                .stores(declared)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+                () -> "the reader latches its refusal and deliver() rethrows after the handler"
+                        + " returns, so a catch inside the handler cannot commit the step; got " + thrown);
+        try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
+            assertFalse(all.hasNext(), "no effect of the refused step may apply");
+        }
+    }
+
+    /** A null store on a state read is refused with a message. */
+    @Test
+    void nullStoreOnAStateReadIsRefusedWithAMessage() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    state.get(null, "k");
+                    return Effects.none();
+                })
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(chainContainsIllegalArgument(thrown, "store must be non-null"),
+                () -> "a null store must be refused per the taxonomy, not surface as a bare NPE"
+                        + " from store.name(); got " + thrown);
+    }
+
+    /** A null key on a state read is refused with a message. */
+    @Test
+    void nullKeyOnAStateReadIsRefusedWithAMessage() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    state.get(store, null);
+                    return Effects.none();
+                })
+                .stores(store)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(chainContainsIllegalArgument(thrown, "state read key must be non-null"),
+                () -> "a null read key must be refused like a null write key, not reach the"
+                        + " state backend as null bytes; got " + thrown);
+    }
+
+    private static boolean chainContainsIllegalArgument(Throwable thrown, String messagePart) {
+        for (Throwable cause = thrown; cause != null; cause = cause.getCause()) {
+            if (cause instanceof IllegalArgumentException
+                    && cause.getMessage() != null && cause.getMessage().contains(messagePart)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** A state write ahead of a refused emission is not applied. */
+    @Test
+    void stateWriteAheadOfARefusedEmissionIsNotApplied() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Channel<String, String> undeclared = Channel.of("out", Serdes.String(), Serdes.String());
+        Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> Effects.builder()
+                        .put(store, "k", "v")
+                        .send(undeclared, "k", "v")
+                        .build())
+                .stores(store)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL),
+                () -> "expected EMISSION_TO_UNDECLARED_CHANNEL in " + thrown);
+        try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
+            assertFalse(all.hasNext(),
+                    "every effect target is validated before any write is applied, so a refused"
+                            + " step must not leave earlier writes relying on the EOS abort alone");
+        }
+    }
+
+    /** A state write to an undeclared store fails closed before any write applies. */
+    @Test
+    void stateWriteToAnUndeclaredStoreFailsClosedBeforeAnyWriteApplies() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
+        Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> Effects.builder()
+                        .put(declared, "k", "v")
+                        .put(lookAlike, "k2", "v2")
+                        .build())
+                .stores(declared)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+                () -> "the store seam matches by identity and refuses with its own reason, so"
+                        + " status() can report the refusal; got " + thrown);
+        try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
+            assertFalse(all.hasNext(),
+                    "the declared write ahead of the refused one must not be applied");
+        }
+    }
+
+    /** A state read from an undeclared store fails closed with its own reason. */
+    @Test
+    void stateReadFromAnUndeclaredStoreFailsClosedWithItsOwnReason() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
+        Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    state.get(lookAlike, "k");
+                    return Effects.none();
+                })
+                .stores(declared)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+                () -> "a read through a Store instance other than the declared one would smuggle"
+                        + " a differently-typed codec into the application's frame; got " + thrown);
     }
 
     /** Application state reads see earlier writes and tombstones pass through. */

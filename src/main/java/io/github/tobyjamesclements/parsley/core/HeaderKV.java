@@ -10,11 +10,11 @@ public record HeaderKV(String key, byte[] value) {
     /**
      * Validates the header name.
      *
-     * @throws NullPointerException if {@code key} is null
+     * @throws IllegalArgumentException if {@code key} is null
      */
     public HeaderKV {
         if (key == null) {
-            throw new NullPointerException("header key");
+            throw new IllegalArgumentException("header key must be non-null");
         }
     }
 }

@@ -1,7 +1,6 @@
 package io.github.tobyjamesclements.parsley.kafka;
 
 import org.apache.kafka.common.test.KafkaClusterTestKit;
-import org.apache.kafka.common.test.TestKitNodes;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.RecordsToDelete;
@@ -14,8 +13,6 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeader;
-import org.apache.kafka.common.serialization.ByteArrayDeserializer;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -66,32 +63,13 @@ class EndToEndIntegrationTest {
 
     @BeforeAll
     static void startCluster() throws Exception {
-        cluster = new KafkaClusterTestKit.Builder(
-                new TestKitNodes.Builder()
-                        .setCombined(true)
-                        .setNumBrokerNodes(1)
-                        .setNumControllerNodes(1)
-                        .build())
-                .setConfigProp("offsets.topic.replication.factor", "1")
-                .setConfigProp("transaction.state.log.replication.factor", "1")
-                .setConfigProp("transaction.state.log.min.isr", "1")
-                .setConfigProp("group.initial.rebalance.delay.ms", "0")
-                .setConfigProp("log.retention.check.interval.ms", "500")
-                .build();
-        cluster.format();
-        cluster.startup();
-        cluster.waitForReadyBrokers();
+        cluster = ClusterTestSupport.startCluster(Map.of("log.retention.check.interval.ms", "500"));
         admin = Admin.create(Map.of("bootstrap.servers", cluster.bootstrapServers()));
     }
 
     @AfterAll
     static void stopCluster() throws Exception {
-        if (admin != null) {
-            admin.close();
-        }
-        if (cluster != null) {
-            cluster.close();
-        }
+        ClusterTestSupport.stopCluster(cluster, admin);
     }
 
     private static void createTopics(String... names) throws Exception {
@@ -110,16 +88,7 @@ class EndToEndIntegrationTest {
     }
 
     private static void produce(String topic, String key, String value, RecordHeader... headers) {
-        Properties props = new Properties();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, cluster.bootstrapServers());
-        try (var producer = new KafkaProducer<>(props, new StringSerializer(), new StringSerializer())) {
-            ProducerRecord<String, String> record = new ProducerRecord<>(topic, key, value);
-            for (RecordHeader header : headers) {
-                record.headers().add(header);
-            }
-            producer.send(record);
-            producer.flush();
-        }
+        ClusterTestSupport.produce(cluster.bootstrapServers(), topic, key, value, headers);
     }
 
     private static void produceAborted(String topic, String value) {
@@ -136,46 +105,15 @@ class EndToEndIntegrationTest {
     }
 
     private static List<ConsumerRecord<String, String>> readAllCommitted(String topic) {
-        Properties props = new Properties();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, cluster.bootstrapServers());
-        props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
-        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "reader-" + UUID.randomUUID());
-        List<ConsumerRecord<String, String>> records = new ArrayList<>();
-
-        try (var consumer = new KafkaConsumer<>(props, new StringDeserializer(), new StringDeserializer())) {
-            consumer.subscribe(List.of(topic));
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-            int quietPolls = 0;
-            while (System.nanoTime() < deadline && quietPolls < 4) {
-                ConsumerRecords<String, String> polled = consumer.poll(Duration.ofMillis(250));
-                quietPolls = polled.isEmpty() ? quietPolls + 1 : 0;
-                polled.forEach(records::add);
-            }
-        }
-        return records;
+        return ClusterTestSupport.readAllCommitted(cluster.bootstrapServers(), topic);
     }
 
     private static UUID topicId(String topic) throws Exception {
-        var description = admin.describeTopics(List.of(topic)).allTopicNames().get(30, TimeUnit.SECONDS).get(topic);
-        return new UUID(description.topicId().getMostSignificantBits(),
-                description.topicId().getLeastSignificantBits());
+        return ClusterTestSupport.topicId(admin, topic);
     }
 
     private static void await(String what, BooleanSupplier condition, Duration timeout) {
-        long deadline = System.nanoTime() + timeout.toNanos();
-        while (System.nanoTime() < deadline) {
-            if (condition.getAsBoolean()) {
-                return;
-            }
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new AssertionError("interrupted awaiting " + what);
-            }
-        }
-        throw new AssertionError("timed out awaiting " + what);
+        ClusterTestSupport.await(what, condition, timeout);
     }
 
     private static RecordHeader causesHeader(Map<ChannelId, Long> causes) {
@@ -346,24 +284,8 @@ class EndToEndIntegrationTest {
         }
     }
 
-    /**
-     * Establishes the held premise by evidence rather than elapsed time: the process's
-     * committed read position on the effect's topic reaches past it — so it was fed and its
-     * step committed — while nothing has been delivered. A fixed sleep would let a slow
-     * runner pass the emptiness assertion without the effect ever having been fed.
-     */
     private static void awaitFedAndHeld(String groupId, String topic, ConcurrentLinkedQueue<String> delivered) {
-        await("the effect to be fed and committed", () -> {
-            try {
-                var committed = admin.listConsumerGroupOffsets(groupId).partitionsToOffsetAndMetadata()
-                        .get(30, TimeUnit.SECONDS);
-                var offset = committed.get(new org.apache.kafka.common.TopicPartition(topic, 0));
-                return offset != null && offset.offset() >= 1;
-            } catch (Exception e) {
-                return false; // transient admin failure: not evidence either way, poll again
-            }
-        }, Duration.ofSeconds(60));
-        assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
+        ClusterTestSupport.awaitFedAndHeld(admin, groupId, topic, delivered);
     }
 
     private static void deleteRecursively(java.nio.file.Path root) throws Exception {

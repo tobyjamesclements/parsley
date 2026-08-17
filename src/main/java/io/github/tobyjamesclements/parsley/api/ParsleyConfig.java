@@ -59,7 +59,11 @@ public final class ParsleyConfig {
      * @param applicationIdPrefix prefix for each process's Kafka application id, which
      *                            identifies its committed state across restarts
      * @return a builder
-     * @throws IllegalArgumentException if either argument is null or blank
+     * @throws IllegalArgumentException if {@code bootstrapServers} is null or blank, or
+     *         {@code applicationIdPrefix} does not satisfy
+     *         {@linkplain KafkaNames#isValidTopicName Kafka's topic-name rule} or contains
+     *         the reserved {@link Store#RESERVED_PREFIX} namespace, since it prefixes
+     *         application ids and changelog topic names
      */
     public static Builder builder(String bootstrapServers, String applicationIdPrefix) {
         return new Builder(bootstrapServers, applicationIdPrefix);
@@ -132,8 +136,16 @@ public final class ParsleyConfig {
             if (bootstrapServers == null || bootstrapServers.isBlank()) {
                 throw new IllegalArgumentException("bootstrapServers must be non-blank");
             }
-            if (applicationIdPrefix == null || applicationIdPrefix.isBlank()) {
-                throw new IllegalArgumentException("applicationIdPrefix must be non-blank");
+            if (!KafkaNames.isValidTopicName(applicationIdPrefix)) {
+                throw new IllegalArgumentException("applicationIdPrefix must be a valid Kafka"
+                        + " topic-name component (" + KafkaNames.RULE + "), since it prefixes"
+                        + " application ids and changelog topic names: " + applicationIdPrefix);
+            }
+            if (applicationIdPrefix.contains(Store.RESERVED_PREFIX)) {
+                throw new IllegalArgumentException("applicationIdPrefix may not contain the"
+                        + " reserved namespace " + Store.RESERVED_PREFIX + ": it becomes part of"
+                        + " application ids and changelog topic names, which would then sit inside"
+                        + " parsley's own namespace: " + applicationIdPrefix);
             }
             this.bootstrapServers = bootstrapServers;
             this.applicationIdPrefix = applicationIdPrefix;
@@ -159,9 +171,12 @@ public final class ParsleyConfig {
          *
          * @param factsInterval a positive duration
          * @return this builder
-         * @throws IllegalArgumentException if {@code factsInterval} is zero or negative
+         * @throws IllegalArgumentException if {@code factsInterval} is null, zero or negative
          */
         public Builder factsInterval(Duration factsInterval) {
+            if (factsInterval == null) {
+                throw new IllegalArgumentException("factsInterval must be non-null");
+            }
             if (factsInterval.isNegative() || factsInterval.isZero()) {
                 throw new IllegalArgumentException("factsInterval must be positive");
             }
@@ -194,10 +209,18 @@ public final class ParsleyConfig {
          * @param key   the property name
          * @param value the property value
          * @return this builder
-         * @throws IllegalArgumentException if {@code key} is one Parsley owns, such as
-         *         {@code processing.guarantee} or {@code isolation.level}
+         * @throws IllegalArgumentException if {@code key} or {@code value} is null, or
+         *         {@code key} is one Parsley owns, such as {@code processing.guarantee}
+         *         or {@code isolation.level}
          */
         public Builder streamsProperty(String key, Object value) {
+            if (key == null) {
+                throw new IllegalArgumentException("property key must be non-null");
+            }
+            if (value == null) {
+                throw new IllegalArgumentException("property " + key + " must have a non-null"
+                        + " value; a null would only surface as an unattributed NPE at build()");
+            }
             if (FORBIDDEN_KEYS.contains(key) || FORBIDDEN_SUFFIXES.stream().anyMatch(key::endsWith)) {
                 throw new IllegalArgumentException("property " + key + " is owned by parsley and cannot be overridden");
             }

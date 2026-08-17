@@ -25,12 +25,12 @@ public record ChannelId(UUID topicId, int partition) implements Comparable<Chann
     /**
      * Validates the topic identity and partition.
      *
-     * @throws NullPointerException     if {@code topicId} is null
-     * @throws IllegalArgumentException if {@code partition} is negative
+     * @throws IllegalArgumentException if {@code topicId} is null or {@code partition} is
+     *                                  negative
      */
     public ChannelId {
         if (topicId == null) {
-            throw new NullPointerException("topicId");
+            throw new IllegalArgumentException("topicId must be non-null");
         }
         if (partition < 0) {
             throw new IllegalArgumentException("partition must be non-negative: " + partition);

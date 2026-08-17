@@ -1,21 +1,16 @@
 package io.github.tobyjamesclements.parsley.kafka;
 
 import org.apache.kafka.common.test.KafkaClusterTestKit;
-import org.apache.kafka.common.test.TestKitNodes;
 import org.apache.kafka.clients.admin.Admin;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.consumer.CommitFailedException;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
-import org.apache.kafka.clients.producer.KafkaProducer;
-import org.apache.kafka.clients.producer.ProducerConfig;
-import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.Serdes;
-import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -24,11 +19,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -66,32 +59,13 @@ class BootstrapIntegrationTest {
 
     @BeforeAll
     static void startCluster() throws Exception {
-        cluster = new KafkaClusterTestKit.Builder(
-                new TestKitNodes.Builder()
-                        .setCombined(true)
-                        .setNumBrokerNodes(1)
-                        .setNumControllerNodes(1)
-                        .build())
-                .setConfigProp("offsets.topic.replication.factor", "1")
-                .setConfigProp("transaction.state.log.replication.factor", "1")
-                .setConfigProp("transaction.state.log.min.isr", "1")
-                .setConfigProp("group.initial.rebalance.delay.ms", "0")
-                .setConfigProp("group.min.session.timeout.ms", "1000")
-                .build();
-        cluster.format();
-        cluster.startup();
-        cluster.waitForReadyBrokers();
+        cluster = ClusterTestSupport.startCluster(Map.of("group.min.session.timeout.ms", "1000"));
         admin = Admin.create(Map.of("bootstrap.servers", cluster.bootstrapServers()));
     }
 
     @AfterAll
     static void stopCluster() throws Exception {
-        if (admin != null) {
-            admin.close();
-        }
-        if (cluster != null) {
-            cluster.close();
-        }
+        ClusterTestSupport.stopCluster(cluster, admin);
     }
 
     private static void createTopics(NewTopic... topics) throws Exception {
@@ -106,50 +80,19 @@ class BootstrapIntegrationTest {
     }
 
     private static void produce(String topic, Integer partition, String key, String value, RecordHeader... headers) {
-        Properties props = new Properties();
-        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, cluster.bootstrapServers());
-        try (var producer = new KafkaProducer<>(props, new StringSerializer(), new StringSerializer())) {
-            ProducerRecord<String, String> record = new ProducerRecord<>(topic, partition, key, value);
-            for (RecordHeader header : headers) {
-                record.headers().add(header);
-            }
-            producer.send(record);
-            producer.flush();
-        }
+        ClusterTestSupport.produce(cluster.bootstrapServers(), topic, partition, key, value, headers);
     }
 
     private static UUID topicId(String topic) throws Exception {
-        var description = admin.describeTopics(List.of(topic)).allTopicNames().get(30, TimeUnit.SECONDS).get(topic);
-        return new UUID(description.topicId().getMostSignificantBits(),
-                description.topicId().getLeastSignificantBits());
+        return ClusterTestSupport.topicId(admin, topic);
     }
 
     private static void await(String what, BooleanSupplier condition, Duration timeout) {
-        long deadline = System.nanoTime() + timeout.toNanos();
-        while (System.nanoTime() < deadline) {
-            if (condition.getAsBoolean()) {
-                return;
-            }
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new AssertionError("interrupted awaiting " + what);
-            }
-        }
-        throw new AssertionError("timed out awaiting " + what);
+        ClusterTestSupport.await(what, condition, timeout);
     }
 
     private static void awaitCommitted(String groupId, String topic, long atLeast) {
-        await("group " + groupId + " to commit " + topic + " to " + atLeast, () -> {
-            try {
-                var committed = admin.listConsumerGroupOffsets(groupId).partitionsToOffsetAndMetadata()
-                        .get(10, TimeUnit.SECONDS).get(new TopicPartition(topic, 0));
-                return committed != null && committed.offset() >= atLeast;
-            } catch (Exception e) {
-                return false;
-            }
-        }, Duration.ofSeconds(60));
+        ClusterTestSupport.awaitCommitted(admin, groupId, topic, atLeast);
     }
 
     private static RecordHeader causesHeader(Map<ChannelId, Long> causes) {

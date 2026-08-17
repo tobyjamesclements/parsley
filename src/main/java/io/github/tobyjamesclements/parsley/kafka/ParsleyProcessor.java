@@ -3,6 +3,8 @@ package io.github.tobyjamesclements.parsley.kafka;
 import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
+import org.apache.kafka.common.serialization.Serde;
+import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.streams.processor.Cancellable;
 import org.apache.kafka.streams.processor.PunctuationType;
@@ -27,6 +29,7 @@ import io.github.tobyjamesclements.parsley.api.Effects;
 import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
 import io.github.tobyjamesclements.parsley.api.StateReader;
 import io.github.tobyjamesclements.parsley.api.Store;
+import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.DeliverableMessage;
 import io.github.tobyjamesclements.parsley.core.HeaderKV;
@@ -88,7 +91,15 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private final Map<String, ChannelId> channelByTopic = new HashMap<>();
     private final Map<ChannelId, String> topicByChannel = new HashMap<>();
     private final Map<String, KeyValueStore<Bytes, byte[]>> appStores = new HashMap<>();
+    private final Map<String, String> serdeTopicByStore = new HashMap<>();
     private StateReader stateReader;
+    /**
+     * A fail-closed refusal raised by the state reader inside the handler's frame. The
+     * reader latches it here before throwing, and {@code deliver} rethrows after the
+     * handler returns, so an application catch around its own handler body cannot commit a
+     * step whose reads were refused.
+     */
+    private ParsleyFailClosedException swallowedSeamViolation;
 
     /**
      * @param definition          the process this instance runs
@@ -150,10 +161,16 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                 topicByChannel, new StreamsOrderingStore(orderingStore), metadataBudgetBytes);
 
         appStores.clear();
+        serdeTopicByStore.clear();
         for (Store<?, ?> store : definition.stores()) {
             appStores.put(store.name(), context.getStateStore(store.name()));
+            // Composed once per store: the same name start() validated, recomposing it per
+            // state access would be a dead length check on the hot path.
+            serdeTopicByStore.put(store.name(),
+                    ProcessTopology.changelogName(context.applicationId(), store.name()));
         }
         stateReader = new StoreStateReader();
+        swallowedSeamViolation = null;
 
         factsPunctuator = context.schedule(factsInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
             startGatherIfIdle();
@@ -317,63 +334,133 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
 
         Delivery<K, V> delivery = Delivery.of(channel, message.channel().partition(), message.position(),
                 message.timestamp(), key, value, message.headers());
+        swallowedSeamViolation = null;
         Effects effects = input.handler().handle(delivery, stateReader);
+        if (swallowedSeamViolation != null) {
+            // The reader's refusal was thrown inside the handler's own frame, where an
+            // application catch can swallow it; the latch makes the step fail regardless,
+            // as docs/failing-closed.md promises for every fail-closed event.
+            ParsleyFailClosedException violation = swallowedSeamViolation;
+            swallowedSeamViolation = null;
+            throw violation;
+        }
         if (effects == null) {
             throw new IllegalStateException(definition.name() + ": handler for " + topic + " returned null effects");
         }
+        // Plan, then apply: resolving every effect's declared target and serializing every
+        // payload is a pure function of the definition and the returned Effects, so every
+        // refusal that can be raised here — undeclared target, unserializable payload,
+        // reserved header, exceeded metadata budget — fires before the first write reaches
+        // RocksDB or the first record is forwarded, never relying on the EOS abort alone to
+        // unwind a half-applied step. Apply then consumes the plan, so an effect cannot
+        // reach a store or a sink without having been planned.
+        List<PlannedWrite> writes = new ArrayList<>(effects.writes().size());
         for (Effects.StateWrite<?, ?> write : effects.writes()) {
-            applyWrite(write);
+            writes.add(planWrite(write));
         }
+        List<PlannedSend> sends = new ArrayList<>(effects.emissions().size());
         for (Effects.Emission<?, ?> emission : effects.emissions()) {
-            send(emission, message.timestamp());
+            sends.add(planEmission(emission, message.timestamp()));
+        }
+        for (PlannedWrite write : writes) {
+            if (write.value() == null) {
+                write.store().delete(write.key());
+            } else {
+                write.store().put(write.key(), write.value());
+            }
+        }
+        for (PlannedSend send : sends) {
+            context.forward(send.record(), send.sinkName());
         }
     }
 
-    private <K, V> void applyWrite(Effects.StateWrite<K, V> write) {
-        Store<K, V> declared = write.store();
-        if (definition.store(declared.name()) != declared) {
-            throw new IllegalStateException(
-                    definition.name() + ": state write to undeclared store " + declared.name());
+    /** One resolved, serialized state write, ready to apply. */
+    private record PlannedWrite(KeyValueStore<Bytes, byte[]> store, Bytes key, byte[] value) {}
+
+    /** One resolved, serialized, stamped emission, ready to forward. */
+    private record PlannedSend(Record<byte[], byte[]> record, String sinkName) {}
+
+    /**
+     * The store seam matches by identity where the send seam matches by name: a store read
+     * returns a value the caller casts to the passed instance's types, so resolving a
+     * look-alike store by name would smuggle a differently-typed codec into the
+     * application's own frame. An emission is write-only and has no such path back.
+     */
+    private void requireDeclaredStore(Store<?, ?> store, String access) {
+        if (store == null) {
+            throw new IllegalArgumentException(definition.name() + ": " + access + " store must be non-null");
         }
-        KeyValueStore<Bytes, byte[]> store = appStores.get(declared.name());
-        String serdeTopic = storeSerdeTopic(declared.name());
-        byte[] keyBytes = declared.keySerde().serializer().serialize(serdeTopic, write.key());
-        if (write.value() == null) {
-            store.delete(Bytes.wrap(keyBytes));
-        } else {
-            store.put(Bytes.wrap(keyBytes), declared.valueSerde().serializer().serialize(serdeTopic, write.value()));
+        Store<?, ?> declared = definition.store(store.name());
+        if (declared != store) {
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE,
+                    definition.name() + ": " + access + " targets a store not declared by stores(...): "
+                            + store.name()
+                            + (declared == null ? "" : " (a Store instance other than the declared one)"));
         }
     }
 
-    private <K, V> void send(Effects.Emission<K, V> emission, long timestamp) {
+    private PlannedWrite planWrite(Effects.StateWrite<?, ?> write) {
+        Store<?, ?> declared = write.store();
+        requireDeclaredStore(declared, "state write");
+        String serdeTopic = serdeTopicByStore.get(declared.name());
+        byte[] keyBytes = serialize(declared.keySerde(), serdeTopic, null, write.key());
+        byte[] valueBytes = write.value() == null
+                ? null : serialize(declared.valueSerde(), serdeTopic, null, write.value());
+        return new PlannedWrite(appStores.get(declared.name()), Bytes.wrap(keyBytes), valueBytes);
+    }
+
+    private PlannedSend planEmission(Effects.Emission<?, ?> emission, long timestamp) {
         String topic = emission.channel().topic();
-        if (definition.sendChannel(topic) == null) {
+        Channel<?, ?> declared = definition.sendChannel(topic);
+        if (declared == null) {
             throw new ParsleyFailClosedException(
                     ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL,
                     definition.name() + " emitted to undeclared channel " + topic);
         }
         RecordHeaders headers = toKafkaHeaders(emission.headers());
+        // The declared channel's serdes produce the bytes, the way the store seam writes
+        // with its declared store: name resolution decides the codec, so a second Channel
+        // instance for a declared topic has no serdes to smuggle past sends(...).
         byte[] keyBytes = emission.key() == null
-                ? null : emission.channel().keySerde().serializer().serialize(topic, headers, emission.key());
+                ? null : serialize(declared.keySerde(), topic, headers, emission.key());
         byte[] valueBytes = emission.value() == null
-                ? null : emission.channel().valueSerde().serializer().serialize(topic, headers, emission.value());
+                ? null : serialize(declared.valueSerde(), topic, headers, emission.value());
         // The emission's own headers were checked at construction, but the serializers were
         // just handed the mutable collection; re-check before the genuine stamp goes on, so
         // a header-writing serializer fails here instead of poisoning every receiver.
         for (Header header : headers) {
-            if (header.key().startsWith(io.github.tobyjamesclements.parsley.core.CausesCodec.RESERVED_HEADER_PREFIX)) {
+            if (header.key().startsWith(CausesCodec.RESERVED_HEADER_PREFIX)) {
                 throw new ParsleyFailClosedException(
                         ParsleyFailClosedException.Reason.RESERVED_HEADER_USED,
                         definition.name() + ": serializer for " + topic + " wrote reserved header '"
                                 + header.key() + "'");
             }
         }
-        headers.add(new RecordHeader(io.github.tobyjamesclements.parsley.core.CausesCodec.HEADER_KEY, engine.causesHeaderForEmission()));
-        context.forward(new Record<>(keyBytes, valueBytes, timestamp, headers), ProcessTopology.sinkName(topic));
+        headers.add(new RecordHeader(CausesCodec.HEADER_KEY, engine.causesHeaderForEmission()));
+        return new PlannedSend(new Record<>(keyBytes, valueBytes, timestamp, headers), ProcessTopology.sinkName(topic));
     }
 
-    private String storeSerdeTopic(String storeName) {
-        return context.applicationId() + "-" + storeName + "-changelog";
+    /**
+     * Serializes through the declared serde. A type-level mismatch between a look-alike
+     * effect instance and the declared one lands in the unchecked cast's
+     * {@code ClassCastException}, wrapped with a reason here so the stop is diagnosable —
+     * though a declared serde typed loosely enough to accept any object serializes a
+     * mismatched payload as-is (D73's Cost records this).
+     */
+    @SuppressWarnings("unchecked")
+    private byte[] serialize(Serde<?> serde, String topic, RecordHeaders headers, Object data) {
+        try {
+            Serializer<Object> serializer = (Serializer<Object>) serde.serializer();
+            return headers == null
+                    ? serializer.serialize(topic, data)
+                    : serializer.serialize(topic, headers, data);
+        } catch (RuntimeException e) {
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
+                    definition.name() + ": " + topic + " payload could not be serialized by the"
+                            + " declared serde", e);
+        }
     }
 
     private static RecordHeaders toKafkaHeaders(List<HeaderKV> headers) {
@@ -387,11 +474,16 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private final class StoreStateReader implements StateReader {
         @Override
         public <K, V> V get(Store<K, V> store, K key) {
-            if (definition.store(store.name()) != store) {
-                throw new IllegalStateException(
-                        definition.name() + ": state read from undeclared store " + store.name());
+            try {
+                requireDeclaredStore(store, "state read");
+            } catch (ParsleyFailClosedException e) {
+                swallowedSeamViolation = e;
+                throw e;
             }
-            String serdeTopic = storeSerdeTopic(store.name());
+            if (key == null) {
+                throw new IllegalArgumentException(store.name() + ": state read key must be non-null");
+            }
+            String serdeTopic = serdeTopicByStore.get(store.name());
             byte[] keyBytes = store.keySerde().serializer().serialize(serdeTopic, key);
             byte[] valueBytes = appStores.get(store.name()).get(Bytes.wrap(keyBytes));
             return valueBytes == null ? null : store.valueSerde().deserializer().deserialize(serdeTopic, valueBytes);

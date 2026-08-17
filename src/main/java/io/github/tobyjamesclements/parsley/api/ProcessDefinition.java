@@ -1,5 +1,6 @@
 package io.github.tobyjamesclements.parsley.api;
 
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,6 +27,20 @@ public final class ProcessDefinition {
      * @param <V>     value type
      */
     public record Input<K, V>(Channel<K, V> channel, Handler<K, V> handler) {
+        /**
+         * @throws IllegalArgumentException if {@code channel} or {@code handler} is null;
+         *         a null handler would otherwise surface as an NPE on the stream thread at
+         *         first delivery
+         */
+        public Input {
+            if (channel == null) {
+                throw new IllegalArgumentException("received channel must be non-null");
+            }
+            if (handler == null) {
+                throw new IllegalArgumentException(channel.topic()
+                        + ": handler must be non-null; it is invoked at first delivery on the stream thread");
+            }
+        }
     }
 
     private final String name;
@@ -33,12 +48,16 @@ public final class ProcessDefinition {
     private final Map<String, Channel<?, ?>> sendsByTopic;
     private final Map<String, Store<?, ?>> storesByName;
 
+    // Declaration order is part of the contract: the topology's sources, state stores and
+    // composed changelog names are derived by iterating these, and Map.copyOf randomises
+    // iteration order per JVM, which would make the generated topology nondeterministic
+    // across restarts.
     private ProcessDefinition(String name, Map<String, Input<?, ?>> inputsByTopic,
                               Map<String, Channel<?, ?>> sendsByTopic, Map<String, Store<?, ?>> storesByName) {
         this.name = name;
-        this.inputsByTopic = Map.copyOf(inputsByTopic);
-        this.sendsByTopic = Map.copyOf(sendsByTopic);
-        this.storesByName = Map.copyOf(storesByName);
+        this.inputsByTopic = Collections.unmodifiableMap(new LinkedHashMap<>(inputsByTopic));
+        this.sendsByTopic = Collections.unmodifiableMap(new LinkedHashMap<>(sendsByTopic));
+        this.storesByName = Collections.unmodifiableMap(new LinkedHashMap<>(storesByName));
     }
 
     /**
@@ -47,13 +66,22 @@ public final class ProcessDefinition {
      * <p>The name identifies the process across restarts and appears in its Kafka
      * application id, so changing it starts a process with no committed state.
      *
-     * @param name the process name, matching {@code [a-zA-Z0-9._-]+}
+     * @param name the process name, a valid Kafka topic-name component
      * @return a builder
-     * @throws IllegalArgumentException if {@code name} is null, blank or malformed
+     * @throws IllegalArgumentException if {@code name} is null, malformed, or contains the
+     *         reserved {@link Store#RESERVED_PREFIX} namespace; it becomes part of every
+     *         changelog topic name, so Kafka's topic-name rules apply
      */
     public static Builder named(String name) {
-        if (name == null || name.isBlank() || !name.matches("[a-zA-Z0-9._-]+")) {
-            throw new IllegalArgumentException("process name must be non-blank and [a-zA-Z0-9._-]+: " + name);
+        if (!KafkaNames.isValidTopicName(name)) {
+            throw new IllegalArgumentException("process name must be a valid Kafka topic-name"
+                    + " component (" + KafkaNames.RULE + "), since it names changelog topics: " + name);
+        }
+        if (name.contains(Store.RESERVED_PREFIX)) {
+            throw new IllegalArgumentException("process name may not contain the reserved namespace "
+                    + Store.RESERVED_PREFIX + ": it becomes part of application ids, consumer groups"
+                    + " and changelog topic names, which would then sit inside parsley's own"
+                    + " namespace: " + name);
         }
         return new Builder(name);
     }
@@ -68,9 +96,9 @@ public final class ProcessDefinition {
     }
 
     /**
-     * Returns the topics this process receives.
+     * Returns the topics this process receives, in declaration order.
      *
-     * @return the topics this process receives
+     * @return the topics this process receives, in declaration order
      */
     public Set<String> receivedTopics() {
         return inputsByTopic.keySet();
@@ -87,9 +115,9 @@ public final class ProcessDefinition {
     }
 
     /**
-     * Returns the topics this process may send on.
+     * Returns the topics this process may send on, in declaration order.
      *
-     * @return the topics this process may send on
+     * @return the topics this process may send on, in declaration order
      */
     public Set<String> sendTopics() {
         return sendsByTopic.keySet();
@@ -143,41 +171,81 @@ public final class ProcessDefinition {
          * @param <K>     key type
          * @param <V>     value type
          * @return this builder
-         * @throws IllegalArgumentException if this channel's topic is already received
+         * @throws IllegalArgumentException if {@code channel} or {@code handler} is null,
+         *                                  or this channel's topic is already received
          */
         public <K, V> Builder receives(Channel<K, V> channel, Handler<K, V> handler) {
-            if (inputs.putIfAbsent(channel.topic(), new Input<>(channel, handler)) != null) {
+            Input<K, V> input = new Input<>(channel, handler);
+            if (inputs.putIfAbsent(input.channel().topic(), input) != null) {
                 throw new IllegalArgumentException(name + " already receives " + channel.topic());
             }
             return this;
         }
 
         /**
-         * Declares the channels this process may send on. Repeats are ignored.
+         * Declares the channels this process may send on. Repeats of the same channel are
+         * ignored; the same topic through a different {@code Channel} instance is refused,
+         * because two instances for one topic leave it ambiguous which declared serdes the
+         * emissions on that topic carry.
+         *
+         * <p>The whole argument list is validated before any of it is committed, so a
+         * refused call leaves the builder exactly as it was.
          *
          * @param channels the channels to declare
          * @return this builder
+         * @throws IllegalArgumentException if {@code channels} or an element is null, or a
+         *                                  topic is declared through two different
+         *                                  {@code Channel} instances
          */
         public Builder sends(Channel<?, ?>... channels) {
-            for (Channel<?, ?> channel : channels) {
-                sends.putIfAbsent(channel.topic(), channel);
+            if (channels == null) {
+                throw new IllegalArgumentException(name + ": sends requires a non-null channel array");
             }
+            Map<String, Channel<?, ?>> accepted = new LinkedHashMap<>(sends);
+            for (Channel<?, ?> channel : channels) {
+                if (channel == null) {
+                    throw new IllegalArgumentException(name + ": sent channels must be non-null");
+                }
+                Channel<?, ?> existing = accepted.putIfAbsent(channel.topic(), channel);
+                if (existing != null && existing != channel) {
+                    throw new IllegalArgumentException(name + " already declares sending on "
+                            + channel.topic() + " through a different Channel instance; emissions"
+                            + " on a topic serialize with its declared serdes, so declare each"
+                            + " send topic once");
+                }
+            }
+            // Append-only commit: accepted was seeded from the field and putIfAbsent never
+            // replaced an entry, so earlier declarations keep their order and identity.
+            sends.putAll(accepted);
             return this;
         }
 
         /**
          * Declares the stores this process owns.
          *
+         * <p>The whole argument list is validated before any of it is committed, so a
+         * refused call leaves the builder exactly as it was.
+         *
          * @param stores the stores to declare
          * @return this builder
-         * @throws IllegalArgumentException if a store name is declared twice
+         * @throws IllegalArgumentException if {@code stores} or an element is null, or a
+         *                                  store name is declared twice
          */
         public Builder stores(Store<?, ?>... stores) {
+            if (stores == null) {
+                throw new IllegalArgumentException(name + ": stores requires a non-null store array");
+            }
+            Map<String, Store<?, ?>> accepted = new LinkedHashMap<>(this.stores);
             for (Store<?, ?> store : stores) {
-                if (this.stores.putIfAbsent(store.name(), store) != null) {
+                if (store == null) {
+                    throw new IllegalArgumentException(name + ": declared stores must be non-null");
+                }
+                if (accepted.putIfAbsent(store.name(), store) != null) {
                     throw new IllegalArgumentException(name + " already declares store " + store.name());
                 }
             }
+            // Append-only commit, as in sends().
+            this.stores.putAll(accepted);
             return this;
         }
 

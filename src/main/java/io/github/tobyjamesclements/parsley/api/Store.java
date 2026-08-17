@@ -6,7 +6,9 @@ import org.apache.kafka.common.serialization.Serde;
  * A typed key-value store a process reads and writes.
  *
  * <p>Stores declared here hold application state. Parsley keeps its own ordering state in
- * separate stores under {@link #RESERVED_PREFIX}, which application names may not use.
+ * separate stores under {@link #RESERVED_PREFIX}, which application names may not contain
+ * anywhere: an embedded occurrence would compose a changelog topic name inside parsley's
+ * namespace.
  *
  * @param <K> key type
  * @param <V> value type
@@ -15,7 +17,7 @@ import org.apache.kafka.common.serialization.Serde;
  */
 public final class Store<K, V> {
 
-    /** Name prefix Parsley reserves for its own stores. */
+    /** Namespace Parsley reserves for its own stores and topics; application names may not contain it. */
     public static final String RESERVED_PREFIX = "__parsley.";
 
     private final String name;
@@ -23,11 +25,20 @@ public final class Store<K, V> {
     private final Serde<V> valueSerde;
 
     private Store(String name, Serde<K> keySerde, Serde<V> valueSerde) {
-        if (name == null || name.isBlank()) {
-            throw new IllegalArgumentException("store name must be non-blank");
+        if (!KafkaNames.isValidTopicName(name)) {
+            throw new IllegalArgumentException("store name must be " + KafkaNames.RULE
+                    + ", since it names the store's changelog topic and its local directory: " + name);
         }
-        if (name.startsWith(RESERVED_PREFIX)) {
-            throw new IllegalArgumentException("store name may not use the reserved prefix " + RESERVED_PREFIX);
+        if (name.contains(RESERVED_PREFIX)) {
+            throw new IllegalArgumentException("store name may not contain the reserved namespace "
+                    + RESERVED_PREFIX + ": an embedded occurrence composes a changelog topic name"
+                    + " inside parsley's own namespace: " + name);
+        }
+        if (keySerde == null) {
+            throw new IllegalArgumentException(name + ": keySerde must be non-null");
+        }
+        if (valueSerde == null) {
+            throw new IllegalArgumentException(name + ": valueSerde must be non-null");
         }
         this.name = name;
         this.keySerde = keySerde;
@@ -43,8 +54,8 @@ public final class Store<K, V> {
      * @param <K>        key type
      * @param <V>        value type
      * @return the store definition
-     * @throws IllegalArgumentException if {@code name} is null, blank, or begins with
-     *                                  {@link #RESERVED_PREFIX}
+     * @throws IllegalArgumentException if {@code name} is null, malformed, or contains
+     *                                  {@link #RESERVED_PREFIX}, or a serde is null
      */
     public static <K, V> Store<K, V> of(String name, Serde<K> keySerde, Serde<V> valueSerde) {
         return new Store<>(name, keySerde, valueSerde);

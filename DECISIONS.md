@@ -2263,3 +2263,146 @@ No behaviour changes. Wire format and store key bytes are untouched (the codec r
 method names only), so `EVIDENCE.md` is unchanged; the one coupling the compiler cannot
 see — `ProcessorRevivalTest`'s reflective field lookups — fails the suite if the names
 drift, which is the pin these renames need.
+
+### D73 — The api/ surface validates at declaration; the send seam resolves the declared channel by name (supersedes D62's serde-supply and duplicate-sends choices; resolves ASSESSMENT §1.14 and §1.15's send-set bullet)
+
+**Context**
+
+ASSESSMENT §1.14 recorded topic names validated nowhere beyond non-blankness while the
+runtime's internal namespace grew, and §1.15's "[MUST — Structural 20] send-set matching"
+bullet recorded emissions matched by topic name with the emission instance supplying the
+serdes — an implemented open choice with an identity-matching alternative, unrecorded. A
+focused pass found the surface enforcing well at the effect seams while accepting
+declaration mistakes that surfaced late or silently: a null `startingAt` position compared
+unequal to EARLIEST at commit time and silently meant LATEST; null serdes, handlers and
+effect targets died as NPEs on the stream thread at first use; a malformed
+`applicationIdPrefix` failed deep inside Streams internal-topic creation; and two
+processes could silently compose one changelog topic name, each restoring the other's
+records.
+
+An earlier revision of this entry adopted reference identity at the send seam ("emissions
+must carry the very instance passed to `sends(...)`"). Review showed that rule fails
+closed on the first record — permanently, replaying identically across restarts — for two
+patterns that build cleanly and were legal before it: a `Channel.of` factory method called
+at both `sends()` and `send()` time, and a self-loop declared
+`receives(channel.startingAt(LATEST))` whose handler re-emits via `delivery.channel()`
+(`startingAt` returns a new instance). No declaration-time check can catch either, because
+the emission instance does not exist until the handler runs. SPEC Structural 19 also words
+the obligation by name — an emission "naming a channel outside the declared send set" must
+fail — which identity-matching narrows beyond the spec.
+
+**Decision**
+
+Declaration mistakes fail at the declaration site with `IllegalArgumentException` — the
+one exception type for null or malformed components across `api/` and `core/` alike
+(`HeaderKV` and `ChannelId` previously threw `NullPointerException` while `Causes` and
+every `api/` site threw `IllegalArgumentException` for the identical mistake). `Channel.of`
+and `Store.of` refuse null serdes; `startingAt` refuses null; `receives` refuses a null
+channel or handler; effect targets, header elements, state-write keys, property keys and
+values, and status components are refused at construction with messages naming the
+mistake; `sends(...)` and `stores(...)` validate their whole argument list before
+committing any of it, so a refused call leaves the builder unchanged.
+
+Names that feed Kafka topic names — channel topics, store names, process names,
+`applicationIdPrefix` — share one spelling of Kafka's rule (`KafkaNames`: a precompiled
+pattern, the 249-character bound, `'.'`/`'..'` refused; public, so the kafka layer
+consumes the same bound, applications can pre-validate names, and the spelling is pinned
+sample-for-sample against kafka-clients' own `Topic.isValid` so a client upgrade that
+changes the broker's rule fails the build), and none of the four may *contain* the
+reserved `__parsley.` namespace anywhere — containment, not prefix, because an embedded
+occurrence composes an application id, consumer group or changelog name inside parsley's
+own namespace, whichever component carries it. Changelog names are composed at exactly
+one site (`ProcessTopology.changelogName`, also the serde topic the processor hands
+serializers, so schema-registry subjects cannot drift), bounded there to Kafka's limit,
+and refused at start when two processes compose the same changelog topic.
+`Parsley.start` refuses a null config, a null definitions array and null elements under
+the same taxonomy.
+
+The send seam resolves the declared channel **by name** and serializes with the declared
+channel's serdes — the way the store seam already writes with its declared store. The
+emission instance contributes only the topic name, so a look-alike has no serdes to
+smuggle and reference identity has nothing left to protect; an emission naming a topic
+outside the declared send set still fails the step (`EMISSION_TO_UNDECLARED_CHANNEL`,
+SPEC Structural 19). This keeps D62's name-matching core but supersedes two of its
+choices: the emission's own `Channel` no longer supplies the serdes (the declared
+channel's are consulted instead — the option D62 never weighed, having compared
+name-matching only against identity-matching), and `sends(...)` now refuses one topic
+declared through two instances, the alternative D62 declined while the first-kept
+instance "was never consulted for emissions" — a premise this entry's serde rule
+invalidates. The store seams keep the identity rule and gain their own reason,
+`STATE_ACCESS_TO_UNDECLARED_STORE`, in place of a bare `IllegalStateException` that
+`ParsleyFailClosedException.findIn` could not surface through `status()`. The asymmetry
+between the seams is deliberate: a store *read* returns a value the caller casts to the
+passed instance's types, so resolving a look-alike store by name would smuggle a
+differently-typed codec into the application's own frame; an emission is write-only and
+has no such path back. A read refusal is raised inside the handler's own frame, where an
+application catch could swallow it, so the reader also latches it and the processor
+rethrows once the handler returns — the step fails either way. And the processor plans
+before it applies: every effect target is resolved and every payload serialized (declared
+serdes; a serializer failure is `APPLICATION_PAYLOAD_UNSERIALIZABLE`) across the whole
+returned `Effects` before the first write reaches RocksDB or the first record is
+forwarded, so no refusal — undeclared target, unserializable payload, reserved header,
+exceeded metadata budget — can leave a half-applied step relying on the EOS abort alone.
+
+**Alternatives**
+
+- *Reference identity at the send seam* (this entry's earlier revision). Rejected: breaks
+  the factory and self-loop patterns permanently at first production record, and narrows
+  SPEC Structural 19's name-worded obligation.
+- *Canonicalising one `Channel` instance per topic per definition at `build()`*. Rejected:
+  the factory pattern's emission instance is constructed inside the handler and is
+  invisible to `build()`, so the runtime seam still needs its own rule; and refusing
+  cross-surface instance mismatches at `build()` would refuse the `startingAt` self-loop —
+  the legitimate declaration the identity rule already broke. Its one unambiguous piece
+  survives: `sends(...)` refuses the same topic through two different instances, at the
+  site where the ambiguity is visible.
+- *Keeping the emission instance's serdes* (0.2.0-SNAPSHOT behaviour). Rejected: leaves
+  open the serde-smuggling path §1.15 flagged, for no gain over declared-serde resolution.
+- *`NullPointerException` for null components* (`java.util` convention, `HeaderKV`'s old
+  behaviour). Rejected: message-bearing refusals are the point of this entry, the majority
+  of the surface already threw `IllegalArgumentException`, and one rule beats two.
+- *Keeping the bare `IllegalStateException` at the store seam*. Rejected: `findIn` returns
+  `null` for it, so `status()` reported a guarantee-preserving stop with an empty
+  `refusalReason` and no `Reason` constant existed for the condition at all.
+
+**Cost**
+
+This is a source- and behaviour-breaking change against 0.2.0-SNAPSHOT — nothing else in
+the tree said so before this entry. `Channel.of`, `Store.of`, `ProcessDefinition.named`
+and `ParsleyConfig.builder` now refuse names they accepted: longer than 249 characters,
+`'.'` or `'..'`, or containing `__parsley.` anywhere (process names and prefixes gain the
+length bound and dot refusals). `startingAt(null)`, null serdes, null handlers, null
+effect targets, null header elements, null state-write keys, null property keys and
+values, and null status components now throw where they previously misbehaved later — or,
+for `startingAt`, silently meant LATEST. `sends(...)` refuses a topic declared through two
+instances where it silently kept the first. `HeaderKV` and `ChannelId` throw
+`IllegalArgumentException` where they threw `NullPointerException`. Emissions serialize
+with the declared channel's serdes, so an application that deliberately emitted through a
+second instance carrying different serdes now gets the declared codec's bytes; a
+type-level mismatch surfaces as `APPLICATION_PAYLOAD_UNSERIALIZABLE` during planning,
+before any write applies — though a declared serde typed loosely enough to accept any
+object (a `Serde<Object>`, say) serializes a mismatched payload as-is, which type erasure
+leaves undetectable. Process names and prefixes containing `__parsley.` are refused where
+0.2.0-SNAPSHOT accepted them. Store-seam violations report
+`STATE_ACCESS_TO_UNDECLARED_STORE` instead of a
+bare `IllegalStateException`; supervisors keying on `refusalReason` (D55) see a constant
+that did not exist. Finally, the construction-site refusals throw inside the handler's own
+frame: an application wrapping its effect-building in `catch (RuntimeException)` can
+swallow its own declaration bug and commit an empty step — the shape ASSESSMENT §1.13
+records for the reserved-header refusal, accepted here for the same reason (the refusal
+lands where the bug is, D56 already chose construction-time for headers, and an
+application catching around its own handler owns what it swallows; causal safety is
+unaffected because a swallowed emission was never expressed).
+
+What would catch a violation: `ApiValidationTest` carries one test per refusal, each run
+against the pre-fix tree and red there;
+`TopologyWiringTest#lookAlikeEmissionSerializesWithTheDeclaredSerdes` fails if the send
+seam consults the emission instance's serdes again; `#emissionThroughAFactoryBuiltChannelInstanceIsSent`
+and `#selfLoopReEmissionViaTheDeliveredChannelInstanceIsSent` fail if either broken
+pattern is refused again; `#stateWriteToAnUndeclaredStoreFailsClosedBeforeAnyWriteApplies`
+pins the store-seam reason and the validate-before-apply ordering;
+`#typeMismatchedLookAlikeEmissionFailsClosedBeforeAnyWriteApplies` fails if a mismatched
+emission loses its reason or fires after a write applies;
+`#swallowedUndeclaredStoreReadStillFailsTheStep` fails if the reader's latch is removed;
+and `ApiValidationTest#kafkaNamesAgreesWithKafkaClientsOwnRule` fails if parsley's
+spelling of the topic-name rule drifts from kafka-clients' own.

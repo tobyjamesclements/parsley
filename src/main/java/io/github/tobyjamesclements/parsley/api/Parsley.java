@@ -31,9 +31,21 @@ public final class Parsley implements AutoCloseable {
      * @throws io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException
      *         if a process cannot start without breaching the guarantee, for example when
      *         messages remain held on a channel the definition no longer receives
-     * @throws IllegalArgumentException if the definitions conflict or name no process
+     * @throws IllegalArgumentException if {@code config}, {@code processes} or an element
+     *         is null, or the definitions conflict or name no process
      */
     public static Parsley start(ParsleyConfig config, ProcessDefinition... processes) {
+        if (config == null) {
+            throw new IllegalArgumentException("config must be non-null");
+        }
+        if (processes == null) {
+            throw new IllegalArgumentException("processes must be non-null");
+        }
+        for (ProcessDefinition process : processes) {
+            if (process == null) {
+                throw new IllegalArgumentException("processes must not contain a null element");
+            }
+        }
         return new Parsley(ParsleyRuntime.start(config, List.of(processes)));
     }
 
