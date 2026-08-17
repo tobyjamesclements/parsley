@@ -953,7 +953,11 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 </tr>
 <tr>
 <td><code>EMISSION_TO_UNDECLARED_CHANNEL</code></td>
-<td>A handler emitted on a channel its process never declared</td>
+<td>A handler emitted on a topic outside its process's declared send set. Membership is by topic name: an emission on a declared topic is sent (serialized with the declared channel's serdes) whatever <code>Channel</code> instance carried it</td>
+</tr>
+<tr>
+<td><code>STATE_ACCESS_TO_UNDECLARED_STORE</code></td>
+<td>Application logic read or wrote a store its process never declared, or used a <code>Store</code> instance other than the declared one. Every effect target is validated before any write applies, so the refusal leaves no partial step behind — and a read refusal an application catch swallows is latched and rethrown when the handler returns, so the step still fails</td>
 </tr>
 <tr>
 <td><code>RESERVED_HEADER_USED</code></td>
@@ -962,6 +966,10 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 <tr>
 <td><code>APPLICATION_PAYLOAD_UNDECODABLE</code></td>
 <td>A payload could not be decoded by its declared serde</td>
+</tr>
+<tr>
+<td><code>APPLICATION_PAYLOAD_UNSERIALIZABLE</code></td>
+<td>An effect's payload could not be serialized by its declared serde — including a <code>Channel</code> or <code>Store</code> instance whose types mismatch the declared one. Effects are serialized during planning, before any write applies</td>
 </tr>
 <tr>
 <td><code>SUBSTRATE_MISCONFIGURED</code></td>
