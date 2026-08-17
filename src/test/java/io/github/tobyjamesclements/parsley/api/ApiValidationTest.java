@@ -407,6 +407,75 @@ class ApiValidationTest {
                 "absence is expressed through the empty Optionals, never through null");
     }
 
+    /** A null config is refused by start with a message. */
+    @Test
+    void nullConfigIsRefusedByStart() {
+        ProcessDefinition p = ProcessDefinition.named("p")
+                .receives(channel("t"), (d, s) -> Effects.none())
+                .build();
+        assertThrows(IllegalArgumentException.class, () -> Parsley.start(null, p),
+                "a null config must fail at the entry point per the taxonomy, not NPE inside"
+                        + " the runtime's name validation");
+    }
+
+    /** A null process array is refused by start with a message. */
+    @Test
+    void nullProcessArrayIsRefusedByStart() {
+        assertThrows(IllegalArgumentException.class,
+                () -> Parsley.start(ParsleyConfig.builder("broker:9092", "p").build(),
+                        (ProcessDefinition[]) null),
+                "a null varargs array must be refused per the taxonomy, not surface as"
+                        + " List.of's bare NPE");
+    }
+
+    /** A null process element is refused by start with a message. */
+    @Test
+    void nullProcessElementIsRefusedByStart() {
+        ProcessDefinition p = ProcessDefinition.named("p")
+                .receives(channel("t"), (d, s) -> Effects.none())
+                .build();
+        assertThrows(IllegalArgumentException.class,
+                () -> Parsley.start(ParsleyConfig.builder("broker:9092", "p").build(), p, null),
+                "a null element must be refused per the taxonomy, not surface as List.of's"
+                        + " bare NPE");
+    }
+
+    /** Process names may not contain the reserved namespace. */
+    @Test
+    void processNamesMayNotContainTheReservedNamespace() {
+        assertThrows(IllegalArgumentException.class, () -> ProcessDefinition.named("x__parsley.y"),
+                "a process name containing __parsley. mints application ids, consumer groups"
+                        + " and changelog topics inside parsley's own namespace — the namespace"
+                        + " rule must not depend on which component carries the occurrence");
+    }
+
+    /** The application id prefix may not contain the reserved namespace. */
+    @Test
+    void applicationIdPrefixMayNotContainTheReservedNamespace() {
+        assertThrows(IllegalArgumentException.class,
+                () -> ParsleyConfig.builder("broker:9092", "x__parsley.y"),
+                "a prefix containing __parsley. mints application ids and changelog topics"
+                        + " inside parsley's own namespace");
+    }
+
+    /** KafkaNames agrees with kafka-clients' own rule. */
+    @Test
+    void kafkaNamesAgreesWithKafkaClientsOwnRule() {
+        List<String> samples = new java.util.ArrayList<>(List.of(
+                "", "a", "a.b", "a_b", "a-b", "A9", ".", "..", "...", "a".repeat(249), "a".repeat(250),
+                "has space", "sl/ash", "col:on", "ast*erisk", "unié", "trailing.", "-lead"));
+        for (char c = 0; c < 128; c++) {
+            samples.add("a" + c + "b");
+        }
+        for (String sample : samples) {
+            assertEquals(org.apache.kafka.common.internals.Topic.isValid(sample),
+                    KafkaNames.isValidTopicName(sample),
+                    "KafkaNames must agree with kafka-clients' own Topic.isValid for '" + sample
+                            + "': parsley's spelling of the rule drifting from what the broker"
+                            + " accepts would recreate the late in-Streams failure D73 closed");
+        }
+    }
+
     /** Declaration order is preserved across the definition. */
     @Test
     void declarationOrderIsPreservedAcrossTheDefinition() {

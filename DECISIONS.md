@@ -2305,13 +2305,18 @@ committing any of it, so a refused call leaves the builder unchanged.
 
 Names that feed Kafka topic names — channel topics, store names, process names,
 `applicationIdPrefix` — share one spelling of Kafka's rule (`KafkaNames`: a precompiled
-pattern, the 249-character bound, `'.'`/`'..'` refused), and channel topics and store
-names may not *contain* the reserved `__parsley.` namespace anywhere — containment, not
-prefix, because an embedded occurrence composes a changelog name inside parsley's own
-namespace. Changelog names are composed at exactly one site
-(`ProcessTopology.changelogName`, also the serde topic the processor hands serializers, so
-schema-registry subjects cannot drift), bounded there to Kafka's limit, and refused at
-start when two processes compose the same changelog topic.
+pattern, the 249-character bound, `'.'`/`'..'` refused; public, so the kafka layer
+consumes the same bound, applications can pre-validate names, and the spelling is pinned
+sample-for-sample against kafka-clients' own `Topic.isValid` so a client upgrade that
+changes the broker's rule fails the build), and none of the four may *contain* the
+reserved `__parsley.` namespace anywhere — containment, not prefix, because an embedded
+occurrence composes an application id, consumer group or changelog name inside parsley's
+own namespace, whichever component carries it. Changelog names are composed at exactly
+one site (`ProcessTopology.changelogName`, also the serde topic the processor hands
+serializers, so schema-registry subjects cannot drift), bounded there to Kafka's limit,
+and refused at start when two processes compose the same changelog topic.
+`Parsley.start` refuses a null config, a null definitions array and null elements under
+the same taxonomy.
 
 The send seam resolves the declared channel **by name** and serializes with the declared
 channel's serdes — the way the store seam already writes with its declared store. The
@@ -2330,10 +2335,14 @@ invalidates. The store seams keep the identity rule and gain their own reason,
 between the seams is deliberate: a store *read* returns a value the caller casts to the
 passed instance's types, so resolving a look-alike store by name would smuggle a
 differently-typed codec into the application's own frame; an emission is write-only and
-has no such path back. And every effect target is validated before any effect applies:
-the processor refuses undeclared stores and channels across the whole returned `Effects`
-before the first write reaches RocksDB, so a refusal cannot leave a half-applied step
-relying on the EOS abort alone.
+has no such path back. A read refusal is raised inside the handler's own frame, where an
+application catch could swallow it, so the reader also latches it and the processor
+rethrows once the handler returns — the step fails either way. And the processor plans
+before it applies: every effect target is resolved and every payload serialized (declared
+serdes; a serializer failure is `APPLICATION_PAYLOAD_UNSERIALIZABLE`) across the whole
+returned `Effects` before the first write reaches RocksDB or the first record is
+forwarded, so no refusal — undeclared target, unserializable payload, reserved header,
+exceeded metadata budget — can leave a half-applied step relying on the EOS abort alone.
 
 **Alternatives**
 
@@ -2369,9 +2378,13 @@ for `startingAt`, silently meant LATEST. `sends(...)` refuses a topic declared t
 instances where it silently kept the first. `HeaderKV` and `ChannelId` throw
 `IllegalArgumentException` where they threw `NullPointerException`. Emissions serialize
 with the declared channel's serdes, so an application that deliberately emitted through a
-second instance carrying different serdes now gets the declared codec's bytes (a
-type-level mismatch surfaces as the declared serializer's own `ClassCastException` failing
-the step). Store-seam violations report `STATE_ACCESS_TO_UNDECLARED_STORE` instead of a
+second instance carrying different serdes now gets the declared codec's bytes; a
+type-level mismatch surfaces as `APPLICATION_PAYLOAD_UNSERIALIZABLE` during planning,
+before any write applies — though a declared serde typed loosely enough to accept any
+object (a `Serde<Object>`, say) serializes a mismatched payload as-is, which type erasure
+leaves undetectable. Process names and prefixes containing `__parsley.` are refused where
+0.2.0-SNAPSHOT accepted them. Store-seam violations report
+`STATE_ACCESS_TO_UNDECLARED_STORE` instead of a
 bare `IllegalStateException`; supervisors keying on `refusalReason` (D55) see a constant
 that did not exist. Finally, the construction-site refusals throw inside the handler's own
 frame: an application wrapping its effect-building in `catch (RuntimeException)` can
@@ -2387,4 +2400,9 @@ against the pre-fix tree and red there;
 seam consults the emission instance's serdes again; `#emissionThroughAFactoryBuiltChannelInstanceIsSent`
 and `#selfLoopReEmissionViaTheDeliveredChannelInstanceIsSent` fail if either broken
 pattern is refused again; `#stateWriteToAnUndeclaredStoreFailsClosedBeforeAnyWriteApplies`
-pins the store-seam reason and the validate-before-apply ordering.
+pins the store-seam reason and the validate-before-apply ordering;
+`#typeMismatchedLookAlikeEmissionFailsClosedBeforeAnyWriteApplies` fails if a mismatched
+emission loses its reason or fires after a write applies;
+`#swallowedUndeclaredStoreReadStillFailsTheStep` fails if the reader's latch is removed;
+and `ApiValidationTest#kafkaNamesAgreesWithKafkaClientsOwnRule` fails if parsley's
+spelling of the topic-name rule drifts from kafka-clients' own.

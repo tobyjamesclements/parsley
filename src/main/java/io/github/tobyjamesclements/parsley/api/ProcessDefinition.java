@@ -68,13 +68,20 @@ public final class ProcessDefinition {
      *
      * @param name the process name, a valid Kafka topic-name component
      * @return a builder
-     * @throws IllegalArgumentException if {@code name} is null or malformed; it becomes
-     *         part of every changelog topic name, so Kafka's topic-name rules apply
+     * @throws IllegalArgumentException if {@code name} is null, malformed, or contains the
+     *         reserved {@link Store#RESERVED_PREFIX} namespace; it becomes part of every
+     *         changelog topic name, so Kafka's topic-name rules apply
      */
     public static Builder named(String name) {
         if (!KafkaNames.isValidTopicName(name)) {
             throw new IllegalArgumentException("process name must be a valid Kafka topic-name"
                     + " component (" + KafkaNames.RULE + "), since it names changelog topics: " + name);
+        }
+        if (name.contains(Store.RESERVED_PREFIX)) {
+            throw new IllegalArgumentException("process name may not contain the reserved namespace "
+                    + Store.RESERVED_PREFIX + ": it becomes part of application ids, consumer groups"
+                    + " and changelog topic names, which would then sit inside parsley's own"
+                    + " namespace: " + name);
         }
         return new Builder(name);
     }
@@ -168,10 +175,8 @@ public final class ProcessDefinition {
          *                                  or this channel's topic is already received
          */
         public <K, V> Builder receives(Channel<K, V> channel, Handler<K, V> handler) {
-            if (channel == null) {
-                throw new IllegalArgumentException(name + ": received channel must be non-null");
-            }
-            if (inputs.putIfAbsent(channel.topic(), new Input<>(channel, handler)) != null) {
+            Input<K, V> input = new Input<>(channel, handler);
+            if (inputs.putIfAbsent(input.channel().topic(), input) != null) {
                 throw new IllegalArgumentException(name + " already receives " + channel.topic());
             }
             return this;
@@ -209,7 +214,8 @@ public final class ProcessDefinition {
                             + " send topic once");
                 }
             }
-            sends.clear();
+            // Append-only commit: accepted was seeded from the field and putIfAbsent never
+            // replaced an entry, so earlier declarations keep their order and identity.
             sends.putAll(accepted);
             return this;
         }
@@ -238,7 +244,7 @@ public final class ProcessDefinition {
                     throw new IllegalArgumentException(name + " already declares store " + store.name());
                 }
             }
-            this.stores.clear();
+            // Append-only commit, as in sends().
             this.stores.putAll(accepted);
             return this;
         }

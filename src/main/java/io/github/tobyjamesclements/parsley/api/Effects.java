@@ -47,14 +47,15 @@ public final class Effects {
             if (headers == null) {
                 throw new IllegalArgumentException("headers must be non-null; pass List.of() for none");
             }
-            for (HeaderKV header : headers) {
+            // One snapshot, one pass: checking the caller's mutable list and then copying
+            // it separately would let a mutation between the passes surface as List.copyOf's
+            // bare NPE instead of the refusals documented here.
+            HeaderKV[] snapshot = headers.toArray(new HeaderKV[0]);
+            for (HeaderKV header : snapshot) {
                 if (header == null) {
                     throw new IllegalArgumentException(channel.topic()
                             + ": headers may not contain a null element");
                 }
-            }
-            headers = List.copyOf(headers);
-            for (HeaderKV header : headers) {
                 if (header.key().startsWith(CausesCodec.RESERVED_HEADER_PREFIX)) {
                     throw new io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException(
                             io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.Reason.RESERVED_HEADER_USED,
@@ -62,6 +63,7 @@ public final class Effects {
                                     + CausesCodec.RESERVED_HEADER_PREFIX);
                 }
             }
+            headers = List.of(snapshot);
         }
     }
 

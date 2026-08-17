@@ -9,6 +9,7 @@ import org.apache.kafka.streams.state.Stores;
 import java.time.Duration;
 import java.util.Map;
 
+import io.github.tobyjamesclements.parsley.api.KafkaNames;
 import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
 import io.github.tobyjamesclements.parsley.api.Store;
 
@@ -26,15 +27,6 @@ final class ProcessTopology {
     /** Name of the store holding ordering state. */
     static final String ORDERING_STORE = Store.RESERVED_PREFIX + "ordering";
     private static final String PROCESSOR = "process";
-
-    /**
-     * Kafka's topic-name length limit. Mirrors {@code KafkaNames.MAX_TOPIC_NAME_LENGTH} in
-     * {@code api}, which is package-private there;
-     * {@code TopologyWiringTest#composedChangelogNameIsBoundedAtExactlyKafkasLimit} pins
-     * this side of the mirror at the 249/250 boundary, matching the declaration-site pin
-     * in {@code ApiValidationTest}, so the two cannot drift apart with the suite green.
-     */
-    private static final int MAX_TOPIC_NAME_LENGTH = 249;
 
     private ProcessTopology() {
     }
@@ -56,10 +48,10 @@ final class ProcessTopology {
      */
     static String changelogName(String applicationId, String storeName) {
         String changelog = applicationId + "-" + storeName + "-changelog";
-        if (changelog.length() > MAX_TOPIC_NAME_LENGTH) {
+        if (changelog.length() > KafkaNames.MAX_TOPIC_NAME_LENGTH) {
             throw new IllegalArgumentException("changelog topic name '" + changelog + "' exceeds"
-                    + " Kafka's " + MAX_TOPIC_NAME_LENGTH + "-character limit; shorten the"
-                    + " applicationIdPrefix, process name or store name");
+                    + " Kafka's " + KafkaNames.MAX_TOPIC_NAME_LENGTH + "-character limit; shorten"
+                    + " the applicationIdPrefix, process name or store name");
         }
         return changelog;
     }

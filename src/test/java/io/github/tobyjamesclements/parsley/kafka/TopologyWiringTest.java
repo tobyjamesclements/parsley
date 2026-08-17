@@ -362,6 +362,114 @@ class TopologyWiringTest {
                         + " must be sent, not refused");
     }
 
+    /** A type-mismatched look-alike emission fails closed before any write applies. */
+    @Test
+    void typeMismatchedLookAlikeEmissionFailsClosedBeforeAnyWriteApplies() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Channel<String, Long> declared = Channel.of("out", Serdes.String(), Serdes.Long());
+        Channel<String, String> lookAlike = Channel.of("out", Serdes.String(), Serdes.String());
+        Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> Effects.builder()
+                        .put(store, "k", "v")
+                        .send(lookAlike, "k", "v")
+                        .build())
+                .sends(declared)
+                .stores(store)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
+                () -> "the declared Long serializer cannot serialize the look-alike's String;"
+                        + " the stop must carry its own reason, not a bare ClassCastException; got " + thrown);
+        try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
+            assertFalse(all.hasNext(),
+                    "emissions are serialized in the planning phase, so a serialization refusal"
+                            + " must fire before any state write reaches the store");
+        }
+    }
+
+    /** A swallowed undeclared-store read still fails the step. */
+    @Test
+    void swallowedUndeclaredStoreReadStillFailsTheStep() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
+        Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    try {
+                        state.get(lookAlike, "k");
+                    } catch (RuntimeException swallowed) {
+                        // an application fallback path: the refusal must not be swallowable
+                    }
+                    return Effects.builder().put(declared, "k", "v").build();
+                })
+                .stores(declared)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+                () -> "the reader latches its refusal and deliver() rethrows after the handler"
+                        + " returns, so a catch inside the handler cannot commit the step; got " + thrown);
+        try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
+            assertFalse(all.hasNext(), "no effect of the refused step may apply");
+        }
+    }
+
+    /** A null store on a state read is refused with a message. */
+    @Test
+    void nullStoreOnAStateReadIsRefusedWithAMessage() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    state.get(null, "k");
+                    return Effects.none();
+                })
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(chainContainsIllegalArgument(thrown, "store must be non-null"),
+                () -> "a null store must be refused per the taxonomy, not surface as a bare NPE"
+                        + " from store.name(); got " + thrown);
+    }
+
+    /** A null key on a state read is refused with a message. */
+    @Test
+    void nullKeyOnAStateReadIsRefusedWithAMessage() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    state.get(store, null);
+                    return Effects.none();
+                })
+                .stores(store)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(chainContainsIllegalArgument(thrown, "state read key must be non-null"),
+                () -> "a null read key must be refused like a null write key, not reach the"
+                        + " state backend as null bytes; got " + thrown);
+    }
+
+    private static boolean chainContainsIllegalArgument(Throwable thrown, String messagePart) {
+        for (Throwable cause = thrown; cause != null; cause = cause.getCause()) {
+            if (cause instanceof IllegalArgumentException
+                    && cause.getMessage() != null && cause.getMessage().contains(messagePart)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** A state write ahead of a refused emission is not applied. */
     @Test
     void stateWriteAheadOfARefusedEmissionIsNotApplied() {

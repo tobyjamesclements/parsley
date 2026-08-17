@@ -38,6 +38,8 @@ public final class ParsleyFailClosedException extends RuntimeException {
         RESERVED_HEADER_USED,
         /** An application payload could not be decoded by its declared serde. */
         APPLICATION_PAYLOAD_UNDECODABLE,
+        /** An application payload could not be serialized by its declared serde. */
+        APPLICATION_PAYLOAD_UNSERIALIZABLE,
         /** The substrate is configured in a way the guarantee cannot survive. */
         SUBSTRATE_MISCONFIGURED,
         /** Causal metadata exceeded the configured budget. */

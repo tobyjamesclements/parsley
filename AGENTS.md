@@ -51,7 +51,8 @@ by reordering, skipping, or adding a timeout. Where the guarantee cannot be uphe
   no network, no Kafka (SPEC Structural 9). Keep it that way.
 - `…/parsley/api`, the public, statically-typed declaration surface: `Parsley`,
   `ParsleyConfig`, `ProcessDefinition`, `Channel`, `Store`, `Handler`, `Delivery`,
-  `Effects`, `StateReader`, `ProcessStatus`.
+  `Effects`, `StateReader`, `ProcessStatus`, and `KafkaNames`, the one spelling of the
+  topic-name rule every declared name satisfies.
 - `…/parsley/kafka`, the Kafka Streams adapter: byte topologies (`ProcessTopology`,
   `ParsleyProcessor`), position facts from the admin client (`AdminFactsSource`), the
   store over a Streams state store (`StreamsOrderingStore`), and the EOS lifecycle
@@ -63,7 +64,7 @@ prove it catches each violation class.
 
 ## Verifying anything
 
-- `./mvnw verify` is the full gate: **510 tests, green, roughly four minutes**. It must be
+- `./mvnw verify` is the full gate: **520 tests, green, roughly four minutes**. It must be
   green at every commit, and it grows. It never shrinks.
 - Three layers. Unit tests over the pure core. A **simulation harness** driving real engines
   under a simulated host that honours the spec's Host obligations, over randomised topologies,

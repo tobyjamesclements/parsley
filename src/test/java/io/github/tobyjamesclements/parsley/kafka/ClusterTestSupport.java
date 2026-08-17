@@ -1,16 +1,21 @@
 package io.github.tobyjamesclements.parsley.kafka;
 
 import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
 import org.apache.kafka.clients.producer.KafkaProducer;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.header.internals.RecordHeader;
+import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.apache.kafka.common.test.KafkaClusterTestKit;
 import org.apache.kafka.common.test.TestKitNodes;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
@@ -75,20 +80,48 @@ final class ClusterTestSupport {
 
     /**
      * Releases a suite's cluster resources: the shared producer for the cluster, the admin
-     * client, then the cluster itself. Null-tolerant so a failed startup can still clean up.
+     * client, then the cluster itself. Null-tolerant so a failed startup can still clean
+     * up, and each release is isolated so one failure cannot skip the rest — a skipped
+     * {@code cluster.close()} would leak the broker's non-daemon threads and bound ports
+     * into the rest of the surefire fork. The first failure is rethrown after every
+     * release was attempted, with later ones suppressed.
      */
     static void stopCluster(KafkaClusterTestKit cluster, Admin admin) throws Exception {
+        Exception failure = null;
         if (cluster != null) {
             KafkaProducer<String, String> producer = PRODUCERS.remove(cluster.bootstrapServers());
             if (producer != null) {
-                producer.close(Duration.ofSeconds(10));
+                try {
+                    producer.close(Duration.ofSeconds(10));
+                } catch (Exception e) {
+                    failure = e;
+                }
             }
         }
         if (admin != null) {
-            admin.close();
+            try {
+                admin.close();
+            } catch (Exception e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
         }
         if (cluster != null) {
-            cluster.close();
+            try {
+                cluster.close();
+            } catch (Exception e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 
@@ -128,6 +161,32 @@ final class ClusterTestSupport {
             props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, servers);
             return new KafkaProducer<>(props, new StringSerializer(), new StringSerializer());
         });
+    }
+
+    /**
+     * Drains every committed record of a topic with a fresh read_committed consumer: from
+     * the earliest offset, under a 10-second deadline, stopping after four consecutive
+     * empty 250ms polls — one copy of the drain discipline, so a tightening reaches every
+     * suite that asserts committed output.
+     */
+    static List<ConsumerRecord<String, String>> readAllCommitted(String bootstrapServers, String topic) {
+        Properties props = new Properties();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, "reader-" + UUID.randomUUID());
+        List<ConsumerRecord<String, String>> records = new ArrayList<>();
+        try (var consumer = new KafkaConsumer<>(props, new StringDeserializer(), new StringDeserializer())) {
+            consumer.subscribe(List.of(topic));
+            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+            int quietPolls = 0;
+            while (System.nanoTime() < deadline && quietPolls < 4) {
+                var polled = consumer.poll(Duration.ofMillis(250));
+                quietPolls = polled.isEmpty() ? quietPolls + 1 : 0;
+                polled.forEach(records::add);
+            }
+        }
+        return records;
     }
 
     static UUID topicId(Admin admin, String topic) throws Exception {

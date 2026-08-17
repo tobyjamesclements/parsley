@@ -105,24 +105,7 @@ class EndToEndIntegrationTest {
     }
 
     private static List<ConsumerRecord<String, String>> readAllCommitted(String topic) {
-        Properties props = new Properties();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, cluster.bootstrapServers());
-        props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
-        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "reader-" + UUID.randomUUID());
-        List<ConsumerRecord<String, String>> records = new ArrayList<>();
-
-        try (var consumer = new KafkaConsumer<>(props, new StringDeserializer(), new StringDeserializer())) {
-            consumer.subscribe(List.of(topic));
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-            int quietPolls = 0;
-            while (System.nanoTime() < deadline && quietPolls < 4) {
-                ConsumerRecords<String, String> polled = consumer.poll(Duration.ofMillis(250));
-                quietPolls = polled.isEmpty() ? quietPolls + 1 : 0;
-                polled.forEach(records::add);
-            }
-        }
-        return records;
+        return ClusterTestSupport.readAllCommitted(cluster.bootstrapServers(), topic);
     }
 
     private static UUID topicId(String topic) throws Exception {

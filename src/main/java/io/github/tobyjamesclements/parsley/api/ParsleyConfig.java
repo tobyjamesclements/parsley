@@ -60,9 +60,10 @@ public final class ParsleyConfig {
      *                            identifies its committed state across restarts
      * @return a builder
      * @throws IllegalArgumentException if {@code bootstrapServers} is null or blank, or
-     *         {@code applicationIdPrefix} is not a valid Kafka topic-name component
-     *         ([a-zA-Z0-9._-], at most 249 characters, not '.' or '..'), since it prefixes
-     *         changelog topic names
+     *         {@code applicationIdPrefix} does not satisfy
+     *         {@linkplain KafkaNames#isValidTopicName Kafka's topic-name rule} or contains
+     *         the reserved {@link Store#RESERVED_PREFIX} namespace, since it prefixes
+     *         application ids and changelog topic names
      */
     public static Builder builder(String bootstrapServers, String applicationIdPrefix) {
         return new Builder(bootstrapServers, applicationIdPrefix);
@@ -139,6 +140,12 @@ public final class ParsleyConfig {
                 throw new IllegalArgumentException("applicationIdPrefix must be a valid Kafka"
                         + " topic-name component (" + KafkaNames.RULE + "), since it prefixes"
                         + " application ids and changelog topic names: " + applicationIdPrefix);
+            }
+            if (applicationIdPrefix.contains(Store.RESERVED_PREFIX)) {
+                throw new IllegalArgumentException("applicationIdPrefix may not contain the"
+                        + " reserved namespace " + Store.RESERVED_PREFIX + ": it becomes part of"
+                        + " application ids and changelog topic names, which would then sit inside"
+                        + " parsley's own namespace: " + applicationIdPrefix);
             }
             this.bootstrapServers = bootstrapServers;
             this.applicationIdPrefix = applicationIdPrefix;

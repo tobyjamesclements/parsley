@@ -188,8 +188,11 @@ public final class ParsleyRuntime implements AutoCloseable {
                         definition.name());
             }
         }
+        // Reserved-namespace containment is not re-checked here: every declared topic came
+        // through Channel's constructor, which refuses it, so a runtime re-check would be
+        // unreachable and unpinnable. Only the composed-name collision can arise at start.
         for (String topic : declaredTopics(definitions)) {
-            if (topic.contains(Store.RESERVED_PREFIX) || ownerByChangelog.containsKey(topic)) {
+            if (ownerByChangelog.containsKey(topic)) {
                 throw new IllegalArgumentException("topic '" + topic + "' collides with parsley's internal"
                         + " namespace; choose another name");
             }

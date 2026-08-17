@@ -28,7 +28,7 @@ To package without running the tests:
 ./mvnw test
 ```
 
-510 tests, taking roughly four minutes. Integration tests start an embedded KRaft broker in
+520 tests, taking roughly four minutes. Integration tests start an embedded KRaft broker in
 the same JVM, so nothing external needs to be running.
 
 Run one class, or one method:

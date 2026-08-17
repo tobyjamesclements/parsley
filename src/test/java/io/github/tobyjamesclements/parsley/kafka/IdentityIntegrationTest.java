@@ -134,26 +134,12 @@ class IdentityIntegrationTest {
     }
 
     private static List<Causes> emittedCauses(String topic) {
-        Properties props = new Properties();
-        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, cluster.bootstrapServers());
-        props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
-        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
-        props.put(ConsumerConfig.GROUP_ID_CONFIG, "reader-" + UUID.randomUUID());
         List<Causes> causes = new ArrayList<>();
-        try (var consumer = new KafkaConsumer<>(props, new StringDeserializer(), new StringDeserializer())) {
-            consumer.subscribe(List.of(topic));
-            long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
-            int quietPolls = 0;
-            while (System.nanoTime() < deadline && quietPolls < 4) {
-                ConsumerRecords<String, String> polled = consumer.poll(Duration.ofMillis(250));
-                quietPolls = polled.isEmpty() ? quietPolls + 1 : 0;
-                polled.forEach(record -> {
-                    try {
-                        causes.add(CausesCodec.decode(record.headers().lastHeader(CausesCodec.HEADER_KEY).value()));
-                    } catch (CausesCodec.UndecodableMetadataException e) {
-                        throw new AssertionError("emitted an undecodable header", e);
-                    }
-                });
+        for (var record : ClusterTestSupport.readAllCommitted(cluster.bootstrapServers(), topic)) {
+            try {
+                causes.add(CausesCodec.decode(record.headers().lastHeader(CausesCodec.HEADER_KEY).value()));
+            } catch (CausesCodec.UndecodableMetadataException e) {
+                throw new AssertionError("emitted an undecodable header", e);
             }
         }
         return causes;
