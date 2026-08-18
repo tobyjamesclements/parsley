@@ -1,7 +1,9 @@
 # Failing closed
 
 Where the guarantee cannot be upheld, a process stops delivering. It stays stopped, and
-re-fails on restart, until an operator intervenes.
+re-fails on restart, until an operator intervenes — with one recorded exception:
+`COVERED_POSITION_FED` raised because this execution was superseded does not recur, and a
+restart recovers it (the reason's row below, and its exception message, say so).
 
 A fail-closed event throws `ParsleyFailClosedException` out of the processor, which fails the
 task's step. The transaction aborts, and nothing is delivered past the failure.
@@ -24,7 +26,7 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 | `POSITIONS_DISCARDED_UNREAD` | A read position at or below the log-start offset, so discarded positions cannot be assumed empty — whether detected by the engine's log-start check mid-run, or at start when a lost read position would be re-established beyond the ordering state's covered position |
 | `OUT_OF_ORDER_FEED` | The host fed a channel out of position order within one execution, or fed a channel recorded as no longer existing |
 | `COVERED_POSITION_FED` | A message arrived at a position a read-position report had already covered as fed-or-never-arriving. Either the report was false, or this execution was superseded and a facts round observed its successor's committed progress — a superseded execution's step cannot commit, a restart recovers, and the refusal then does not recur |
-| `ORDERING_STATE_LOST` | Committed read positions stamped by a previous Kafka Streams execution exist while the ordering-store changelog does not; the state of the most recent committed step has been lost, and resuming would silently under-express every cause delivered before the loss |
+| `ORDERING_STATE_LOST` | Committed read positions the bootstrap did not write (a previous Kafka Streams execution's stamp, or bare external commits) exist while the ordering-store changelog does not. If a prior execution ran, the state of its most recent committed step has been lost and resuming would silently under-express every cause delivered before the loss |
 | `CHANNEL_REMOVED_WITH_HELD_MESSAGES` | A declaration removed a channel that still holds messages |
 | `CHANNEL_IDENTITY_CHANGED` | A topic resolves to an identity other than the one recorded |
 | `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES` | A received topic was deleted while its messages remain held |

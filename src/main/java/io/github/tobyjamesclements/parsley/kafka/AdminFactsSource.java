@@ -216,26 +216,22 @@ class AdminFactsSource implements FactsSource {
                     LOG.warn("{}: describe denied for topic '{}' ({}); treating as denied, not dead",
                             groupId, lastKnown, id);
                 }
-                case NAME_GONE, UNAVAILABLE -> {
-                    if (verdict == NameVerdict.NAME_GONE) {
-                        long since = deadWindowSince.computeIfAbsent(id, i -> now);
-                        if (now - since >= deadConfirmationMillis) {
-                            markDead(id);
-                        }
-                    } else {
-                        // Either the name was asked about but the answer did not arrive —
-                        // the name-gone observation is no longer continuous and the window
-                        // restarts — or no name was ever learned for this id, where no
-                        // corroborating answer is possible at all. Absence of evidence
-                        // alone never confirms death: a DENY-Describe ACL makes a live
-                        // topic describe unknown by id, and for a nameless id there is no
-                        // by-name answer to reveal the denial, so a time-only verdict here
-                        // would prune a live cause (SPEC Structural 13). The id lingers
-                        // unconfirmed — costing expression size, never safety — until its
-                        // name is learned or its topic reappears.
-                        deadWindowSince.remove(id);
+                case NAME_GONE -> {
+                    long since = deadWindowSince.computeIfAbsent(id, i -> now);
+                    if (now - since >= deadConfirmationMillis) {
+                        markDead(id);
                     }
                 }
+                // Either the name was asked about but the answer did not arrive — the
+                // name-gone observation is no longer continuous and the window restarts —
+                // or no name was ever learned for this id, where no corroborating answer
+                // is possible at all. Absence of evidence alone never confirms death: a
+                // DENY-Describe ACL makes a live topic describe unknown by id, and for a
+                // nameless id there is no by-name answer to reveal the denial, so a
+                // time-only verdict here would prune a live cause (SPEC Structural 13).
+                // The id lingers unconfirmed — costing expression size, never safety —
+                // until its name is learned or its topic reappears.
+                case UNAVAILABLE -> deadWindowSince.remove(id);
             }
         }
         for (UUID id : deadIdsToRecheck) {

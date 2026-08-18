@@ -476,6 +476,37 @@ class TopologyWiringTest {
                         + " reason, latched past any application catch; got " + thrown);
     }
 
+    /**
+     * The Serializer contract permits signalling failure by returning null; on a state
+     * read that must not surface as the store's bare NPE inside the handler's frame,
+     * where an application catch could swallow it and commit the step.
+     */
+    @Test
+    void nullReturningKeySerializerOnAStateReadFailsClosedEvenWhenSwallowed() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        org.apache.kafka.common.serialization.Serde<String> nullKeySerde =
+                Serdes.serdeFrom((topic, data) -> null, Serdes.String().deserializer());
+        Store<String, String> store = Store.of("app-store", nullKeySerde, Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    try {
+                        state.get(store, "k");
+                    } catch (RuntimeException swallowed) {
+                        // an application fallback path: the refusal must not be swallowable
+                    }
+                    return Effects.none();
+                })
+                .stores(store)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
+                () -> "a key serialized to null cannot address a store entry and must fail the"
+                        + " step with its reason, latched past any application catch; got " + thrown);
+    }
+
     /** A null store on a state read is refused with a message. */
     @Test
     void nullStoreOnAStateReadIsRefusedWithAMessage() {

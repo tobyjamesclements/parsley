@@ -48,6 +48,11 @@ public final class OrderingStateInspector {
      * doing so would fabricate a read-position report claiming positions were fed or will
      * never arrive when they were simply discarded unread.
      *
+     * <p>A channel settled on its topic's confirmed deletion carries the engine's
+     * fed-to-end sentinel, {@code Long.MAX_VALUE} — everything covered. It is returned
+     * verbatim; arithmetic on a returned value must not assume it can be incremented
+     * without overflow.
+     *
      * @param latestPerKey the ordering state, as the latest value per key
      * @return per channel, the highest position covered as fed-or-never-arriving
      * @throws ParsleyFailClosedException if a coverage entry is corrupt

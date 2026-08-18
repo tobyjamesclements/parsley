@@ -329,10 +329,54 @@ class BootstrapIntegrationTest {
     }
 
     /**
+     * The lost-state scan covers every group offset, not only the declared partitions: a
+     * declaration change alongside the changelog loss must not hide a formerly-received
+     * partition's Streams-stamped evidence.
+     */
+    @Test
+    void lostChangelogWithOffsetsOnAFormerlyReceivedTopicRefusesToStart() throws Exception {
+        createTopics(new NewTopic("lostb-a", 1, (short) 1), new NewTopic("lostb-b", 1, (short) 1));
+        Channel<String, String> a = Channel.of("lostb-a", Serdes.String(), Serdes.String());
+        Channel<String, String> b = Channel.of("lostb-b", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition receivingA = ProcessDefinition.named("lostb")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("lostb"), receivingA)) {
+            produce("lostb-a", null, "k", "m0");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+            awaitCommitted("lostb-lostb", "lostb-a", 1);
+        }
+
+        String changelog = "lostb-lostb-__parsley.ordering-changelog";
+        admin.deleteTopics(List.of(changelog)).all().get(30, TimeUnit.SECONDS);
+        await("the changelog deletion to propagate", () -> {
+            try {
+                admin.describeTopics(List.of(changelog)).allTopicNames().get(10, TimeUnit.SECONDS);
+                return false;
+            } catch (Exception e) {
+                return e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
+            }
+        }, Duration.ofSeconds(30));
+
+        ProcessDefinition receivingB = ProcessDefinition.named("lostb")
+                .receives(b, (d, s) -> Effects.none())
+                .build();
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+                () -> Parsley.start(config("lostb"), receivingB),
+                "the formerly-received partition's stamped offsets are the evidence of the loss");
+        assertEquals(ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+    }
+
+    /**
      * The counterpart bound: a first-start bootstrap that crashed after committing initial
-     * positions also leaves offsets without a changelog, but its commits carry no metadata
-     * where Kafka Streams stamps every commit with its own. Recovery from that crash must
-     * start, not refuse.
+     * positions also leaves offsets without a changelog, but its commits carry the
+     * bootstrap's own stamp where Kafka Streams overwrites every commit with its own.
+     * Recovery from that crash must start, not refuse.
      */
     @Test
     void bootstrapCommittedOffsetsWithoutAChangelogStillStart() throws Exception {
@@ -341,7 +385,8 @@ class BootstrapIntegrationTest {
         clientProps.put("bootstrap.servers", cluster.bootstrapServers());
         try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, "boot-boot")) {
             committer.join(Set.of("boot-in"), Duration.ofSeconds(30));
-            committer.commit(Map.of(new TopicPartition("boot-in", 0), new OffsetAndMetadata(0)));
+            committer.commit(Map.of(new TopicPartition("boot-in", 0),
+                    new OffsetAndMetadata(0, ParsleyRuntime.BOOTSTRAP_OFFSET_STAMP)));
         }
 
         Channel<String, String> in = Channel.of("boot-in", Serdes.String(), Serdes.String());

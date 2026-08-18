@@ -2444,10 +2444,31 @@ is legitimate (D31 governs its dedupe), so it is deliberately not treated as cov
 
 **Cost**
 
-One inspector pass per start. D36's cost note now reads: slower, never lossy — and refusing outright where
-retention outran the stopped process, availability spent on Safety 8. Pinned by
+One inspector pass per start. D36's recorded cost — "slower, never lossy" — is corrected by this record, not
+edited in place: slower, never lossy, and refusing outright where retention outran the stopped process —
+availability spent on Safety 8. Pinned by
 `BootstrapIntegrationTest#expiredOffsetsBeyondRetentionRefuseRatherThanAbsorbTheGap` (red on the pre-fix tree:
 the start succeeded and silently absorbed the gap).
+
+Three shapes of the refusal's conservatism, found by review and accepted:
+
+* The comparison is spelled `offset - 1 > covered` rather than `offset > covered + 1`: coverage can be the
+  engine's fed-to-end sentinel (`Long.MAX_VALUE`, a dead-settled channel), which the addition would wrap to a
+  refusal of every offset; the engine's own truncation check excludes the sentinel the same way.
+* The gap between coverage and the log start may in truth have held only transaction markers or aborted
+  batches — a fully-drained transactional topic whose retention then expires everything leaves exactly a
+  one-marker gap — but once discarded nothing can show that, and Safety 8 forbids assuming it. Such an expiry
+  restart refuses and needs a deliberate reset; with a plain producer the identical history starts clean.
+* A channel that left the declaration keeps its coverage record (D25 never drops it). If its offsets expire
+  and retention crosses that coverage while it is away, re-adding it now refuses rather than resuming at the
+  log start — the positions in the gap were discarded without this process ever covering them, which is the
+  condition Safety 8 names, whether or not the process was subscribed while they aged out. D25's
+  expiry-rejoin flow stands only while retention has not crossed the retained coverage.
+
+One residual stays open, recorded rather than closed: a partition whose prior execution committed no step at
+all (bootstrap crash after the changelog was created but before the first task commit) leaves no coverage
+record, and its re-established position is indistinguishable from a first start — no durable evidence exists
+either way, and refusing would break every legitimate channel-join (D31's exemption is the same judgement).
 
 ### D75 — A nameless topic id is never confirmed dead; corrects D44's four-fold window
 
@@ -2504,27 +2525,43 @@ obligation 5 breach, and the Host-obligations preamble requires failing closed o
 
 **Decision**
 
-When no prior state is found, a committed offset on any received partition carrying non-empty metadata refuses
-the start (`ORDERING_STATE_LOST`). Kafka Streams stamps every offset commit with its own encoded metadata,
-where the bootstrap committer writes bare offsets — so the stamp discriminates a prior Streams execution
-(fatal: its state is gone) from a first-start bootstrap that crashed between committing initial positions and
-Streams creating the changelog (benign: recovery must start, and still does).
+The bootstrap stamps every offset it commits with its own marker (`parsley.bootstrap`, in the offset
+metadata). When no prior state is found, any committed group offset carrying anything other than that stamp
+refuses the start (`ORDERING_STATE_LOST`): a non-marker stamp is a prior Kafka Streams execution's (Streams
+overwrites offset metadata with its own encoded stamp on every commit — D33 records the overwrite, here
+load-bearing in reverse), and bare metadata is external tooling's; either way the offsets were not left by a
+crashed first-start bootstrap, and the ordering state that must have accompanied a prior execution is gone.
+Keying on our own stamp rather than on Streams' stamp being non-empty makes the refusal hold by construction
+under toolchain drift: a future Streams that committed empty metadata would still refuse, not silently resume.
+
+Two review corrections to this record's earlier revision are folded in. The scan covers every offset in the
+group, not only the currently-declared partitions — a declaration change alongside the state loss must not
+hide a formerly-received partition's evidence. And because the admin listing silently omits any partition
+whose offset has a pending transactional commit (partition-level `UNSTABLE_OFFSET_COMMIT` is skipped, not
+failed, by the admin client), the slow path re-runs the refusal against the group member's own `committed()`
+fetch, which the consumer always issues transaction-stable and retries until pending commits resolve.
 
 **Alternatives**
 
 * Refusing on any offsets-without-changelog — rejected: refuses the crashed-bootstrap recovery, a legitimate
   first-start path with no state to lose.
-* A persisted first-start marker — rejected: any marker co-located with the state shares the state's fate, and
-  group-offset metadata is overwritten by Streams' own commits (D33) — which is here load-bearing in reverse:
-  the overwrite is precisely what proves a Streams execution committed.
+* A persisted first-start marker elsewhere — rejected: any marker co-located with the state shares the
+  state's fate.
+* Keying on "non-empty metadata means Streams" without a bootstrap stamp (this record's earlier revision) —
+  superseded: it fails open if a Streams version ever commits empty metadata, and it cannot tell external
+  tooling's bare offsets from a crashed bootstrap's.
 
 **Cost**
 
-The discrimination rides on Streams stamping commit metadata, verified against the pinned toolchain and pinned
-behaviourally: `BootstrapIntegrationTest#lostOrderingChangelogWithSurvivingOffsetsRefusesToStart` fails if the
-refusal regresses to the silent empty resume, and `#bootstrapCommittedOffsetsWithoutAChangelogStillStart` fails
-if the refusal overreaches into bootstrap crash recovery. A Streams version that stopped stamping metadata
-would degrade the refusal back to the silent resume — and fail the first pin.
+Offsets pre-seeded into the group by external tooling before a first start are now refused rather than
+adopted — deliberate: initial positions are declared through the API (D9), and the refusal's remedy (delete
+the group's offsets) is stated in its message. Pinned behaviourally:
+`BootstrapIntegrationTest#lostOrderingChangelogWithSurvivingOffsetsRefusesToStart` fails if the refusal
+regresses to the silent empty resume, and `#bootstrapCommittedOffsetsWithoutAChangelogStillStart` fails if it
+overreaches into bootstrap crash recovery. Residual: a formerly-received partition whose offset is pending a
+transactional commit at the pre-check instant, on a start whose declaration no longer names it, is invisible
+to both checks — reaching it needs the changelog loss, the declaration change and the crash mid-commit to
+coincide; recorded rather than papered over.
 
 ### D77 — A report/feed contradiction has its own reason; OUT_OF_ORDER_FEED is feed order alone
 
@@ -2613,12 +2650,23 @@ starts.
 
 **Decision**
 
-The pre-check lists offsets with `requireStable(true)` — an unstable answer means a live lifetime, and
-refusing to proceed is D48's stance already. The committer consumer runs `read_committed`, making its
-`committed()` a stable fetch. `readOrderingChangelog` targets the read_uncommitted end offsets and tolerates
-empty polls up to the stall deadline (30s, comfortably above the 10s default transaction timeout), so an
-orphaned open transaction resolves before the scan concludes rather than truncating it. The committed-offsets
-fetch moves before the confirming describe, putting both name-keyed queries inside the same confirmed window.
+The pre-check lists offsets with `requireStable(true)`. Review of the pinned admin client corrected this
+record's earlier reading of what that buys: the admin handler treats a partition-level
+`UNSTABLE_OFFSET_COMMIT` as a partition to skip, not an error to surface, so an unstable partition simply
+vanishes from the listing rather than failing it — which is why the D76 refusal is re-run on the slow path
+against the group member's own `committed()` fetch. That fetch needs no configuration at all: the consumer
+issues every `committed()` as a transaction-stable OffsetFetch and retries while a pending commit is deciding
+(verified in kafka-clients 4.3.1, `ConsumerCoordinator#sendOffsetFetchRequest`; an earlier revision of this
+record set `isolation.level=read_committed` on the committer for this, an inert config since the member never
+fetches records — removed, with the real mechanism documented at the seam).
+
+`readOrderingChangelog` targets the read_uncommitted end offsets — requested explicitly, since the choice is
+load-bearing — and tolerates empty polls up to the stall deadline (30s, comfortably above the 10s default
+transaction timeout), so an orphaned open transaction resolves before the scan concludes rather than
+truncating it. A partition that reaches its snapshot end is paused: without that, a live writer on one
+partition would keep resetting the shared stall deadline while another partition sat pinned below its end,
+turning the promised loud stall into an indefinite hang. The committed-offsets fetch moves before the
+confirming describe, putting both name-keyed queries inside the same confirmed window.
 
 **Alternatives**
 

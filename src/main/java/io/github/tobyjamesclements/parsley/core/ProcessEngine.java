@@ -239,8 +239,12 @@ public final class ProcessEngine {
      *
      * @param message the message, whose position must exceed any already fed for its channel
      * @return whether the message was accepted or recognised as already delivered
-     * @throws ParsleyFailClosedException if the host fed out of order, if the metadata cannot
-     *         be decoded, or if the metadata exceeds the configured budget
+     * @throws ParsleyFailClosedException if the host fed out of order within this execution,
+     *         if the message's position was already covered by a read-position report — a
+     *         report/feed contradiction, which is a false report or this execution observing
+     *         its successor's progress after being superseded, not a feed-order breach — if
+     *         the metadata cannot be decoded, or if the metadata exceeds the configured
+     *         budget
      */
     public ReceiveOutcome onReceive(ReceivedMessage message) {
         ChannelId channel = message.channel();

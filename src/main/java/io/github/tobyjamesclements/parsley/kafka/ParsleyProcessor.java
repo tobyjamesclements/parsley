@@ -377,6 +377,15 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         for (PlannedSend send : sends) {
             context.forward(send.record(), send.sinkName());
         }
+        if (swallowedSeamViolation != null) {
+            // Application code can still run after the post-handler check — a serializer
+            // invoked during planning may hold the reader and latch a refusal there. The
+            // step's effects have applied, but the EOS abort unwinds them; without this
+            // recheck the next delivery's reset would silently erase the violation.
+            ParsleyFailClosedException violation = swallowedSeamViolation;
+            swallowedSeamViolation = null;
+            throw violation;
+        }
     }
 
     /** One resolved, serialized state write, ready to apply. */
@@ -410,6 +419,15 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         requireDeclaredStore(declared, "state write");
         String serdeTopic = serdeTopicByStore.get(declared.name());
         byte[] keyBytes = serialize(declared.keySerde(), serdeTopic, null, write.key());
+        if (keyBytes == null) {
+            // The Serializer contract permits signalling failure by returning null; a
+            // null store key cannot address an entry, so it must fail the plan with its
+            // reason rather than surface as the store's bare NPE during apply.
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
+                    definition.name() + ": " + declared.name() + " state write key serialized to null;"
+                            + " the declared key serde could not encode it");
+        }
         byte[] valueBytes = write.value() == null
                 ? null : serialize(declared.valueSerde(), serdeTopic, null, write.value());
         return new PlannedWrite(appStores.get(declared.name()), Bytes.wrap(keyBytes), valueBytes);
@@ -496,6 +514,15 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                         ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
                         definition.name() + ": " + store.name() + " state read key could not be serialized"
                                 + " by the declared serde", e));
+            }
+            if (keyBytes == null) {
+                // The Serializer contract permits signalling failure by returning null;
+                // without this guard that shape surfaces as the store's bare NPE inside
+                // the handler's frame, unlatched and swallowable.
+                throw latched(new ParsleyFailClosedException(
+                        ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
+                        definition.name() + ": " + store.name() + " state read key serialized to null;"
+                                + " the declared key serde could not encode it"));
             }
             byte[] valueBytes = appStores.get(store.name()).get(Bytes.wrap(keyBytes));
             if (valueBytes == null) {
