@@ -36,6 +36,10 @@ final class GroupMembershipCommitter implements AutoCloseable {
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+        // read_committed makes committed() a stable-offset fetch: a pending transactional
+        // commit from another lifetime is never read as absent-or-old while its transaction
+        // is still deciding.
+        props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
 
         // This member must vacate the group the moment it closes — the Streams start that
         // follows joins the same group under a different protocol. A static member sends no

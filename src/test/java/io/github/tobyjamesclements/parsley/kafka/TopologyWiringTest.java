@@ -420,6 +420,62 @@ class TopologyWiringTest {
         }
     }
 
+    /**
+     * A handler returning null is a seam-contract breach parsley itself detects, and it
+     * recurs identically on every restart, so it must carry its own refusal reason —
+     * status() reporting a stop with an empty refusalReason would misread as transient.
+     */
+    @Test
+    void nullEffectsFromAHandlerFailClosedWithTheirOwnReason() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> null)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.HANDLER_RETURNED_NULL_EFFECTS),
+                () -> "a deliberate refusal that recurs on restart must name its reason; got " + thrown);
+    }
+
+    /**
+     * A stored value the declared serde can no longer decode is the state-read shape of
+     * D13's payload rule: it fails the step with its own reason, and an application catch
+     * around the read cannot swallow it — the reader latches the refusal.
+     */
+    @Test
+    void undecodableStoredStateValueFailsClosedEvenWhenSwallowed() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        org.apache.kafka.common.serialization.Serde<String> poisonRead =
+                Serdes.serdeFrom(new StringSerializer(), (topic, data) -> {
+                    throw new RuntimeException("schema moved on");
+                });
+        Store<String, String> store = Store.of("app-store", Serdes.String(), poisonRead);
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    if (delivery.value().equals("first")) {
+                        return Effects.builder().put(store, "k", "v").build();
+                    }
+                    try {
+                        state.get(store, "k");
+                    } catch (RuntimeException swallowed) {
+                        // an application fallback path: the refusal must not be swallowable
+                    }
+                    return Effects.none();
+                })
+                .stores(store)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        input("in1").pipeInput(new TestRecord<>("k".getBytes(), "first".getBytes()));
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "second".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE),
+                () -> "a stored value the declared serde cannot decode must fail the step with its"
+                        + " reason, latched past any application catch; got " + thrown);
+    }
+
     /** A null store on a state read is refused with a message. */
     @Test
     void nullStoreOnAStateReadIsRefusedWithAMessage() {

@@ -345,7 +345,12 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             throw violation;
         }
         if (effects == null) {
-            throw new IllegalStateException(definition.name() + ": handler for " + topic + " returned null effects");
+            // A deliberate refusal that recurs identically on restart, so it carries its
+            // own reason and reaches status() rather than an empty refusalReason.
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.HANDLER_RETURNED_NULL_EFFECTS,
+                    definition.name() + ": handler for " + topic + " returned null effects; return"
+                            + " Effects.none() for a step that changes nothing");
         }
         // Plan, then apply: resolving every effect's declared target and serializing every
         // payload is a pure function of the definition and the returned Effects, so every
@@ -477,16 +482,39 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             try {
                 requireDeclaredStore(store, "state read");
             } catch (ParsleyFailClosedException e) {
-                swallowedSeamViolation = e;
-                throw e;
+                throw latched(e);
             }
             if (key == null) {
                 throw new IllegalArgumentException(store.name() + ": state read key must be non-null");
             }
             String serdeTopic = serdeTopicByStore.get(store.name());
-            byte[] keyBytes = store.keySerde().serializer().serialize(serdeTopic, key);
+            byte[] keyBytes;
+            try {
+                keyBytes = store.keySerde().serializer().serialize(serdeTopic, key);
+            } catch (RuntimeException e) {
+                throw latched(new ParsleyFailClosedException(
+                        ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
+                        definition.name() + ": " + store.name() + " state read key could not be serialized"
+                                + " by the declared serde", e));
+            }
             byte[] valueBytes = appStores.get(store.name()).get(Bytes.wrap(keyBytes));
-            return valueBytes == null ? null : store.valueSerde().deserializer().deserialize(serdeTopic, valueBytes);
+            if (valueBytes == null) {
+                return null;
+            }
+            try {
+                return store.valueSerde().deserializer().deserialize(serdeTopic, valueBytes);
+            } catch (RuntimeException e) {
+                throw latched(new ParsleyFailClosedException(
+                        ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
+                        definition.name() + ": " + store.name() + " stored value could not be decoded"
+                                + " by the declared serde", e));
+            }
+        }
+
+        /** Latches a refusal raised inside the handler's frame, so a catch cannot swallow it. */
+        private ParsleyFailClosedException latched(ParsleyFailClosedException e) {
+            swallowedSeamViolation = e;
+            return e;
         }
     }
 }

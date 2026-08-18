@@ -277,9 +277,16 @@ public final class ProcessEngine {
             }
             Long floor = sessionFloor.get(channel);
             if (floor == null || message.position() > floor) {
-                throw new ParsleyFailClosedException(Reason.OUT_OF_ORDER_FEED,
+                // Not a feed-order violation: in-execution order is checked against
+                // fedThisExecution above. This position was covered by a read-position
+                // report, so the report and the feed contradict each other.
+                throw new ParsleyFailClosedException(Reason.COVERED_POSITION_FED,
                         "process " + processName + ": fed " + channel + "@" + message.position()
-                                + " which this execution already covered as fed-or-never-arriving (fedUpTo=" + fed + ")");
+                                + " which a read-position report already covered as fed-or-never-arriving"
+                                + " (fedUpTo=" + fed + "). Either the report was false, or this execution has"
+                                + " been superseded and a facts round observed its successor's committed"
+                                + " progress; a superseded execution's step cannot commit, a restart recovers,"
+                                + " and this refusal then does not recur.");
             }
 
             return ReceiveOutcome.DUPLICATE_DROPPED;

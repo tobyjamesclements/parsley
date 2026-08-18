@@ -98,9 +98,13 @@ public final class ParsleyRuntime implements AutoCloseable {
                         runtime.describeChangelog(applicationId);
                 boolean priorState = changelog.isPresent();
 
-                runtime.refuseStrandedHeldMessages(applicationId, definition, topics, priorState, adminProps);
+                Map<byte[], byte[]> orderingState = priorState
+                        ? runtime.readOrderingChangelog(applicationId, adminProps)
+                        : Map.of();
+                runtime.refuseStrandedHeldMessages(applicationId, definition, topics, priorState, orderingState);
                 runtime.refuseWidthChange(applicationId, definition, topics, changelog);
-                runtime.commitInitialPositions(applicationId, definition, topics, priorState, adminProps);
+                runtime.commitInitialPositions(applicationId, definition, topics, priorState, orderingState,
+                        adminProps);
                 Map<UUID, String> namesById = new HashMap<>();
                 topics.forEach((name, info) -> namesById.put(info.topicId(), name));
 
@@ -133,8 +137,23 @@ public final class ParsleyRuntime implements AutoCloseable {
 
         Throwable cause = exception;
         for (int depth = 0; cause != null && depth < 64; depth++, cause = cause.getCause()) {
-            if (cause instanceof org.apache.kafka.clients.consumer.NoOffsetForPartitionException
-                    || String.valueOf(cause.getMessage()).contains("invalid partitions")) {
+            if (cause instanceof org.apache.kafka.clients.consumer.OffsetOutOfRangeException) {
+                LOG.error("process {}: the broker no longer retains this process's committed read position;"
+                        + " positions were discarded before they were read, and auto.offset.reset=none stops"
+                        + " the process rather than skipping the gap (SPEC Safety 8, the"
+                        + " POSITIONS_DISCARDED_UNREAD condition). Reset the process's state and group offsets"
+                        + " deliberately to proceed (failing closed)", process, exception);
+                return;
+            }
+            if (cause instanceof org.apache.kafka.clients.consumer.NoOffsetForPartitionException) {
+                LOG.error("process {}: a received partition has no committed read position; either a partition"
+                        + " was added while the process ran, or the group's committed offsets were removed"
+                        + " mid-run. Restart the application: a width-preserving expansion is re-resolved and"
+                        + " pre-committed; a width change refuses with TASK_WIDTH_CHANGED and its remedy"
+                        + " (failing closed)", process, exception);
+                return;
+            }
+            if (String.valueOf(cause.getMessage()).contains("invalid partitions")) {
                 LOG.error("process {}: the partition shape of its topics changed while it ran; parsley resolves"
                         + " partitions at start(). Restart the application: a width-preserving expansion is"
                         + " re-resolved and pre-committed; a width change refuses with TASK_WIDTH_CHANGED and its"
@@ -287,12 +306,19 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    private void refuseStrandedHeldMessages(String applicationId, ProcessDefinition definition,
-                                            Map<String, TopicInfo> topics, boolean priorState,
-                                            Map<String, Object> clientProps) {
-        if (!priorState) {
-            return;
-        }
+    /**
+     * Reads the process's ordering-store changelog end to end, compacted in memory to the
+     * latest value per key.
+     *
+     * <p>The read targets the log's true end rather than the last stable offset: a
+     * superseded execution's producer can leave a transaction open below records a
+     * successor committed, and stopping at the stable offset would silently hide those
+     * committed tail records from the checks this view feeds. An open transaction resolves
+     * within the producer's transaction timeout, which the stall deadline outlasts at the
+     * defaults; a transaction configured to outlive the deadline fails the start loudly
+     * rather than truncating the view.
+     */
+    private Map<byte[], byte[]> readOrderingChangelog(String applicationId, Map<String, Object> clientProps) {
         String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
         Map<String, Object> props = new HashMap<>(clientProps);
         props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
@@ -306,7 +332,13 @@ public final class ParsleyRuntime implements AutoCloseable {
                     .map(pi -> new TopicPartition(pi.topic(), pi.partition())).toList();
             consumer.assign(parts);
             consumer.seekToBeginning(parts);
-            Map<TopicPartition, Long> ends = consumer.endOffsets(parts);
+            Map<TopicPartition, OffsetSpec> latestSpecs = new HashMap<>();
+            for (TopicPartition tp : parts) {
+                latestSpecs.put(tp, OffsetSpec.latest());
+            }
+            Map<TopicPartition, Long> ends = new HashMap<>();
+            admin.listOffsets(latestSpecs).all().get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                    .forEach((tp, info) -> ends.put(tp, info.offset()));
 
             long stallDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
             while (parts.stream().anyMatch(tp -> consumer.position(tp) < ends.get(tp))) {
@@ -314,7 +346,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                 if (polled.isEmpty()) {
                     if (System.nanoTime() - stallDeadline > 0) {
                         throw new IllegalStateException("no progress reading " + changelog + " for "
-                                + TIMEOUT_SECONDS + "s while verifying held messages");
+                                + TIMEOUT_SECONDS + "s while reading prior ordering state");
                     }
                 } else {
                     stallDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
@@ -323,13 +355,21 @@ public final class ParsleyRuntime implements AutoCloseable {
             }
         } catch (Exception e) {
             throw new IllegalStateException(
-                    applicationId + ": could not verify held messages against the declaration; refusing to start", e);
+                    applicationId + ": prior ordering state could not be read; refusing to start", e);
         }
+        return latest;
+    }
 
+    private void refuseStrandedHeldMessages(String applicationId, ProcessDefinition definition,
+                                            Map<String, TopicInfo> topics, boolean priorState,
+                                            Map<byte[], byte[]> orderingState) {
+        if (!priorState) {
+            return;
+        }
         Map<String, UUID> resolvedIds = new HashMap<>();
         definition.receivedTopics().forEach(topic -> resolvedIds.put(topic, topics.get(topic).topicId()));
         List<String> identityChanged = io.github.tobyjamesclements.parsley.core.OrderingStateInspector
-                .identityChangedTopics(latest, resolvedIds);
+                .identityChangedTopics(orderingState, resolvedIds);
         if (!identityChanged.isEmpty()) {
             throw new ParsleyFailClosedException(
                     ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED,
@@ -345,7 +385,8 @@ public final class ParsleyRuntime implements AutoCloseable {
             }
         }
         java.util.Set<io.github.tobyjamesclements.parsley.core.ChannelId> stranded =
-                new java.util.TreeSet<>(io.github.tobyjamesclements.parsley.core.OrderingStateInspector.heldChannels(latest));
+                new java.util.TreeSet<>(io.github.tobyjamesclements.parsley.core.OrderingStateInspector
+                        .heldChannels(orderingState));
         stranded.removeAll(declared);
         if (!stranded.isEmpty()) {
             throw new ParsleyFailClosedException(
@@ -357,25 +398,31 @@ public final class ParsleyRuntime implements AutoCloseable {
 
     private void commitInitialPositions(String applicationId, ProcessDefinition definition,
                                         Map<String, TopicInfo> topics, boolean priorState,
-                                        Map<String, Object> clientProps) {
+                                        Map<byte[], byte[]> orderingState, Map<String, Object> clientProps) {
+        java.util.Set<TopicPartition> received = receivedPartitions(definition, topics);
+        Map<TopicPartition, OffsetAndMetadata> preCheck;
         try {
-            Map<TopicPartition, OffsetAndMetadata> preCheck =
-                    admin.listConsumerGroupOffsets(applicationId).partitionsToOffsetAndMetadata()
-                            .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            if (preCheck.keySet().containsAll(receivedPartitions(definition, topics))) {
-                return;
-            }
+            // requireStable: a pending transactional commit means another lifetime of this
+            // process is live right now, and this listing must not act on an offset that
+            // lifetime is about to replace.
+            preCheck = admin.listConsumerGroupOffsets(applicationId,
+                            new org.apache.kafka.clients.admin.ListConsumerGroupOffsetsOptions()
+                                    .requireStable(true))
+                    .partitionsToOffsetAndMetadata().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         } catch (Exception e) {
             throw new IllegalStateException(
                     applicationId + ": committed read positions could not be listed; refusing to start", e);
         }
+        refuseLostOrderingState(applicationId, priorState, preCheck, received);
+        if (preCheck.keySet().containsAll(received)) {
+            return;
+        }
 
         try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, applicationId)) {
             committer.join(definition.receivedTopics(), streamsSessionTimeout(clientProps).multipliedBy(2));
-            java.util.Set<TopicPartition> all = receivedPartitions(definition, topics);
-            Map<TopicPartition, OffsetAndMetadata> committed = committer.committed(all);
+            Map<TopicPartition, OffsetAndMetadata> committed = committer.committed(received);
             Map<TopicPartition, OffsetSpec> wanted = new HashMap<>();
-            for (TopicPartition tp : all) {
+            for (TopicPartition tp : received) {
                 if (committed.get(tp) == null) {
                     Channel.InitialPosition initial = priorState
                             ? Channel.InitialPosition.EARLIEST
@@ -391,11 +438,87 @@ public final class ParsleyRuntime implements AutoCloseable {
             admin.listOffsets(wanted, new ListOffsetsOptions(IsolationLevel.READ_COMMITTED)).all()
                     .get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
                     .forEach((tp, info) -> toCommit.put(tp, new OffsetAndMetadata(info.offset())));
+            refusePositionsDiscardedUnread(applicationId, topics, priorState, orderingState, toCommit);
             committer.commit(toCommit);
             LOG.info("{}: committed initial positions for {}", applicationId, toCommit.keySet());
+        } catch (ParsleyFailClosedException e) {
+            throw e;
         } catch (Exception e) {
             throw new IllegalStateException(
                     applicationId + ": initial read positions could not be established; refusing to start", e);
+        }
+    }
+
+    /**
+     * Refuses a start whose group carries a Kafka Streams execution's committed read
+     * positions while the ordering-store changelog that execution must have written does
+     * not exist.
+     *
+     * <p>Every committed step writes ordering state and read positions atomically (SPEC
+     * Host obligation 3), so this shape means the state of the most recent committed step
+     * has been lost (Host obligation 5): resuming would rebuild an empty engine and
+     * silently under-express every cause delivered before the loss. A first-start
+     * bootstrap that crashed after committing initial positions also leaves offsets
+     * without a changelog, but its commits carry no metadata where Kafka Streams stamps
+     * every commit with its own — the refusal keys on that stamp, so bootstrap crash
+     * recovery still starts.
+     */
+    private static void refuseLostOrderingState(String applicationId, boolean priorState,
+                                                Map<TopicPartition, OffsetAndMetadata> committed,
+                                                java.util.Set<TopicPartition> received) {
+        if (priorState) {
+            return;
+        }
+        for (TopicPartition tp : received) {
+            OffsetAndMetadata offset = committed.get(tp);
+            if (offset != null && offset.metadata() != null && !offset.metadata().isEmpty()) {
+                throw new ParsleyFailClosedException(
+                        ParsleyFailClosedException.Reason.ORDERING_STATE_LOST,
+                        applicationId + ": committed read positions exist for " + tp + ", stamped by a"
+                                + " previous Kafka Streams execution, but this process's ordering-store"
+                                + " changelog does not exist. The ordering state of the most recent committed"
+                                + " step has been lost (SPEC Host obligation 5); resuming would silently"
+                                + " under-express causes delivered before the loss. Restore the changelog"
+                                + " topic, or reset the process's group offsets deliberately to start fresh.");
+            }
+        }
+    }
+
+    /**
+     * Refuses a re-established read position that would jump positions discarded unread.
+     *
+     * <p>On an expiry restart, missing offsets are re-established at the current log
+     * start. Where retention advanced past the previous execution's covered position
+     * while the process was stopped, that log start lies beyond positions this process
+     * never read: committing it would fabricate a read-position report the host never
+     * made, and the engine's own truncation check — which compares log starts against
+     * coverage the same round's report has just advanced — could then never fire. The
+     * comparison belongs here, against the durable coverage restored from the ordering
+     * changelog (SPEC Safety 8).
+     */
+    private static void refusePositionsDiscardedUnread(String applicationId, Map<String, TopicInfo> topics,
+                                                       boolean priorState, Map<byte[], byte[]> orderingState,
+                                                       Map<TopicPartition, OffsetAndMetadata> toCommit) {
+        if (!priorState) {
+            return;
+        }
+        Map<io.github.tobyjamesclements.parsley.core.ChannelId, Long> covered =
+                io.github.tobyjamesclements.parsley.core.OrderingStateInspector.coveredPositions(orderingState);
+        for (var entry : toCommit.entrySet()) {
+            TopicPartition tp = entry.getKey();
+            io.github.tobyjamesclements.parsley.core.ChannelId channel =
+                    new io.github.tobyjamesclements.parsley.core.ChannelId(
+                            topics.get(tp.topic()).topicId(), tp.partition());
+            Long coveredUpTo = covered.get(channel);
+            if (coveredUpTo != null && entry.getValue().offset() > coveredUpTo + 1) {
+                throw new ParsleyFailClosedException(
+                        ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
+                        applicationId + ": " + tp + " earliest retained position " + entry.getValue().offset()
+                                + " is beyond this process's covered position " + coveredUpTo + "; retention"
+                                + " discarded unread positions while the process was stopped and its committed"
+                                + " offsets had expired (SPEC Safety 8). Reset the process's state and group"
+                                + " offsets deliberately to proceed.");
+            }
         }
     }
 

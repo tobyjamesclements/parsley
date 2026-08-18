@@ -72,9 +72,9 @@ class AdminFactsSource implements FactsSource {
     private final Map<UUID, String> topicNamesById = new HashMap<>();
 
     /**
-     * Anchors each open dead-confirmation window. Opened and extended by an affirmed
-     * name-gone answer — except for an id whose name was never learned, where no answer is
-     * possible and the entry rides the longer window instead.
+     * Anchors each open dead-confirmation window. Opened and extended only by an affirmed
+     * name-gone answer; an id whose name was never learned has nothing to corroborate
+     * against and is never confirmed dead at all.
      */
     private final Map<UUID, Long> deadWindowSince = new HashMap<>();
 
@@ -217,17 +217,22 @@ class AdminFactsSource implements FactsSource {
                             groupId, lastKnown, id);
                 }
                 case NAME_GONE, UNAVAILABLE -> {
-                    if (verdict == NameVerdict.NAME_GONE || lastKnown == null) {
-                        long window = lastKnown == null ? 4 * deadConfirmationMillis : deadConfirmationMillis;
+                    if (verdict == NameVerdict.NAME_GONE) {
                         long since = deadWindowSince.computeIfAbsent(id, i -> now);
-                        if (now - since >= window) {
+                        if (now - since >= deadConfirmationMillis) {
                             markDead(id);
                         }
                     } else {
-                        // The name was asked about but the answer did not arrive, so the
-                        // name-gone observation is no longer continuous. The window restarts:
-                        // a dead verdict is confirmed only by an unbroken run of affirmative
-                        // name-gone answers, never by two isolated ones spanning an outage.
+                        // Either the name was asked about but the answer did not arrive —
+                        // the name-gone observation is no longer continuous and the window
+                        // restarts — or no name was ever learned for this id, where no
+                        // corroborating answer is possible at all. Absence of evidence
+                        // alone never confirms death: a DENY-Describe ACL makes a live
+                        // topic describe unknown by id, and for a nameless id there is no
+                        // by-name answer to reveal the denial, so a time-only verdict here
+                        // would prune a live cause (SPEC Structural 13). The id lingers
+                        // unconfirmed — costing expression size, never safety — until its
+                        // name is learned or its topic reappears.
                         deadWindowSince.remove(id);
                     }
                 }
@@ -277,9 +282,12 @@ class AdminFactsSource implements FactsSource {
             }
         }
 
-        Map<UUID, String> confirmedNames = describeByIds(liveNames.keySet());
-
+        // Both name-keyed queries — log starts above and the committed offsets here — run
+        // between the opening describe and this confirming one, so neither is attributed to
+        // a channel whose name-to-id binding did not hold across the query (D22).
         Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> committed = committedOffsets();
+
+        Map<UUID, String> confirmedNames = describeByIds(liveNames.keySet());
 
         Map<ChannelId, Long> committedNextRead = new TreeMap<>();
         Map<ChannelId, Long> logStart = new TreeMap<>();

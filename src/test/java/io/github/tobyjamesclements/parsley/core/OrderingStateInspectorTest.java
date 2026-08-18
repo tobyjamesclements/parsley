@@ -43,6 +43,23 @@ class OrderingStateInspectorTest {
         assertEquals(Map.of("orders", topicId), OrderingStateInspector.nameBindings(latest));
     }
 
+    /** Reads covered positions from fed-up-to entries, ignoring tombstones and other tags. */
+    @Test
+    void readsCoveredPositionsAndIgnoresTombstonesAndOtherTags() {
+        ChannelId covered = new ChannelId(new UUID(4, 5), 1);
+        ChannelId tombstoned = new ChannelId(new UUID(4, 6), 0);
+        Map<byte[], byte[]> latest = new TreeMap<>(Arrays::compareUnsigned);
+        latest.put(StoreCodec.channelKey(StoreCodec.TAG_FED_UP_TO, covered), StoreCodec.encodeLong(41));
+        latest.put(StoreCodec.channelKey(StoreCodec.TAG_FED_UP_TO, tombstoned), null);
+        latest.put(StoreCodec.channelKey(StoreCodec.TAG_DELIVERED_PAST, covered), StoreCodec.encodeLong(99));
+        latest.put(StoreCodec.heldKey(covered, 7), new byte[] {1});
+        latest.put(StoreCodec.versionKey(), new byte[] {1});
+
+        assertEquals(Map.of(covered, 41L), OrderingStateInspector.coveredPositions(latest),
+                "coverage is the fed-up-to record alone: a delivered-past entry without one marks a"
+                        + " channel that was never read here, whose fresh baseline is legitimate");
+    }
+
     /** Recreation under a still declared name is an identity change not a removal. */
     @Test
     void recreationUnderAStillDeclaredNameIsAnIdentityChangeNotARemoval() {

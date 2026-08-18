@@ -135,6 +135,15 @@ class ApiValidationTest {
                 () -> builder.streamsProperty("main.consumer.interceptor.classes", "com.example.Interceptor"));
         assertThrows(IllegalArgumentException.class,
                 () -> builder.streamsProperty("default.timestamp.extractor", "LogAndSkipOnInvalidTimestamp"));
+
+        // The membership protocol selects the fencing semantics the bootstrap's
+        // initial-position commit is argued on (D48); swapping it is guarantee-bearing.
+        assertThrows(IllegalArgumentException.class,
+                () -> builder.streamsProperty("group.protocol", "consumer"));
+        assertThrows(IllegalArgumentException.class,
+                () -> builder.streamsProperty("main.consumer.group.protocol", "consumer"));
+        assertThrows(IllegalArgumentException.class,
+                () -> builder.streamsProperty("group.remote.assignor", "uniform"));
     }
 
     /** Processes must receive something. */

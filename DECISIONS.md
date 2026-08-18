@@ -2406,3 +2406,293 @@ emission loses its reason or fires after a write applies;
 `#swallowedUndeclaredStoreReadStillFailsTheStep` fails if the reader's latch is removed;
 and `ApiValidationTest#kafkaNamesAgreesWithKafkaClientsOwnRule` fails if parsley's
 spelling of the topic-name rule drifts from kafka-clients' own.
+
+### D74 — Re-established read positions are checked against durable coverage; corrects D36's "never lossy"
+
+**Context**
+
+A spec-compliance audit of the kafka layer found D36's expiry restart unsound in one shape. Missing offsets are
+re-established at the current log start; where retention advanced past the previous execution's covered position
+while the process was stopped, that log start lies beyond positions this process never read. Committing it
+fabricates a read-position report the host never made (Host obligation 2's report semantics are what make group
+offsets trustworthy — Streams commits only what it fed), and the engine's own Safety 8 check (D9's defense in
+depth) can never fire: `onFacts` applies the committed-offset report before the log-start comparison, so the very
+report the bootstrap fabricated advances the coverage the comparison reads. That apply order is deliberate and
+correct for genuine host reports — a report legitimately covers never-arriving positions, and truncation below a
+covered position is retention (D54 preserved the order for exactly that reason) — which is why the defect is the
+fabrication, not the order. D36's recorded cost, "slower, never lossy", was refuted: effects could deliver past
+causes that were real messages discarded unread, with no local failure anywhere.
+
+**Decision**
+
+`commitInitialPositions` refuses (`POSITIONS_DISCARDED_UNREAD`, at start) any re-established position beyond the
+ordering state's covered position plus one. Coverage comes from the same compacted changelog view the stranded
+scan already reads — the changelog is now read once per start and shared — interpreted by the public, pure
+`OrderingStateInspector.coveredPositions`: the `fedUpTo` records alone. A delivered-past entry without a
+`fedUpTo` record marks a channel that joined the received set without ever being read here; its fresh baseline
+is legitimate (D31 governs its dedupe), so it is deliberately not treated as coverage.
+
+**Alternatives**
+
+* Checking log starts against pre-apply coverage inside `onFacts` — rejected: a genuine host report may
+  legitimately exceed the engine's coverage (aborted runs, control records), and truncation below such a report
+  is retention; the pre-apply comparison would spuriously refuse compliant hosts. The comparison is sound only
+  against coverage no report can inflate, which is exactly what the start-time durable view is.
+* Re-establishing at covered+1 rather than earliest — rejected: where no positions were discarded this changes
+  D36's re-feed-and-dedupe path for no gain, and where they were, resuming at covered+1 still resumes below the
+  earliest retained position — the very thing Safety 8 forbids. The gap case must refuse, not resume.
+
+**Cost**
+
+One inspector pass per start. D36's cost note now reads: slower, never lossy — and refusing outright where
+retention outran the stopped process, availability spent on Safety 8. Pinned by
+`BootstrapIntegrationTest#expiredOffsetsBeyondRetentionRefuseRatherThanAbsorbTheGap` (red on the pre-fix tree:
+the start succeeded and silently absorbed the gap).
+
+### D75 — A nameless topic id is never confirmed dead; corrects D44's four-fold window
+
+**Context**
+
+The audit refuted D44's residual claim for ids with no learned name. D44's denial protection — a by-name
+`TopicAuthorizationException` classifying as DENIED and resetting the window — is structurally unreachable for
+exactly the ids that need it: a name is only learned from a successful describe, which a DENY-Describe ACL
+forever prevents (the broker masks denial-by-id as unknown-topic), and name bindings are memory-only, so every
+frontier cause on a non-declared topic loses its name at each restart. The four-fold time-only window then
+confirmed death of a live topic after ~4 × 3 × factsInterval of routine ACL denial, pruning a live cause —
+violating Structural 13's "MUST NOT discard any other cause" and under-expressing it on every subsequent send
+(Structural 15), a downstream Safety 1 inversion with no diagnostic. D44's "bounded settle latency, never
+safety" was false on this path, and its claim that D40's residual was "closed by corroboration" held only for
+ids with known names.
+
+**Decision**
+
+Death confirmation always requires affirmative corroboration: the dead-confirmation window opens and extends
+only on a NAME_GONE answer. An id whose name was never learned reports nothing, however long describe-by-id
+stays silent; each round keeps trying to learn its name.
+
+**Alternatives**
+
+* Keeping the four-fold window with the residual recorded — rejected: the residual is reachable by routine
+  operations and violates a MUST; recording it does not sanction it.
+* Persisting name bindings for frontier ids — rejected: ordering-store format churn that closes only the
+  restart leg; the never-learned leg (denied from first sight) needs the no-time-alone rule regardless, and
+  with that rule in place persistence adds nothing safety-bearing.
+
+**Cost**
+
+A genuinely dead topic whose name this process never learned lingers in the frontier and its expression
+forever; so does a foreign-injected id. The metadata budget (D52) bounds the growth and stops attributably.
+Structural 13's required means of discarding dead-channel causes remains — name-corroborated death and
+affirmative recreation — and is forgone only where no sound local evidence can exist. Pinned by
+`AdminFactsSourceDebounceTest#anIdWithNoKnownNameIsNeverConfirmedDeadOnTimeAlone` (red on the pre-fix tree at
+four windows).
+
+### D76 — Lost ordering state under surviving Streams offsets refuses at start
+
+**Context**
+
+The audit found that `priorState`, keyed solely on the ordering changelog existing, silently misclassifies one
+shape: the changelog absent (operator deletion — including the recorded remedies' "reset the process's state
+and group offsets deliberately" followed halfway, state deleted but offsets kept — or disaster) while the
+group's committed offsets survive. The start then ran as a genuinely first start: the scans were skipped, the
+fast path adopted the surviving offsets, Streams recreated the changelog empty, and the process resumed mid-log
+with an empty engine — every emission under-expressing the causes of everything delivered before the loss
+(Structural 15, downstream Safety 1), held messages gone (Liveness 5), the delivered-past clamp erased
+(Structural 16). Every committed step writes ordering state and read positions atomically (Host obligation 3),
+so offsets stamped by a Streams execution prove the changelog existed; its absence is a detected Host
+obligation 5 breach, and the Host-obligations preamble requires failing closed on detection.
+
+**Decision**
+
+When no prior state is found, a committed offset on any received partition carrying non-empty metadata refuses
+the start (`ORDERING_STATE_LOST`). Kafka Streams stamps every offset commit with its own encoded metadata,
+where the bootstrap committer writes bare offsets — so the stamp discriminates a prior Streams execution
+(fatal: its state is gone) from a first-start bootstrap that crashed between committing initial positions and
+Streams creating the changelog (benign: recovery must start, and still does).
+
+**Alternatives**
+
+* Refusing on any offsets-without-changelog — rejected: refuses the crashed-bootstrap recovery, a legitimate
+  first-start path with no state to lose.
+* A persisted first-start marker — rejected: any marker co-located with the state shares the state's fate, and
+  group-offset metadata is overwritten by Streams' own commits (D33) — which is here load-bearing in reverse:
+  the overwrite is precisely what proves a Streams execution committed.
+
+**Cost**
+
+The discrimination rides on Streams stamping commit metadata, verified against the pinned toolchain and pinned
+behaviourally: `BootstrapIntegrationTest#lostOrderingChangelogWithSurvivingOffsetsRefusesToStart` fails if the
+refusal regresses to the silent empty resume, and `#bootstrapCommittedOffsetsWithoutAChangelogStillStart` fails
+if the refusal overreaches into bootstrap crash recovery. A Streams version that stopped stamping metadata
+would degrade the refusal back to the silent resume — and fail the first pin.
+
+### D77 — A report/feed contradiction has its own reason; OUT_OF_ORDER_FEED is feed order alone
+
+**Context**
+
+The audit found the engine's covered-position branch (a feed at a position at or below `fedUpTo`, above the
+session floor) diagnosed as `OUT_OF_ORDER_FEED` with a message asserting the host "must feed each channel in
+increasing position order" — false on both counts in the branch's most reachable case. In-execution feed order
+is checked separately (D45); this branch fires when a read-position report contradicts a later feed, which is
+either a false report (Host obligation 2 breach) or routine supersession: a session-timed-out zombie's
+background facts round reads the group's committed offsets, sees its successor's progress, and advances
+coverage past records still buffered in the zombie's own consumer. The stop is correct either way — the two are
+locally indistinguishable, and a detected apparent breach must fail closed — but the diagnosis blamed a
+compliant host (Operational 6) and presented a stop that does not recur on restart as a deliberate refusal
+(Operational 1, D55's supervisor contract).
+
+**Decision**
+
+The branch throws `COVERED_POSITION_FED`, its message naming the contradiction, both causes, and that a
+superseded execution's step cannot commit (Host obligation 6), a restart recovers, and the refusal then does
+not recur. `OUT_OF_ORDER_FEED` keeps the in-execution order breach and the dead-channel re-feed. A new
+constant, not a rename: supervisors key on `refusalReason` (D55, D72), and additions are compatible where
+renames break.
+
+**Alternatives**
+
+* Suppressing the stop when supersession is plausible — rejected: locally indistinguishable from a false
+  report, whose detected-breach duty stands; and the zombie's own state is rolled back regardless.
+* Confirming supersession via broker group queries before throwing — rejected: an admin round-trip on the feed
+  path to improve only a diagnosis.
+
+**Cost**
+
+Supervisors that treat every fail-closed stop as permanent restart one recoverable case needlessly; the reason
+and message now say which case they are in. Pinned by
+`ProcessEngineTest#feedAtAReportCoveredPositionFailsClosedAsCoveredPositionFed`.
+
+### D78 — Compacted received topics are an Assumption 10 reliance; the probe residual is recorded
+
+**Context**
+
+docs/delivery.md names compaction among the sources of never-yielding positions, but no record covered the
+reliance (Structural 20). On a compacted received topic the cleaner discards committed mid-log records
+irrespective of consumer lag, so Assumption 10 — "retention covers consumer lag, so that a cause is never aged
+out before its effect is delivered" — cannot hold by construction. The audit traced the sharpest consequence
+through the trailing-run probe (D35): a record fetched into the main consumer's buffer and compacted away
+before the probe polls yields a probe report claiming the position never yields; the buffered record then
+arrives and the engine stops on the contradiction. In a narrower window (the record still servable after the
+probe missed it), a post-restart re-feed lands at or below the session floor and is dropped as a replay though
+never delivered.
+
+**Decision**
+
+Recorded as an accepted residual of relying on Assumption 10, per D26's pattern: the failure mode is a loud
+stop — now honestly diagnosed as `COVERED_POSITION_FED` (D77) rather than a host feed-order accusation — plus
+the narrow silent-drop window, which D10's replay dedupe cannot distinguish from a legitimate rewind. No
+mechanism changes.
+
+**Alternatives**
+
+* Skipping the probe on compacted topics — rejected: forgoes D35's liveness fix exactly where trailing
+  transaction markers make it most needed, turning a routine restart back into a permanent stall.
+* Delivery-gating records on a post-fetch identity/log re-check — rejected on the grounds D44 already
+  recorded: per-record round-trips to close a window bounded by cleaner timing.
+
+**Cost**
+
+The residual window stands, bounded by the cleaner's timing on a topic shape the spec's assumptions do not
+cover; named rather than papered over.
+
+### D79 — Read-path hardenings: stable bootstrap reads, true-end changelog scan, offsets inside the confirmed window
+
+**Context**
+
+Three read-path edges surfaced by the audit, each a window rather than a demonstrated failure. First, the
+bootstrap's offset reads (`listConsumerGroupOffsets` pre-check; the committer's `committed()`) read the last
+stable offset without requiring stability, so a pending transactional commit from a live lifetime could be
+read as absent-or-old — every write remains generation-fenced (D48), but the reads could observe state a live
+lifetime was replacing. Second, the changelog scan bounded its read by the last stable offset: a task moved
+between stream threads mid-run leaves the predecessor's producer able to die with a transaction open below
+records the successor committed, and a bootstrap racing the broker's transaction abort (bounded by the
+producer transaction timeout) would silently miss the committed tail — including held entries the stranded
+scan exists to see. Third, the facts round fetched the group's committed offsets after the confirming
+describe, leaving the one name-keyed query outside the identity-confirmed window that D22 built for log
+starts.
+
+**Decision**
+
+The pre-check lists offsets with `requireStable(true)` — an unstable answer means a live lifetime, and
+refusing to proceed is D48's stance already. The committer consumer runs `read_committed`, making its
+`committed()` a stable fetch. `readOrderingChangelog` targets the read_uncommitted end offsets and tolerates
+empty polls up to the stall deadline (30s, comfortably above the 10s default transaction timeout), so an
+orphaned open transaction resolves before the scan concludes rather than truncating it. The committed-offsets
+fetch moves before the confirming describe, putting both name-keyed queries inside the same confirmed window.
+
+**Alternatives**
+
+* Accepting the LSO bound with the window recorded — rejected: the fix is a different bound in the same loop.
+* A dedicated hanging-transaction integration test — declined: deterministically orphaning a transactional
+  producer inside the suite costs more flake than the assertion earns; recorded honestly instead.
+
+**Cost**
+
+A producer transaction timeout configured beyond the stall deadline fails the start loudly instead of
+silently truncating the scan. The reorder is behaviourally invisible outside the recreation race it closes.
+
+### D80 — The membership protocol joins the unoverridable set; extends D37/D51, and the promised revisit
+
+**Context**
+
+`group.protocol` (and its companion `group.remote.assignor`) selects the group membership, assignment and
+fencing semantics under KIP-848. D48's bootstrap fence is argued and broker-verified on classic-protocol
+generation fencing, and the committer's join-conflict handling catches the classic protocol's failure shape.
+On the pinned toolchain, setting `group.protocol=consumer` happens to fail loudly — the new protocol refuses
+explicitly-set `session.timeout.ms`, which the committer always sets — but that refusal is an accident of
+client validation, surfacing as a generic startup failure, and a future toolchain that accepts the protocol
+silently would put an unverified fencing story under the safety argument. By D37/D51's membership rule — the
+owned set is the configs whose documented use bears on the guarantees — the protocol selector belongs in it.
+
+**Decision**
+
+`group.protocol` and `group.remote.assignor` join `FORBIDDEN_SUFFIXES`, refused under any prefix at build
+time. This is the deny-list's third growth, the trigger D51 named for revisiting the allow-list. Revisited and
+declined again: each addition has come from an audit naming a specific key whose documented use touches the
+guarantees, the list's growth rate remains three entries across the project's hardening history, and an
+allow-list would still make every harmless broker and tuning knob a compatibility decision — the cost D37
+recorded, unchanged. The revisit stands re-armed: a fourth addition should reopen it.
+
+**Alternatives**
+
+* Allow-listing known-safe keys — rejected again on D37's grounds, now with the growth-rate evidence.
+* Relying on the pinned toolchain's accidental refusal — rejected: an accident is not a guarantee, and its
+  failure shape names nothing.
+
+**Cost**
+
+Applications cannot opt into the new consumer rebalance protocol, or Streams' early-access protocol, through
+parsley — by design until a record argues the fencing story afresh.
+
+### D81 — Seam and runtime diagnoses name their conditions; extends D73's taxonomy
+
+**Context**
+
+Audit sweep of stops that reached operators without their condition named (Operational 1/6). A handler
+returning null `Effects` — a seam-contract breach that recurs identically on restart — threw a bare
+`IllegalStateException`, so `status()` showed an empty `refusalReason` and `stoppedDeliberately()` false. A
+stored state value the declared serde can no longer decode, and a state-read key the declared serde cannot
+serialize, stopped the process with the codec's raw exception, unnamed, while every adjacent path (delivery
+payloads, effect payloads) carries a reason — and being thrown inside the handler's frame, an application
+catch could swallow the store read's failure where the undeclared-store refusal is latched. At the runtime,
+`recordFailure` attributed every `NoOffsetForPartitionException` to a mid-run partition-shape change —
+mislabeling mid-run offset removal — and an `OffsetOutOfRangeException` (retention passing surviving committed
+offsets, the loud half of Safety 8's guard) got no parsley diagnosis at all.
+
+**Decision**
+
+Null effects throw `HANDLER_RETURNED_NULL_EFFECTS`. State-read codec failures throw
+`APPLICATION_PAYLOAD_UNSERIALIZABLE` (key) and `APPLICATION_PAYLOAD_UNDECODABLE` (value), latched through the
+reader exactly as the undeclared-store refusal is, so an application catch cannot commit the step.
+`recordFailure` names the out-of-range condition (Safety 8, with the deliberate-reset remedy) and splits the
+no-offset diagnosis into its two real causes.
+
+**Alternatives**
+
+* A distinct reason for stored-state decode failures — rejected: D13 already establishes payload-codec
+  failure as `APPLICATION_PAYLOAD_UNDECODABLE`; the store read is the same condition at a different seam.
+
+**Cost**
+
+None of substance. Pinned by `TopologyWiringTest#nullEffectsFromAHandlerFailClosedWithTheirOwnReason` and
+`#undecodableStoredStateValueFailsClosedEvenWhenSwallowed`.

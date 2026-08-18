@@ -169,4 +169,45 @@ class AdminFactsSourceDebounceTest {
         assertEquals(Set.of(R), facts.round(WINDOW_MILLIS + 1_000, true).deadChannels(),
                 "continuous name-gone observation across the window confirms death");
     }
+
+    /**
+     * An id whose name was never learned has nothing to corroborate against, and absence of
+     * by-id evidence alone must never confirm death: a DENY-Describe ACL makes a live topic
+     * describe unknown by id, and for a nameless id no by-name answer can reveal the denial.
+     * A time-only verdict here would prune a live cause (SPEC Structural 13); the id stays
+     * unconfirmed however long the by-id silence lasts.
+     */
+    @Test
+    void anIdWithNoKnownNameIsNeverConfirmedDeadOnTimeAlone() throws Exception {
+        AtomicLong nowMillis = new AtomicLong();
+        AdminFactsSource facts = new AdminFactsSource(null, "g", Map.of(), Map.of(),
+                WINDOW_MILLIS, nowMillis::get) {
+            @Override
+            Map<UUID, String> describeByIds(Set<UUID> topicIds) {
+                return Map.of();
+            }
+
+            @Override
+            Map<String, Object> describeByNames(Set<String> names) {
+                return Map.of();
+            }
+
+            @Override
+            Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsetFutures(
+                    Map<TopicPartition, OffsetSpec> queries) {
+                return Map.of();
+            }
+
+            @Override
+            Map<TopicPartition, OffsetAndMetadata> committedOffsets() {
+                return Map.of();
+            }
+        };
+
+        for (long at = 0; at <= 40 * WINDOW_MILLIS; at += WINDOW_MILLIS) {
+            nowMillis.set(at);
+            assertTrue(facts.gather(Set.of(), Map.of(), Set.of(R)).deadChannels().isEmpty(),
+                    "a nameless id must never be confirmed dead by elapsed time alone (at " + at + "ms)");
+        }
+    }
 }

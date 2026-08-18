@@ -99,6 +99,27 @@ class ProcessEngineTest {
         assertEquals(ParsleyFailClosedException.Reason.OUT_OF_ORDER_FEED, e.reason());
     }
 
+    /**
+     * A feed at a position a read-position report covered is not a feed-order violation —
+     * in-execution order is checked separately — and carries its own reason: the report and
+     * the feed contradict each other, which is either a false report or this execution
+     * observing a successor's committed progress after being superseded.
+     */
+    @Test
+    void feedAtAReportCoveredPositionFailsClosedAsCoveredPositionFed() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        engine.onReceive(plain(C1, 2, "A"));
+        engine.markDelivered(C1, 2);
+        engine.onFacts(new PositionFacts(Map.of(C1, 10L), Map.of(), Set.of()));
+
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+                () -> engine.onReceive(plain(C1, 7, "M")),
+                "a feed contradicting a read-position report must fail closed");
+        assertEquals(ParsleyFailClosedException.Reason.COVERED_POSITION_FED, e.reason(),
+                "the condition is a report/feed contradiction, not a host feed-order breach");
+    }
+
     /** Recreated received channel fact fails closed. */
     @Test
     void recreatedReceivedChannelFactFailsClosed() {
