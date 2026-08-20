@@ -900,7 +900,9 @@
 
 <h1 id="failing-closed">Failing closed</h1>
 <p>Where the guarantee cannot be upheld, a process stops delivering. It stays stopped, and
-re-fails on restart, until an operator intervenes.</p>
+re-fails on restart, until an operator intervenes — with one recorded exception:
+<code>COVERED_POSITION_FED</code> raised because this execution was superseded does not recur, and a
+restart recovers it (the reason's row below, and its exception message, say so).</p>
 <p>A fail-closed event throws <code>ParsleyFailClosedException</code> out of the processor, which fails the
 task's step. The transaction aborts, and nothing is delivered past the failure.</p>
 <h2 id="blast-radius">Blast radius</h2>
@@ -925,11 +927,19 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 </tr>
 <tr>
 <td><code>POSITIONS_DISCARDED_UNREAD</code></td>
-<td>A read position at or below the log-start offset, so discarded positions cannot be assumed empty</td>
+<td>A read position at or below the log-start offset, so discarded positions cannot be assumed empty — whether detected by the engine's log-start check mid-run, or at start when a lost read position would be re-established beyond the ordering state's covered position</td>
 </tr>
 <tr>
 <td><code>OUT_OF_ORDER_FEED</code></td>
-<td>The host fed a channel out of position order</td>
+<td>The host fed a channel out of position order within one execution, or fed a channel recorded as no longer existing</td>
+</tr>
+<tr>
+<td><code>COVERED_POSITION_FED</code></td>
+<td>A message arrived at a position a read-position report had already covered as fed-or-never-arriving. Either the report was false, or this execution was superseded and a facts round observed its successor's committed progress — a superseded execution's step cannot commit, a restart recovers, and the refusal then does not recur</td>
+</tr>
+<tr>
+<td><code>ORDERING_STATE_LOST</code></td>
+<td>Committed read positions the bootstrap did not write (a previous Kafka Streams execution's stamp, or bare external commits) exist while the ordering-store changelog does not. If a prior execution ran, the state of its most recent committed step has been lost and resuming would silently under-express every cause delivered before the loss</td>
 </tr>
 <tr>
 <td><code>CHANNEL_REMOVED_WITH_HELD_MESSAGES</code></td>
@@ -964,12 +974,16 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 <td>An application header used the reserved prefix</td>
 </tr>
 <tr>
+<td><code>HANDLER_RETURNED_NULL_EFFECTS</code></td>
+<td>A handler returned <code>null</code> instead of <code>Effects</code>; return <code>Effects.none()</code> for a step that changes nothing</td>
+</tr>
+<tr>
 <td><code>APPLICATION_PAYLOAD_UNDECODABLE</code></td>
-<td>A payload could not be decoded by its declared serde</td>
+<td>A payload — a delivered message's, or a stored state value read through the seam — could not be decoded by its declared serde. A state-read failure an application catch swallows is latched and rethrown when the handler returns</td>
 </tr>
 <tr>
 <td><code>APPLICATION_PAYLOAD_UNSERIALIZABLE</code></td>
-<td>An effect's payload could not be serialized by its declared serde — including a <code>Channel</code> or <code>Store</code> instance whose types mismatch the declared one. Effects are serialized during planning, before any write applies</td>
+<td>An effect's payload or a state-read key could not be serialized by its declared serde — including a <code>Channel</code> or <code>Store</code> instance whose types mismatch the declared one. Effects are serialized during planning, before any write applies</td>
 </tr>
 <tr>
 <td><code>SUBSTRATE_MISCONFIGURED</code></td>
@@ -981,9 +995,12 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 </tr>
 </tbody>
 </table>
-<p>Truncation is caught twice. The main consumer runs with <code>auto.offset.reset=none</code>, so an
-out-of-range position kills the task rather than silently jumping, and the engine
-independently fails when a log-start fact exceeds <code>fedUpTo + 1</code>.</p>
+<p>Truncation is caught three times. The main consumer runs with <code>auto.offset.reset=none</code>, so an
+out-of-range position kills the task rather than silently jumping; the engine independently
+fails when a log-start fact exceeds <code>fedUpTo + 1</code>; and a start that would re-establish an
+expired read position beyond the ordering state's covered position refuses before committing
+it — the one shape the other two cannot see, because the re-established position is in range
+and its own report would advance the coverage the engine's check compares against.</p>
 <h2 id="diagnosis">Diagnosis</h2>
 <p><code>Parsley.status()</code> reports each process. <code>ProcessStatus.refusalReason()</code> is present where a
 process stopped to preserve the guarantee, and distinguishes that from any other stop.</p>
