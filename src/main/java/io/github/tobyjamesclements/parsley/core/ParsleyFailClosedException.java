@@ -20,6 +20,18 @@ public final class ParsleyFailClosedException extends RuntimeException {
         POSITIONS_DISCARDED_UNREAD,
         /** The host fed a channel out of position order. */
         OUT_OF_ORDER_FEED,
+        /**
+         * A message arrived at a position a read-position report had already covered as
+         * fed-or-never-arriving. Either the report was false, or this execution has been
+         * superseded and observed its successor's progress — in which case a restart
+         * recovers and the refusal does not recur.
+         */
+        COVERED_POSITION_FED,
+        /**
+         * Committed read positions exist for this process while the ordering state a prior
+         * execution must have written alongside them is gone.
+         */
+        ORDERING_STATE_LOST,
         /** A channel left the received set while it still held undelivered messages. */
         CHANNEL_REMOVED_WITH_HELD_MESSAGES,
         /** A topic was recreated, so positions held against the old identity are meaningless. */
@@ -36,6 +48,8 @@ public final class ParsleyFailClosedException extends RuntimeException {
         STATE_ACCESS_TO_UNDECLARED_STORE,
         /** An application header used the prefix reserved for causal metadata. */
         RESERVED_HEADER_USED,
+        /** A handler returned {@code null} where its effects were required. */
+        HANDLER_RETURNED_NULL_EFFECTS,
         /** An application payload could not be decoded by its declared serde. */
         APPLICATION_PAYLOAD_UNDECODABLE,
         /** An application payload could not be serialized by its declared serde. */

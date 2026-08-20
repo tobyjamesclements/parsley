@@ -239,8 +239,12 @@ public final class ProcessEngine {
      *
      * @param message the message, whose position must exceed any already fed for its channel
      * @return whether the message was accepted or recognised as already delivered
-     * @throws ParsleyFailClosedException if the host fed out of order, if the metadata cannot
-     *         be decoded, or if the metadata exceeds the configured budget
+     * @throws ParsleyFailClosedException if the host fed out of order within this execution,
+     *         if the message's position was already covered by a read-position report — a
+     *         report/feed contradiction, which is a false report or this execution observing
+     *         its successor's progress after being superseded, not a feed-order breach — if
+     *         the metadata cannot be decoded, or if the metadata exceeds the configured
+     *         budget
      */
     public ReceiveOutcome onReceive(ReceivedMessage message) {
         ChannelId channel = message.channel();
@@ -277,9 +281,16 @@ public final class ProcessEngine {
             }
             Long floor = sessionFloor.get(channel);
             if (floor == null || message.position() > floor) {
-                throw new ParsleyFailClosedException(Reason.OUT_OF_ORDER_FEED,
+                // Not a feed-order violation: in-execution order is checked against
+                // fedThisExecution above. This position was covered by a read-position
+                // report, so the report and the feed contradict each other.
+                throw new ParsleyFailClosedException(Reason.COVERED_POSITION_FED,
                         "process " + processName + ": fed " + channel + "@" + message.position()
-                                + " which this execution already covered as fed-or-never-arriving (fedUpTo=" + fed + ")");
+                                + " which a read-position report already covered as fed-or-never-arriving"
+                                + " (fedUpTo=" + fed + "). Either the report was false, or this execution has"
+                                + " been superseded and a facts round observed its successor's committed"
+                                + " progress; a superseded execution's step cannot commit, a restart recovers,"
+                                + " and this refusal then does not recur.");
             }
 
             return ReceiveOutcome.DUPLICATE_DROPPED;

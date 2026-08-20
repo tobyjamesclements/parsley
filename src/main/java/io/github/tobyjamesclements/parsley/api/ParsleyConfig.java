@@ -34,7 +34,11 @@ public final class ParsleyConfig {
             "deserialization.exception.handler",
             "production.exception.handler",
             "interceptor.classes",
-            "default.timestamp.extractor");
+            "default.timestamp.extractor",
+            // The group membership protocol selects the fencing semantics the initial-position
+            // bootstrap's safety argument is built on; swapping it is a guarantee-bearing change.
+            "group.protocol",
+            "group.remote.assignor");
 
     private final String bootstrapServers;
     private final String applicationIdPrefix;

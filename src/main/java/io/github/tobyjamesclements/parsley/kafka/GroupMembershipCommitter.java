@@ -36,6 +36,11 @@ final class GroupMembershipCommitter implements AutoCloseable {
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+        // committed() is a transaction-stable offset fetch regardless of configuration:
+        // the consumer sets requireStable on every OffsetFetch it sends (verified in
+        // kafka-clients 4.3.1, ConsumerCoordinator#sendOffsetFetchRequest), retrying
+        // while a pending transactional commit is deciding. Nothing here needs an
+        // isolation.level — this member never fetches a record.
 
         // This member must vacate the group the moment it closes — the Streams start that
         // follows joins the same group under a different protocol. A static member sends no
