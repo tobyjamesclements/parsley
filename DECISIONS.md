@@ -2930,3 +2930,45 @@ affirmative evidence in the feed path. Pinned by the `AdminFactsSourceDebounceTe
 reworked `AdminFactsSourceDegradationTest#verdictsRideTheRoundThroughAPartitionOutage`;
 `IdentityIntegrationTest#midRunRecreationOfAReceivedTopicStopsTheProcess` still passes on the real broker,
 one window later.
+
+### D86 — A partially-covering stable listing is retried before the group join; extends D79
+
+**Context**
+
+Audit finding (kafka-layer audit, M1). D79's requireStable pre-check asks the broker for stable offsets, and
+the admin client silently *skips* any partition answering partition-level UNSTABLE_OFFSET_COMMIT — the
+behaviour D79 itself records. Against a live sibling instance of the same process, offsets are committed
+transactionally every EOS commit interval (100ms by default), so at any listing instant some received
+partition is plausibly mid-commit: that partition vanishes from the listing, the containsAll fast path fails,
+and the start falls into the bootstrap group join — which, against a live Kafka Streams group, can only cycle
+on the protocol conflict until the join deadline (twice the session timeout, ~90 seconds by default) and then
+refuse the whole start. Starting a second instance beside a loaded first — routine horizontal scaling, which
+`EndToEndIntegrationTest`'s migration test itself relies on — was thus refused probabilistically, with a
+90-second hang and a diagnosis pointing nowhere near the cause.
+
+**Decision**
+
+A listing that covers some received partitions but not all is treated as the unstable-skip shape and
+re-listed for up to five seconds: pending transactional commits resolve within the transaction timeout
+(10 seconds under Streams EOS defaults, typically milliseconds), so a healthy sibling's listing completes
+within a retry or two. A listing that stays partial falls through to the join exactly as before — the join
+remains the authority on genuinely missing offsets, and the fencing argument (D48) is untouched. A first
+start lists nothing for the received set and skips the wait entirely, so the retry taxes only the shapes
+that were already heading for a 90-second failure.
+
+**Alternatives**
+
+* Dropping requireStable from the pre-check — rejected: D79 added it so the listing never *acts on* an
+  offset a live lifetime is about to replace; existence-checking on an unstable snapshot would reopen that.
+* Retrying on any incomplete listing, empty included — rejected: it would tax every genuine first start
+  five seconds for nothing; the partial shape is the one that evidences a live group.
+* Distinguishing skip-from-missing via the member's committed() fetch before joining — rejected: reading
+  committed offsets without membership is exactly what the pre-check does; a stable *fetch* needs the join
+  whose cost this record avoids.
+
+**Cost**
+
+A start whose group genuinely has offsets for only some received partitions — a partition added to a
+received topic while the group's offsets survive, say — waits five extra seconds before the join it would
+have entered anyway. The retry-decision predicate is pinned by `BootstrapPreCheckTest`; the loop is
+exercised by every bootstrap integration test through the unchanged fast and join paths.

@@ -470,18 +470,29 @@ public final class ParsleyRuntime implements AutoCloseable {
                                         Map<String, TopicInfo> topics, boolean priorState,
                                         Map<byte[], byte[]> orderingState, Map<String, Object> clientProps) {
         java.util.Set<TopicPartition> received = receivedPartitions(definition, topics);
-        Map<TopicPartition, OffsetAndMetadata> preCheck;
-        try {
-            // requireStable: a pending transactional commit means another lifetime of this
-            // process is live right now, and this listing must not act on an offset that
-            // lifetime is about to replace.
-            preCheck = admin.listConsumerGroupOffsets(applicationId,
-                            new org.apache.kafka.clients.admin.ListConsumerGroupOffsetsOptions()
-                                    .requireStable(true))
-                    .partitionsToOffsetAndMetadata().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        } catch (Exception e) {
-            throw new IllegalStateException(
-                    applicationId + ": committed read positions could not be listed; refusing to start", e);
+        Map<TopicPartition, OffsetAndMetadata> preCheck = listStableOffsets(applicationId);
+        // A listing that covers some received partitions but not all is, over a healthy
+        // group, usually not missing offsets at all: the stable listing silently omits any
+        // partition whose offset has a pending transactional commit (partition-level
+        // UNSTABLE_OFFSET_COMMIT is skipped, not failed, by the admin client), and a live
+        // sibling under EOS commits every commit interval, so some partition is routinely
+        // mid-commit at the listing instant. Concluding "missing" from that snapshot sends
+        // the start into the group join, which can only grind against the sibling's
+        // protocol until the join deadline and then refuse a legitimate scale-out.
+        // Pending commits resolve within the transaction timeout, so a partial listing is
+        // retried briefly; one that stays partial falls through to the join, which remains
+        // authoritative (D86). A first start lists nothing for the received set and skips
+        // the wait entirely.
+        long retryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (preCheckLooksUnstable(received, preCheck.keySet()) && System.nanoTime() - retryDeadline < 0) {
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                        applicationId + ": interrupted while listing read positions; refusing to start", e);
+            }
+            preCheck = listStableOffsets(applicationId);
         }
         refuseLostOrderingState(applicationId, priorState, preCheck, clientProps);
         if (preCheck.keySet().containsAll(received)) {
@@ -627,6 +638,45 @@ public final class ParsleyRuntime implements AutoCloseable {
                                 + " offsets deliberately to proceed.");
             }
         }
+    }
+
+    /**
+     * Lists the group's committed read positions, requiring stability.
+     *
+     * <p>requireStable: a pending transactional commit means another lifetime of this
+     * process is live right now, and this listing must not act on an offset that lifetime
+     * is about to replace.
+     */
+    private Map<TopicPartition, OffsetAndMetadata> listStableOffsets(String applicationId) {
+        try {
+            return admin.listConsumerGroupOffsets(applicationId,
+                            new org.apache.kafka.clients.admin.ListConsumerGroupOffsetsOptions()
+                                    .requireStable(true))
+                    .partitionsToOffsetAndMetadata().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (Exception e) {
+            throw new IllegalStateException(
+                    applicationId + ": committed read positions could not be listed; refusing to start", e);
+        }
+    }
+
+    /**
+     * Whether a stable offset listing should be retried before concluding offsets are
+     * missing.
+     *
+     * <p>Partial coverage of the received set is the shape a pending transactional commit
+     * produces — the stable listing skips, rather than fails, an unstable partition — where
+     * a genuine first start lists nothing for the received set at all, and must not wait.
+     */
+    static boolean preCheckLooksUnstable(java.util.Set<TopicPartition> received,
+                                         java.util.Set<TopicPartition> listed) {
+        boolean coversSome = false;
+        for (TopicPartition tp : received) {
+            if (listed.contains(tp)) {
+                coversSome = true;
+                break;
+            }
+        }
+        return coversSome && !listed.containsAll(received);
     }
 
     private static java.util.Set<TopicPartition> receivedPartitions(ProcessDefinition definition,
