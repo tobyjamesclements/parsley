@@ -2873,3 +2873,60 @@ A genuine first start performs two extra describes (~1s). The lost-state refusal
 it already read; the path is terminal. Pinned by
 `BootstrapIntegrationTest#emptiedChangelogWithSurvivingOffsetsRefusesToStart` (would have resumed silently
 before this record) alongside D76's three existing pins, which all still hold.
+
+### D85 — Verdict windows require observed continuity; recreation is debounced; contradicted verdicts are rescinded (extends D44/D75)
+
+**Context**
+
+Audit findings (kafka-layer audit, M4/M5/M6), three unsoundnesses in the dead/recreated verdict machinery.
+First, D44's window promised death confirmed by *continuous* corroboration, but the implementation anchored a
+timestamp and confirmed on elapsed time at the next name-gone answer: during a blind gap — no round asking
+about the id at all, which is routine exactly when answers are least trustworthy, since one process's round
+grinding against 10s admin timeouts starves every other process's rounds on the runtime's shared single-thread
+facts executor, and a task sitting out a rebalance asks nothing — the anchor silently persisted, so two
+isolated stale sightings 3 seconds apart could confirm a live topic dead. A spuriously dead received channel
+settles to fed-to-end and releases held messages ahead of causes still coming; a spuriously dead frontier
+channel is pruned, under-expressing a live cause on every emission (SPEC Structural 13) — both fail open.
+Second, the RECREATED verdict convicted from a single by-name answer, immediately and stickily, on D44's
+argument that "a stale view can serve an old binding but cannot invent a new one" — but serving an old binding
+is precisely the false positive: when the process's own binding is fresher than the answering broker's
+metadata (topic deleted and recreated shortly before the process resolved the new id), one lagging broker
+self-consistently answers unknown-by-id and old-id-by-name, convicting the live topic into a permanent
+CHANNEL_IDENTITY_CHANGED stop whose remedy tells the operator to redo the reset they just performed. Third,
+the recheck loop computed SAME_ID for confirmed-dead ids — the name resolving to the very id the verdict
+condemned, affirmative proof of a spurious confirmation since the substrate never reuses a topic id — and
+discarded it, holding the verdict against its own contradicting evidence forever.
+
+**Decision**
+
+Confirmation windows carry both an anchor and a latest-observation bound: an observation gap reaching the
+window length restarts the window, so maturing always takes an unbroken run of at least three affirmative
+observations, and no pair of isolated sightings can confirm anything. The RECREATED verdict goes through the
+same windowed corroboration as NAME_GONE, in the first-classification path and in the dead-to-recreated
+upgrade alike; any contrary observation (same-id, denied, unavailable, live-by-id) restarts it. And the
+recheck acts on SAME_ID: the verdict — dead or recreated — is rescinded with a logged warning, the id
+returns to unconfirmed, and a genuine condition reconfirms through a fresh window. To keep confirmed
+verdicts recheckable, pinned ids retain their name binding through `forget`; unpinned ids (departed frontier
+entries) still drop it and remain non-rescindable, which costs expression size, never safety.
+
+**Alternatives**
+
+* A shorter continuity bound (half the window) — rejected: it would demand more than one observation per
+  facts interval to mature at all under the default window of three intervals, making healthy confirmation
+  flaky; the window-length bound already forces at least three unbroken observations.
+* Failing closed on the SAME_ID contradiction instead of rescinding — rejected: the contradiction proves the
+  *verdict* wrong, not the world; an engine that already consumed the spurious verdict fails closed on its
+  next feed regardless (OUT_OF_ORDER_FEED on a settled channel), which is the loud half, while rescission
+  stops the spurious verdict reaching engines that have not.
+* Corroborating recreation by describing the new id — rejected: the new id resolves fine on the lagging
+  broker too; freshness of the *binding* is what cannot be asked of one broker, and only sustained
+  observation answers it.
+
+**Cost**
+
+A genuine mid-run recreation or deletion is confirmed roughly one window later than before (default: three
+facts intervals, floor three seconds). The engine's own guards are unchanged and still fire immediately on
+affirmative evidence in the feed path. Pinned by the `AdminFactsSourceDebounceTest` additions and the
+reworked `AdminFactsSourceDegradationTest#verdictsRideTheRoundThroughAPartitionOutage`;
+`IdentityIntegrationTest#midRunRecreationOfAReceivedTopicStopsTheProcess` still passes on the real broker,
+one window later.

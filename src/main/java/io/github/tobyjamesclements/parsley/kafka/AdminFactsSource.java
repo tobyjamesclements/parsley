@@ -72,11 +72,37 @@ class AdminFactsSource implements FactsSource {
     private final Map<UUID, String> topicNamesById = new HashMap<>();
 
     /**
-     * Anchors each open dead-confirmation window. Opened and extended only by an affirmed
+     * An open confirmation window: when its first affirmative observation landed, and when
+     * its latest did. Maturity needs both bounds — a span of window length between the
+     * first and latest observation, and no gap between consecutive observations reaching
+     * the window length, so two isolated sightings bracketing a blind period (a starved
+     * facts executor, a task out for a rebalance) can never confirm on elapsed time alone
+     * (D85).
+     */
+    private static final class ConfirmationWindow {
+        long since;
+        long lastSeen;
+
+        ConfirmationWindow(long now) {
+            this.since = now;
+            this.lastSeen = now;
+        }
+    }
+
+    /**
+     * The open dead-confirmation windows. Opened and extended only by an affirmed
      * name-gone answer; an id whose name was never learned has nothing to corroborate
      * against and is never confirmed dead at all.
      */
-    private final Map<UUID, Long> deadWindowSince = new HashMap<>();
+    private final Map<UUID, ConfirmationWindow> deadWindows = new HashMap<>();
+
+    /**
+     * The open recreation-confirmation windows. A recreated answer is as stale-prone as a
+     * name-gone one — a broker whose metadata lags this process's own resolution serves
+     * the previous incarnation's binding, indistinguishable from a genuine recreation —
+     * so it earns the same continuous corroboration before conviction (D85).
+     */
+    private final Map<UUID, ConfirmationWindow> recreatedWindows = new HashMap<>();
 
     private final Set<UUID> confirmedDead = new HashSet<>();
 
@@ -180,7 +206,8 @@ class AdminFactsSource implements FactsSource {
         try {
             liveNames = describeByIds(undescribed);
         } catch (Exception e) {
-            deadWindowSince.clear();
+            deadWindows.clear();
+            recreatedWindows.clear();
             throw e;
         }
 
@@ -194,11 +221,17 @@ class AdminFactsSource implements FactsSource {
             }
         }
 
-        Set<UUID> deadIdsToRecheck = new HashSet<>();
+        // Confirmed verdicts are re-checked by name every round the id is asked about: the
+        // topic reappearing under the same name with a different id upgrades dead to
+        // recreated, and the name resolving to the very id a verdict condemned is
+        // affirmative proof the confirming answers were stale — the substrate never
+        // reuses a topic id — so the verdict is rescinded rather than held against the
+        // evidence (D85).
+        Set<UUID> confirmedIdsToRecheck = new HashSet<>();
         for (UUID id : topicIds) {
             String lastKnown = topicNamesById.get(id);
-            if (confirmedDead.contains(id) && lastKnown != null) {
-                deadIdsToRecheck.add(id);
+            if ((confirmedDead.contains(id) || confirmedRecreated.contains(id)) && lastKnown != null) {
+                confirmedIdsToRecheck.add(id);
                 namesToCheck.add(lastKnown);
             }
         }
@@ -209,16 +242,29 @@ class AdminFactsSource implements FactsSource {
             String lastKnown = topicNamesById.get(id);
             NameVerdict verdict = classifyName(byNameOutcome, lastKnown, id);
             switch (verdict) {
-                case SAME_ID -> deadWindowSince.remove(id);
-                case RECREATED -> markRecreated(id);
+                case SAME_ID -> {
+                    deadWindows.remove(id);
+                    recreatedWindows.remove(id);
+                }
+                // A recreated answer is served from one broker's metadata view, which can
+                // lag this process's own resolution and serve the previous incarnation's
+                // binding — indistinguishable from a genuine recreation — so conviction
+                // takes the same continuously-corroborated window as death (D85).
+                case RECREATED -> {
+                    deadWindows.remove(id);
+                    if (observeWindow(recreatedWindows, id, now)) {
+                        markRecreated(id);
+                    }
+                }
                 case DENIED -> {
-                    deadWindowSince.remove(id);
+                    deadWindows.remove(id);
+                    recreatedWindows.remove(id);
                     LOG.warn("{}: describe denied for topic '{}' ({}); treating as denied, not dead",
                             groupId, lastKnown, id);
                 }
                 case NAME_GONE -> {
-                    long since = deadWindowSince.computeIfAbsent(id, i -> now);
-                    if (now - since >= deadConfirmationMillis) {
+                    recreatedWindows.remove(id);
+                    if (observeWindow(deadWindows, id, now)) {
                         markDead(id);
                     }
                 }
@@ -231,19 +277,35 @@ class AdminFactsSource implements FactsSource {
                 // time-only verdict here would prune a live cause (SPEC Structural 13).
                 // The id lingers unconfirmed — costing expression size, never safety —
                 // until its name is learned or its topic reappears.
-                case UNAVAILABLE -> deadWindowSince.remove(id);
+                case UNAVAILABLE -> {
+                    deadWindows.remove(id);
+                    recreatedWindows.remove(id);
+                }
             }
         }
-        for (UUID id : deadIdsToRecheck) {
-            if (classifyName(byNameOutcome, topicNamesById.get(id), id) == NameVerdict.RECREATED) {
-                markRecreated(id);
+        for (UUID id : confirmedIdsToRecheck) {
+            NameVerdict verdict = classifyName(byNameOutcome, topicNamesById.get(id), id);
+            if (verdict == NameVerdict.RECREATED && confirmedDead.contains(id)) {
+                if (observeWindow(recreatedWindows, id, now)) {
+                    markRecreated(id);
+                }
+            } else if (verdict == NameVerdict.SAME_ID) {
+                LOG.warn("{}: {} verdict on topic '{}' ({}) rescinded: the name still resolves to the same"
+                                + " id, so the answers that confirmed it were stale",
+                        groupId, confirmedDead.contains(id) ? "dead" : "recreated",
+                        topicNamesById.get(id), id);
+                confirmedDead.remove(id);
+                confirmedRecreated.remove(id);
+                deadWindows.remove(id);
+                recreatedWindows.remove(id);
             }
         }
 
         Set<UUID> deadTopicIds = new HashSet<>(confirmedDead);
         Set<UUID> recreatedTopicIds = new HashSet<>(confirmedRecreated);
         for (UUID id : liveNames.keySet()) {
-            deadWindowSince.remove(id);
+            deadWindows.remove(id);
+            recreatedWindows.remove(id);
         }
 
         Map<TopicPartition, OffsetSpec> offsetQueries = new HashMap<>();
@@ -317,13 +379,30 @@ class AdminFactsSource implements FactsSource {
         return new PositionFacts(committedNextRead, logStart, deadChannels, recreatedChannels);
     }
 
+    /**
+     * Extends or (re)opens a confirmation window on an affirmative observation, answering
+     * whether the window has matured.
+     *
+     * <p>An observation gap as long as the window itself is an outage, not continuity:
+     * rounds ask about an id every interval when healthy, so a gap reaching the window
+     * length means no round asked — a starved facts executor, a task out for a rebalance —
+     * and the sightings bracketing it are isolated, exactly what D44's continuity
+     * requirement rejects. The window restarts at the fresh sighting rather than maturing,
+     * so confirmation always takes an unbroken run of at least three observations (D85).
+     */
+    private boolean observeWindow(Map<UUID, ConfirmationWindow> windows, UUID id, long now) {
+        ConfirmationWindow window = windows.get(id);
+        if (window == null || now - window.lastSeen >= deadConfirmationMillis) {
+            windows.put(id, new ConfirmationWindow(now));
+            return false;
+        }
+        window.lastSeen = now;
+        return now - window.since >= deadConfirmationMillis;
+    }
+
     private void markDead(UUID id) {
         confirmedDead.add(id);
-        deadWindowSince.remove(id);
-
-        if (!pinnedIds.contains(id)) {
-            topicNamesById.remove(id);
-        }
+        forget(id);
     }
 
     private void markRecreated(UUID id) {
@@ -332,9 +411,18 @@ class AdminFactsSource implements FactsSource {
         forget(id);
     }
 
+    /**
+     * Drops an id's confirmation windows, and its name binding unless the id is pinned.
+     * Pinned ids keep their name so a confirmed verdict stays recheckable by name — the
+     * recheck is what upgrades dead to recreated and rescinds a verdict its own evidence
+     * contradicts (D85).
+     */
     private void forget(UUID id) {
-        deadWindowSince.remove(id);
-        topicNamesById.remove(id);
+        deadWindows.remove(id);
+        recreatedWindows.remove(id);
+        if (!pinnedIds.contains(id)) {
+            topicNamesById.remove(id);
+        }
     }
 
     /**

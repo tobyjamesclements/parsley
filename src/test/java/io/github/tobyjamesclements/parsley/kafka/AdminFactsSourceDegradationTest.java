@@ -42,8 +42,15 @@ class AdminFactsSourceDegradationTest {
     /** Answers through the admin seams: topic x's partition is unavailable, y's is healthy,
      * and topic z's name now resolves to a different identity (recreated). */
     static final class DegradedFacts extends AdminFactsSource {
+        final java.util.concurrent.atomic.AtomicLong nowMillis;
+
         DegradedFacts() {
-            super(null, "g", Map.of(X_ID, "x", Y_ID, "y", Z_ID, "z"), Map.of(), 1_000L, () -> 0L);
+            this(new java.util.concurrent.atomic.AtomicLong());
+        }
+
+        private DegradedFacts(java.util.concurrent.atomic.AtomicLong clock) {
+            super(null, "g", Map.of(X_ID, "x", Y_ID, "y", Z_ID, "z"), Map.of(), 1_000L, clock::get);
+            this.nowMillis = clock;
         }
 
         @Override
@@ -151,7 +158,15 @@ class AdminFactsSourceDegradationTest {
 
     @Test
     void verdictsRideTheRoundThroughAPartitionOutage() throws Exception {
-        PositionFacts facts = new DegradedFacts().gather(Set.of(A, B, R), Map.of(), Set.of());
+        DegradedFacts source = new DegradedFacts();
+        // The recreated answer convicts only across a continuous confirmation window
+        // (D85), so the verdict matures over three rounds before the outage assertion.
+        source.gather(Set.of(A, B, R), Map.of(), Set.of());
+        source.nowMillis.set(500);
+        source.gather(Set.of(A, B, R), Map.of(), Set.of());
+        source.nowMillis.set(1_000);
+
+        PositionFacts facts = source.gather(Set.of(A, B, R), Map.of(), Set.of());
 
         assertEquals(Set.of(R), facts.recreatedChannels(),
                 "the recreated verdict must reach the engine despite the unavailable partition");
