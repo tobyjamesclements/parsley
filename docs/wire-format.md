@@ -46,6 +46,11 @@ Every constraint below is mandatory. Violating any one makes the value undecodab
    right as unsigned bytes. At most one entry per channel, so the encoding of a given cause
    set is unique byte for byte.
 4. `partition` and `position` are non-negative.
+5. `topicId` is not all-zero bytes. The substrate reserves the zero topic ID and never
+   assigns it to a channel, so no genuine cause can name it; an entry carrying it is
+   undecodable. (A reader-side tightening, not a grammar change: no conforming writer has
+   ever produced such an entry, because writers only express channels the substrate named —
+   D83 records the reasoning.)
 
 ## Meaning
 

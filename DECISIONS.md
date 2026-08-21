@@ -2786,3 +2786,45 @@ times out and the scan refuses) instead of resuming silently.
 
 None of substance. A start racing a changelog deletion now fails with the reader's timeout rather than a
 crisper diagnosis; the failure is loud, transient in shape, and a restart reaches the absent-changelog path.
+
+### D83 — The reserved zero topic ID is undecodable metadata; the facts round tolerates unanswerable ids
+
+**Context**
+
+Audit finding (kafka-layer audit, M2). Nothing rejected an all-zero topic ID arriving in an otherwise
+well-formed `parsley.causes` header — the substrate reserves `Uuid.ZERO_UUID` and never assigns it
+(`Uuid.randomUuid` excludes reserved ids; `ParsleyRuntime.resolveTopics` refuses it at start under
+SUBSTRATE_MISCONFIGURED), so no genuine cause can name it, but a foreign producer can frame one in 33 valid
+bytes. Once decoded it merged into the persisted frontier, and every subsequent facts round died at the
+opening describe: the admin client answers a zero id locally with `InvalidTopicException`
+(`KafkaAdminClient.topicIdIsUnrepresentable`, verified in 4.3.1 sources), which `describeByIds` rethrew where
+it tolerates only unknown-topic answers. Facts stopped forever for the task — no settling, no dead or
+recreated verdicts, no truncation evidence — surfacing only as a repeating warn, surviving restarts through
+the durable frontier, and spreading to every downstream process via re-expression on emissions.
+
+**Decision**
+
+Two independent guards. `CausesCodec.decode` refuses an entry naming the zero topic ID as undecodable
+metadata — wire-format constraint 5, a reader-side tightening rather than a grammar change, because no
+conforming writer has ever produced such an entry (writers only express channels the substrate named, and
+the substrate never names this one). So the id can no longer enter a frontier at all, and the message
+carrying it fails closed with UNDECODABLE_METADATA like every other untrustworthy header.
+`AdminFactsSource.describeByIds` additionally tolerates `InvalidTopicException` exactly like an
+unknown-topic answer, so ordering state persisted before this refusal existed — which can still carry the
+id — degrades to "no facts for that channel" instead of aborting every round.
+
+**Alternatives**
+
+* Refusing in `ChannelId`'s constructor — rejected: the constructor also serves decode paths that must
+  report *undecodable metadata* with position context, and an `IllegalArgumentException` there would
+  surface as a malformed-header catch-all rather than the named condition.
+* Tolerating in `describeByIds` alone — rejected: the frontier would still carry and re-express the
+  ghost id forever, costing budget bytes on every emission and poisoning downstream frontiers.
+
+**Cost**
+
+A message whose forged header names the zero id now stops the process (fail closed) instead of delivering
+with the ghost merged. That is the project's stated preference: undecodable metadata is a reason to stop.
+Pinned by `CausesCodecTest#rejectsZeroTopicId` and
+`IdentityIntegrationTest#zeroTopicIdInTheFrontierDoesNotAbortTheFactsRound` (real admin client, real
+local InvalidTopicException answer).

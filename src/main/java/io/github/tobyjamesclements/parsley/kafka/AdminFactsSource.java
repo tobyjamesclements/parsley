@@ -537,8 +537,14 @@ class AdminFactsSource implements FactsSource {
                 names.put(id, description.name());
                 topicNamesById.put(id, description.name());
             } catch (ExecutionException e) {
+                // InvalidTopicException is the admin client's client-side answer for an id
+                // it deems unrepresentable (the reserved zero id): tolerated like unknown,
+                // not rethrown, so one unanswerable id in the frontier cannot abort every
+                // round forever. The decode path refuses such ids at receipt (D83); this
+                // guards state persisted before that refusal existed.
                 if (e.getCause() instanceof UnknownTopicIdException
-                        || e.getCause() instanceof UnknownTopicOrPartitionException) {
+                        || e.getCause() instanceof UnknownTopicOrPartitionException
+                        || e.getCause() instanceof org.apache.kafka.common.errors.InvalidTopicException) {
                     continue;
                 }
                 throw e;

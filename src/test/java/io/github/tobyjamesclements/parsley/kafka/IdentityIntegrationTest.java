@@ -30,6 +30,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
@@ -326,5 +327,31 @@ class IdentityIntegrationTest {
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason(),
                 "nothing was removed from the declaration: the topic's identity changed, and the remedy is a"
                         + " deliberate reset, not a declaration fix");
+    }
+
+    /**
+     * A frontier id the admin client deems unrepresentable — the reserved zero id, which
+     * the client answers locally with {@code InvalidTopicException}, never sending a
+     * request — must degrade to "no facts for that channel", not abort the round: the
+     * round is the only mid-run carrier of verdicts and settling evidence for every other
+     * channel, and ordering state persisted before the decode refusal existed (D83) can
+     * still carry such an id in its restored frontier.
+     */
+    @Test
+    void zeroTopicIdInTheFrontierDoesNotAbortTheFactsRound() throws Exception {
+        createTopics("zid-in");
+        UUID inId = topicId("zid-in");
+        ChannelId received = new ChannelId(inId, 0);
+        AdminFactsSource source = new AdminFactsSource(admin, "zid-group", Map.of(inId, "zid-in"),
+                Map.of("bootstrap.servers", cluster.bootstrapServers()), 1_000L,
+                () -> System.nanoTime() / 1_000_000L);
+
+        var facts = source.gather(Set.of(received), Map.of(),
+                Set.of(new ChannelId(new UUID(0, 0), 0)));
+
+        assertEquals(Map.of(received, 0L), facts.logStart(),
+                "the round must still settle the live channel's facts despite the unanswerable frontier id");
+        assertTrue(facts.deadChannels().isEmpty(),
+                "an unanswerable id is not evidence of death");
     }
 }
