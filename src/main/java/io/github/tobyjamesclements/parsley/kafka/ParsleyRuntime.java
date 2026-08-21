@@ -106,19 +106,22 @@ public final class ParsleyRuntime implements AutoCloseable {
                 String applicationId = config.applicationIdPrefix() + "-" + definition.name();
                 java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> changelog =
                         runtime.describeChangelog(applicationId);
-                Map<byte[], byte[]> orderingState = changelog.isPresent()
-                        ? runtime.readOrderingChangelog(applicationId, adminProps)
-                        : Map.of();
+                ChangelogView orderingView = changelog.isPresent()
+                        ? runtime.readOrderingChangelog(applicationId, adminProps,
+                                changelog.get().partitions().size())
+                        : ChangelogView.ABSENT;
+                Map<byte[], byte[]> orderingState = orderingView.latest();
                 // Prior state means committed ordering records, not the topic's mere
-                // existence: every committed step's transaction wrote at least the store's
-                // version entry, which compaction retains, so a changelog emptied of its
-                // records (deleteRecords, a cleanup-policy excursion) is the same loss
-                // shape as a deleted one and must run the same refusal (D84). The width
-                // refusal still keys on the topic, whose partition count outlives records.
+                // existence: a task's first committed step wrote the store's version entry,
+                // which compaction retains, so any committed execution leaves records — a
+                // changelog emptied of them (deleteRecords, a cleanup-policy excursion) is
+                // the same loss shape as a deleted one and must run the same refusal
+                // (D84, per partition since D88). The width refusal still keys on the
+                // topic, whose partition count outlives its records.
                 boolean priorState = !orderingState.isEmpty();
                 runtime.refuseStrandedHeldMessages(applicationId, definition, topics, priorState, orderingState);
                 runtime.refuseWidthChange(applicationId, definition, topics, changelog);
-                runtime.commitInitialPositions(applicationId, definition, topics, priorState, orderingState,
+                runtime.commitInitialPositions(applicationId, definition, topics, priorState, orderingView,
                         adminProps);
                 Map<UUID, String> namesById = new HashMap<>();
                 topics.forEach((name, info) -> namesById.put(info.topicId(), name));
@@ -355,17 +358,24 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     /**
-     * Reads the process's ordering-store changelog end to end, compacted in memory to the
-     * latest value per key.
-     *
-     * <p>The read targets the log's true end rather than the last stable offset: a
-     * superseded execution's producer can leave a transaction open below records a
-     * successor committed, and stopping at the stable offset would silently hide those
-     * committed tail records from the checks this view feeds. An open transaction resolves
-     * within the producer's transaction timeout, which the stall deadline outlasts at the
-     * defaults; a transaction configured to outlive the deadline fails the start loudly
-     * rather than truncating the view.
+     * A start-time contradiction another attempt resolves: refused loudly, safe to retry,
+     * and never dressed as a terminal diagnosis whose remedy would destroy healthy state.
      */
+    static final class RetryableStartException extends IllegalStateException {
+        RetryableStartException(String message) {
+            super(message);
+        }
+    }
+
+    /**
+     * What one end-to-end read of the ordering changelog saw: the latest value per key
+     * across every partition, and which partitions held at least one record — the loss
+     * shape is per changelog partition, since each task's state lives in its own (D88).
+     */
+    record ChangelogView(Map<byte[], byte[]> latest, java.util.Set<Integer> partitionsWithRecords) {
+        static final ChangelogView ABSENT = new ChangelogView(Map.of(), java.util.Set.of());
+    }
+
     /**
      * Client properties for the bootstrap's ordering-changelog reader.
      *
@@ -373,9 +383,12 @@ public final class ParsleyRuntime implements AutoCloseable {
      * is false because the reader's metadata requests must never create the very changelog
      * whose record content start() keys prior state on: against a broker with auto-create
      * enabled, a deletion racing the start would otherwise be resurrected as an empty
-     * impostor that passes every prior-state refusal (D82). {@code auto.offset.reset} is
-     * none so a log start advancing mid-scan fails the scan loudly instead of silently
-     * resetting to the end and truncating the restored view those refusals read.
+     * impostor that passes every prior-state refusal (D82); with the pin, the reader's
+     * metadata answer omits the topic and the scan's partition-count check refuses loudly
+     * (D88 corrects D82's claimed mechanism — the unknown answer is immediate, not a
+     * timeout). {@code auto.offset.reset} is none so a log start advancing mid-scan fails
+     * the scan loudly instead of silently resetting to the end and truncating the
+     * restored view those refusals read.
      */
     static Map<String, Object> changelogReaderProperties(Map<String, Object> clientProps) {
         Map<String, Object> props = new HashMap<>(clientProps);
@@ -387,15 +400,41 @@ public final class ParsleyRuntime implements AutoCloseable {
         return props;
     }
 
-    private Map<byte[], byte[]> readOrderingChangelog(String applicationId, Map<String, Object> clientProps) {
+    /**
+     * Reads the process's ordering-store changelog end to end, compacted in memory to the
+     * latest value per key, tracking which partitions held records.
+     *
+     * <p>The read targets the log's true end rather than the last stable offset: a
+     * superseded execution's producer can leave a transaction open below records a
+     * successor committed, and stopping at the stable offset would silently hide those
+     * committed tail records from the checks this view feeds. An open transaction resolves
+     * within the producer's transaction timeout, which the stall deadline outlasts at the
+     * defaults; a transaction configured to outlive the deadline fails the start loudly
+     * rather than truncating the view.
+     *
+     * <p>The reader's own metadata answer is corroborated against the describe this read
+     * was keyed on: with auto-create pinned off, a broker whose metadata lags the
+     * changelog's creation answers an empty partition list immediately — no retry, no
+     * timeout — and trusting it would flip prior state off one stale view, the exact
+     * single-answer trust D84 removed from the describe path. A partition-count mismatch
+     * refuses as a retryable transient instead of scanning vacuously (D88).
+     */
+    private ChangelogView readOrderingChangelog(String applicationId, Map<String, Object> clientProps,
+                                                int expectedPartitions) {
         String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
         Map<String, Object> props = changelogReaderProperties(clientProps);
         Map<byte[], byte[]> latest = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
+        java.util.Set<Integer> partitionsWithRecords = new HashSet<>();
         try (var consumer = new org.apache.kafka.clients.consumer.KafkaConsumer<>(props,
                 new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
                 new org.apache.kafka.common.serialization.ByteArrayDeserializer())) {
             List<TopicPartition> parts = consumer.partitionsFor(changelog).stream()
                     .map(pi -> new TopicPartition(pi.topic(), pi.partition())).toList();
+            if (parts.size() != expectedPartitions) {
+                throw new RetryableStartException(applicationId + ": the ordering changelog is described"
+                        + " with " + expectedPartitions + " partition(s) but the reader's metadata answered "
+                        + parts.size() + "; a broker's metadata view is lagging. Retry this start.");
+            }
             consumer.assign(parts);
             consumer.seekToBeginning(parts);
             Map<TopicPartition, OffsetSpec> latestSpecs = new HashMap<>();
@@ -420,7 +459,10 @@ public final class ParsleyRuntime implements AutoCloseable {
                     }
                 } else {
                     stallDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
-                    polled.forEach(record -> latest.put(record.key(), record.value()));
+                    polled.forEach(record -> {
+                        latest.put(record.key(), record.value());
+                        partitionsWithRecords.add(record.partition());
+                    });
                 }
                 // A partition that reached its snapshot end stops feeding the loop:
                 // records past the snapshot would otherwise keep resetting the stall
@@ -432,11 +474,13 @@ public final class ParsleyRuntime implements AutoCloseable {
                     }
                 }
             }
+        } catch (RetryableStartException e) {
+            throw e;
         } catch (Exception e) {
             throw new IllegalStateException(
                     applicationId + ": prior ordering state could not be read; refusing to start", e);
         }
-        return latest;
+        return new ChangelogView(latest, java.util.Set.copyOf(partitionsWithRecords));
     }
 
     private void refuseStrandedHeldMessages(String applicationId, ProcessDefinition definition,
@@ -477,7 +521,7 @@ public final class ParsleyRuntime implements AutoCloseable {
 
     private void commitInitialPositions(String applicationId, ProcessDefinition definition,
                                         Map<String, TopicInfo> topics, boolean priorState,
-                                        Map<byte[], byte[]> orderingState, Map<String, Object> clientProps) {
+                                        ChangelogView orderingView, Map<String, Object> clientProps) {
         java.util.Set<TopicPartition> received = receivedPartitions(definition, topics);
         Map<TopicPartition, OffsetAndMetadata> preCheck = listStableOffsets(applicationId);
         // A listing that covers some received partitions but not all is, over a healthy
@@ -503,7 +547,7 @@ public final class ParsleyRuntime implements AutoCloseable {
             }
             preCheck = listStableOffsets(applicationId);
         }
-        refuseLostOrderingState(applicationId, priorState, preCheck, clientProps);
+        refuseLostOrderingState(applicationId, orderingView, preCheck, clientProps);
         if (preCheck.keySet().containsAll(received)) {
             return;
         }
@@ -517,7 +561,7 @@ public final class ParsleyRuntime implements AutoCloseable {
             // admin client), so a lost-state stamp could hide from the pre-check. The
             // member's committed() is a stable fetch that retries until the transaction
             // resolves, so what it returns is authoritative.
-            refuseLostOrderingState(applicationId, priorState, committed, clientProps);
+            refuseLostOrderingState(applicationId, orderingView, committed, clientProps);
             Map<TopicPartition, OffsetSpec> wanted = new HashMap<>();
             for (TopicPartition tp : received) {
                 if (committed.get(tp) == null) {
@@ -536,10 +580,13 @@ public final class ParsleyRuntime implements AutoCloseable {
                     .get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
                     .forEach((tp, info) -> toCommit.put(tp,
                             new OffsetAndMetadata(info.offset(), BOOTSTRAP_OFFSET_STAMP)));
-            refusePositionsDiscardedUnread(applicationId, topics, orderingState, toCommit);
+            refusePositionsDiscardedUnread(applicationId, topics, orderingView.latest(), toCommit);
             committer.commit(toCommit);
             LOG.info("{}: committed initial positions for {}", applicationId, toCommit.keySet());
-        } catch (ParsleyFailClosedException e) {
+        } catch (ParsleyFailClosedException | RetryableStartException e) {
+            // The retryable transient keeps its own diagnosis: wrapping it in the terminal
+            // "could not be established" shape would send the operator to a remedy the
+            // next attempt makes destructive.
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException(
@@ -549,58 +596,69 @@ public final class ParsleyRuntime implements AutoCloseable {
 
     /**
      * Refuses a start whose group carries committed read positions the bootstrap did not
-     * write, while the ordering-store changelog holds no ordering state.
+     * write, while the ordering-changelog partition behind them holds no records.
      *
      * <p>Every committed step writes ordering state and read positions atomically (SPEC
-     * Host obligation 3), so an offset committed by a prior Kafka Streams execution with
-     * no ordering records behind it means the state of the most recent committed step has
-     * been lost (Host obligation 5): resuming would rebuild an empty engine and silently
-     * under-express every cause delivered before the loss. The changelog topic surviving
-     * with its records purged carries no more state than a deleted one, so both shapes
-     * refuse (D84). A first-start bootstrap that crashed after committing initial
-     * positions also leaves offsets without ordering records, but its commits carry
-     * {@link #BOOTSTRAP_OFFSET_STAMP}, so bootstrap crash recovery still starts. Every
-     * group offset is scanned, not only the declared partitions: a declaration change
-     * alongside the state loss must not hide a formerly-received partition's evidence.
+     * Host obligation 3), and a task's first committed step wrote the store's version
+     * entry into its own changelog partition, which compaction retains — so a
+     * non-bootstrap-stamped offset on partition p with no records in changelog partition
+     * p means the state of task p's most recent committed step has been lost (Host
+     * obligation 5): resuming would rebuild an empty engine and silently under-express
+     * every cause delivered before the loss. The check is per partition (D88 tightens
+     * D84): a one-partition record purge is the same loss for its task however healthy
+     * the sibling partitions look, and the whole-topic shapes — absent, or emptied — fall
+     * out as every partition failing. A first-start bootstrap that crashed after
+     * committing initial positions leaves offsets with no records anywhere, but its
+     * commits carry {@link #BOOTSTRAP_OFFSET_STAMP}, so bootstrap crash recovery still
+     * starts. Every group offset is scanned, not only the declared partitions: a
+     * declaration change alongside the state loss must not hide a formerly-received
+     * partition's evidence.
      *
-     * <p>Before refusing, the changelog is looked at again: the flag was fixed from a
-     * describe taken before the offsets were listed, and a pause of arbitrary duration
-     * lands between any two statements (SPEC Fault model 2), so a concurrent lifetime of
-     * this process can have created the changelog — and committed — in the window. That
-     * shape refuses as a transient, not as state loss: a state-loss diagnosis here would
-     * tell the operator to delete offsets a healthy sibling just wrote.
+     * <p>Before refusing, the changelog is looked at again: the view was read before the
+     * offsets were listed, and a pause of arbitrary duration lands between any two
+     * statements (SPEC Fault model 2), so a concurrent lifetime of this process can have
+     * created records — and committed — in the window. That shape refuses as a retryable
+     * transient, not as state loss: a state-loss diagnosis here would tell the operator
+     * to delete offsets a healthy sibling just wrote.
      */
-    private void refuseLostOrderingState(String applicationId, boolean priorState,
+    private void refuseLostOrderingState(String applicationId, ChangelogView view,
                                          Map<TopicPartition, OffsetAndMetadata> committed,
                                          Map<String, Object> clientProps) {
-        if (priorState) {
-            return;
-        }
         for (var entry : committed.entrySet()) {
             OffsetAndMetadata offset = entry.getValue();
-            if (offset != null && !BOOTSTRAP_OFFSET_STAMP.equals(offset.metadata())) {
-                java.util.Optional<TopicDescription> now = describeChangelog(applicationId);
-                if (now.isPresent() && !readOrderingChangelog(applicationId, clientProps).isEmpty()) {
-                    throw new IllegalStateException(applicationId + ": the ordering changelog appeared while"
+            if (offset == null || BOOTSTRAP_OFFSET_STAMP.equals(offset.metadata())) {
+                continue;
+            }
+            int partition = entry.getKey().partition();
+            if (view.partitionsWithRecords().contains(partition)) {
+                continue;
+            }
+            java.util.Optional<TopicDescription> now = describeChangelog(applicationId);
+            if (now.isPresent()) {
+                ChangelogView recheck = readOrderingChangelog(applicationId, clientProps,
+                        now.get().partitions().size());
+                if (recheck.partitionsWithRecords().contains(partition)) {
+                    throw new RetryableStartException(applicationId + ": ordering records appeared while"
                             + " this start was determining prior state; a concurrent lifetime of this process"
                             + " is starting or running. Retry this start.");
                 }
-                String shape = now.isPresent()
-                        ? "exists but holds no ordering records"
-                        : "does not exist";
-                String provenance = offset.metadata().isEmpty()
-                        ? "committed outside parsley (external tooling, or pre-seeded offsets)"
-                        : "stamped by a previous Kafka Streams execution";
-                throw new ParsleyFailClosedException(
-                        ParsleyFailClosedException.Reason.ORDERING_STATE_LOST,
-                        applicationId + ": committed read positions exist for " + entry.getKey() + ", "
-                                + provenance + ", but this process's ordering-store changelog " + shape
-                                + ". If a prior execution ran, the ordering state of its most recent"
-                                + " committed step has been lost (SPEC Host obligation 5) and resuming would"
-                                + " silently under-express causes delivered before the loss. Restore the"
-                                + " changelog topic and its records, or reset (delete) the process's group"
-                                + " offsets deliberately to start fresh.");
             }
+            String shape = now.isPresent()
+                    ? "partition " + partition + " of this process's ordering-store changelog holds no"
+                            + " ordering records"
+                    : "this process's ordering-store changelog does not exist";
+            String provenance = offset.metadata().isEmpty()
+                    ? "committed outside parsley (external tooling, or pre-seeded offsets)"
+                    : "stamped by a previous Kafka Streams execution";
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.ORDERING_STATE_LOST,
+                    applicationId + ": committed read positions exist for " + entry.getKey() + ", "
+                            + provenance + ", but " + shape
+                            + ". If a prior execution ran, the ordering state of its most recent"
+                            + " committed step has been lost (SPEC Host obligation 5) and resuming would"
+                            + " silently under-express causes delivered before the loss. Restore the"
+                            + " changelog topic and its records, or reset (delete) the process's group"
+                            + " offsets deliberately to start fresh.");
         }
     }
 
