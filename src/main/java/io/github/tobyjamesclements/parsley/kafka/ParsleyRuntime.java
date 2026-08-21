@@ -106,11 +106,16 @@ public final class ParsleyRuntime implements AutoCloseable {
                 String applicationId = config.applicationIdPrefix() + "-" + definition.name();
                 java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> changelog =
                         runtime.describeChangelog(applicationId);
-                boolean priorState = changelog.isPresent();
-
-                Map<byte[], byte[]> orderingState = priorState
+                Map<byte[], byte[]> orderingState = changelog.isPresent()
                         ? runtime.readOrderingChangelog(applicationId, adminProps)
                         : Map.of();
+                // Prior state means committed ordering records, not the topic's mere
+                // existence: every committed step's transaction wrote at least the store's
+                // version entry, which compaction retains, so a changelog emptied of its
+                // records (deleteRecords, a cleanup-policy excursion) is the same loss
+                // shape as a deleted one and must run the same refusal (D84). The width
+                // refusal still keys on the topic, whose partition count outlives records.
+                boolean priorState = !orderingState.isEmpty();
                 runtime.refuseStrandedHeldMessages(applicationId, definition, topics, priorState, orderingState);
                 runtime.refuseWidthChange(applicationId, definition, topics, changelog);
                 runtime.commitInitialPositions(applicationId, definition, topics, priorState, orderingState,
@@ -281,16 +286,40 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
+    /**
+     * Describes the ordering changelog, concluding absence only from corroborated answers.
+     *
+     * <p>One unknown-topic answer is not proof of absence: a describe is served from a
+     * single broker's metadata view, which can lag a recent creation, and a start that
+     * trusted one stale answer would misdiagnose a healthy sibling's state as
+     * ORDERING_STATE_LOST — with a remedy that deletes that sibling's offsets. Absence is
+     * concluded only after three consistent unknown answers spaced half a second apart,
+     * the same evidence standard the facts source applies to deletion (D44/D75), scaled
+     * to a start-time budget (D84). A genuine first start pays the extra describes once.
+     */
     private java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelog(String applicationId) {
         String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
-        try {
-            return java.util.Optional.of(admin.describeTopics(List.of(changelog)).allTopicNames()
-                    .get(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(changelog));
-        } catch (Exception e) {
-            if (e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException) {
-                return java.util.Optional.empty();
+        for (int attempt = 0; ; attempt++) {
+            try {
+                return java.util.Optional.of(admin.describeTopics(List.of(changelog)).allTopicNames()
+                        .get(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(changelog));
+            } catch (Exception e) {
+                if (!(e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException)) {
+                    throw new IllegalStateException(
+                            applicationId + ": could not determine prior state; refusing to start", e);
+                }
+                if (attempt == 2) {
+                    return java.util.Optional.empty();
+                }
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(
+                            applicationId + ": interrupted while determining prior state; refusing to start",
+                            interrupted);
+                }
             }
-            throw new IllegalStateException(applicationId + ": could not determine prior state; refusing to start", e);
         }
     }
 
@@ -454,7 +483,7 @@ public final class ParsleyRuntime implements AutoCloseable {
             throw new IllegalStateException(
                     applicationId + ": committed read positions could not be listed; refusing to start", e);
         }
-        refuseLostOrderingState(applicationId, priorState, preCheck);
+        refuseLostOrderingState(applicationId, priorState, preCheck, clientProps);
         if (preCheck.keySet().containsAll(received)) {
             return;
         }
@@ -468,7 +497,7 @@ public final class ParsleyRuntime implements AutoCloseable {
             // admin client), so a lost-state stamp could hide from the pre-check. The
             // member's committed() is a stable fetch that retries until the transaction
             // resolves, so what it returns is authoritative.
-            refuseLostOrderingState(applicationId, priorState, committed);
+            refuseLostOrderingState(applicationId, priorState, committed, clientProps);
             Map<TopicPartition, OffsetSpec> wanted = new HashMap<>();
             for (TopicPartition tp : received) {
                 if (committed.get(tp) == null) {
@@ -500,39 +529,57 @@ public final class ParsleyRuntime implements AutoCloseable {
 
     /**
      * Refuses a start whose group carries committed read positions the bootstrap did not
-     * write, while the ordering-store changelog does not exist.
+     * write, while the ordering-store changelog holds no ordering state.
      *
      * <p>Every committed step writes ordering state and read positions atomically (SPEC
      * Host obligation 3), so an offset committed by a prior Kafka Streams execution with
-     * no changelog behind it means the state of the most recent committed step has been
-     * lost (Host obligation 5): resuming would rebuild an empty engine and silently
-     * under-express every cause delivered before the loss. A first-start bootstrap that
-     * crashed after committing initial positions also leaves offsets without a changelog,
-     * but its commits carry {@link #BOOTSTRAP_OFFSET_STAMP}, so bootstrap crash recovery
-     * still starts. Every group offset is scanned, not only the declared partitions: a
-     * declaration change alongside the state loss must not hide a formerly-received
-     * partition's evidence.
+     * no ordering records behind it means the state of the most recent committed step has
+     * been lost (Host obligation 5): resuming would rebuild an empty engine and silently
+     * under-express every cause delivered before the loss. The changelog topic surviving
+     * with its records purged carries no more state than a deleted one, so both shapes
+     * refuse (D84). A first-start bootstrap that crashed after committing initial
+     * positions also leaves offsets without ordering records, but its commits carry
+     * {@link #BOOTSTRAP_OFFSET_STAMP}, so bootstrap crash recovery still starts. Every
+     * group offset is scanned, not only the declared partitions: a declaration change
+     * alongside the state loss must not hide a formerly-received partition's evidence.
+     *
+     * <p>Before refusing, the changelog is looked at again: the flag was fixed from a
+     * describe taken before the offsets were listed, and a pause of arbitrary duration
+     * lands between any two statements (SPEC Fault model 2), so a concurrent lifetime of
+     * this process can have created the changelog — and committed — in the window. That
+     * shape refuses as a transient, not as state loss: a state-loss diagnosis here would
+     * tell the operator to delete offsets a healthy sibling just wrote.
      */
-    private static void refuseLostOrderingState(String applicationId, boolean priorState,
-                                                Map<TopicPartition, OffsetAndMetadata> committed) {
+    private void refuseLostOrderingState(String applicationId, boolean priorState,
+                                         Map<TopicPartition, OffsetAndMetadata> committed,
+                                         Map<String, Object> clientProps) {
         if (priorState) {
             return;
         }
         for (var entry : committed.entrySet()) {
             OffsetAndMetadata offset = entry.getValue();
             if (offset != null && !BOOTSTRAP_OFFSET_STAMP.equals(offset.metadata())) {
+                java.util.Optional<TopicDescription> now = describeChangelog(applicationId);
+                if (now.isPresent() && !readOrderingChangelog(applicationId, clientProps).isEmpty()) {
+                    throw new IllegalStateException(applicationId + ": the ordering changelog appeared while"
+                            + " this start was determining prior state; a concurrent lifetime of this process"
+                            + " is starting or running. Retry this start.");
+                }
+                String shape = now.isPresent()
+                        ? "exists but holds no ordering records"
+                        : "does not exist";
                 String provenance = offset.metadata().isEmpty()
                         ? "committed outside parsley (external tooling, or pre-seeded offsets)"
                         : "stamped by a previous Kafka Streams execution";
                 throw new ParsleyFailClosedException(
                         ParsleyFailClosedException.Reason.ORDERING_STATE_LOST,
                         applicationId + ": committed read positions exist for " + entry.getKey() + ", "
-                                + provenance + ", but this process's ordering-store changelog does not"
-                                + " exist. If a prior execution ran, the ordering state of its most recent"
+                                + provenance + ", but this process's ordering-store changelog " + shape
+                                + ". If a prior execution ran, the ordering state of its most recent"
                                 + " committed step has been lost (SPEC Host obligation 5) and resuming would"
                                 + " silently under-express causes delivered before the loss. Restore the"
-                                + " changelog topic, or reset (delete) the process's group offsets"
-                                + " deliberately to start fresh.");
+                                + " changelog topic and its records, or reset (delete) the process's group"
+                                + " offsets deliberately to start fresh.");
             }
         }
     }

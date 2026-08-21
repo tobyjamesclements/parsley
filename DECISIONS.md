@@ -2828,3 +2828,48 @@ with the ghost merged. That is the project's stated preference: undecodable meta
 Pinned by `CausesCodecTest#rejectsZeroTopicId` and
 `IdentityIntegrationTest#zeroTopicIdInTheFrontierDoesNotAbortTheFactsRound` (real admin client, real
 local InvalidTopicException answer).
+
+### D84 — Prior state is keyed on ordering records, and prior-state describes are corroborated; extends D76
+
+**Context**
+
+Audit findings (kafka-layer audit, M3/N4/N5), three weaknesses in one determination. First, `priorState` was
+keyed on the ordering changelog *topic* existing, but D76's refusal guards state, not topics: a changelog
+emptied of its records — `kafka-delete-records`, or a cleanup-policy excursion under a runbook reset followed
+halfway — passed every prior-state check vacuously, never consulted the bootstrap stamp (its guard is
+conditioned on no prior state), and resumed mid-log with an empty engine: the precise ORDERING_STATE_LOST
+fail-open D76 closes for the deleted-topic shape, reachable through record deletion. Every committed step's
+transaction wrote at least the store's version entry, which compaction retains, so "exists but recordless"
+is as detectable a loss shape as "absent". Second, absence itself rested on a single describe answer: one
+transient unknown-topic response — served from one broker's possibly lagging metadata view, the exact answer
+shape D44/D75 refuse to trust for deletion — flipped `priorState` to false and misdiagnosed a healthy start
+as state loss, with a remedy that deletes offsets. Third, the flag was fixed before the offsets were listed,
+and a pause between the two statements (SPEC Fault model 2) spans any concurrent sibling's first commit, so
+the refusal could assert "the changelog does not exist" about a changelog that now did.
+
+**Decision**
+
+Three coupled changes. `priorState` is `!orderingState.isEmpty()`: the changelog is read whenever the topic
+exists, and only committed records constitute prior state; the width refusal still keys on the topic, whose
+partition count outlives its records. `describeChangelog` concludes absence only from three consistent
+unknown answers spaced half a second apart — a genuine first start pays the extra describes once. And
+`refuseLostOrderingState` looks again before refusing: if the changelog now exists with records, the refusal
+is a transient "retry this start" naming the concurrent-lifetime condition, never a state-loss diagnosis
+whose remedy would delete offsets a healthy sibling just wrote; when it does refuse, the message names the
+shape it found ("does not exist" against "exists but holds no ordering records").
+
+**Alternatives**
+
+* Refusing "exists but empty" unconditionally, without the stamp check — rejected: a first-start bootstrap
+  that crashed after Streams created the (still-empty) changelog but before any commit is a legitimate
+  recovery, distinguished exactly by every offset carrying the bootstrap stamp.
+* A confirmation window for the describe, as the facts source keeps for deletion — rejected: start() is a
+  synchronous path with no rounds to observe across; bounded re-describes are the same evidence standard
+  scaled to a start-time budget.
+
+**Cost**
+
+A genuine first start performs two extra describes (~1s). The lost-state refusal path re-reads a changelog
+it already read; the path is terminal. Pinned by
+`BootstrapIntegrationTest#emptiedChangelogWithSurvivingOffsetsRefusesToStart` (would have resumed silently
+before this record) alongside D76's three existing pins, which all still hold.
