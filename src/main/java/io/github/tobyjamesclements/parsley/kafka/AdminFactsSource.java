@@ -252,7 +252,7 @@ class AdminFactsSource implements FactsSource {
                 // takes the same continuously-corroborated window as death (D85).
                 case RECREATED -> {
                     deadWindows.remove(id);
-                    if (observeWindow(recreatedWindows, id, now)) {
+                    if (observeWindow(recreatedWindows, id, askedAt, now)) {
                         markRecreated(id);
                     }
                 }
@@ -264,7 +264,7 @@ class AdminFactsSource implements FactsSource {
                 }
                 case NAME_GONE -> {
                     recreatedWindows.remove(id);
-                    if (observeWindow(deadWindows, id, now)) {
+                    if (observeWindow(deadWindows, id, askedAt, now)) {
                         markDead(id);
                     }
                 }
@@ -286,7 +286,7 @@ class AdminFactsSource implements FactsSource {
         for (UUID id : confirmedIdsToRecheck) {
             NameVerdict verdict = classifyName(byNameOutcome, topicNamesById.get(id), id);
             if (verdict == NameVerdict.RECREATED && confirmedDead.contains(id)) {
-                if (observeWindow(recreatedWindows, id, now)) {
+                if (observeWindow(recreatedWindows, id, askedAt, now)) {
                     markRecreated(id);
                 }
             } else if (verdict == NameVerdict.SAME_ID) {
@@ -297,6 +297,12 @@ class AdminFactsSource implements FactsSource {
                 confirmedDead.remove(id);
                 confirmedRecreated.remove(id);
                 deadWindows.remove(id);
+                recreatedWindows.remove(id);
+            } else if (verdict != NameVerdict.RECREATED) {
+                // The upgrade window takes the same contrary-observation restarts as the
+                // first-classification path: a name-gone, denied or unavailable answer
+                // breaks the reappearance run's continuity, so flapping metadata cannot
+                // mature an upgrade the unknown-ids path would have kept restarting (D88).
                 recreatedWindows.remove(id);
             }
         }
@@ -383,16 +389,19 @@ class AdminFactsSource implements FactsSource {
      * Extends or (re)opens a confirmation window on an affirmative observation, answering
      * whether the window has matured.
      *
-     * <p>An observation gap as long as the window itself is an outage, not continuity:
-     * rounds ask about an id every interval when healthy, so a gap reaching the window
-     * length means no round asked — a starved facts executor, a task out for a rebalance —
-     * and the sightings bracketing it are isolated, exactly what D44's continuity
-     * requirement rejects. The window restarts at the fresh sighting rather than maturing,
-     * so confirmation always takes an unbroken run of at least three observations (D85).
+     * <p>Continuity is judged on blind time: the interval that restarts the window runs
+     * from the previous answer to the moment this round began asking, during which no
+     * round was watching the id at all — a starved facts executor, a task out for a
+     * rebalance. A blind interval reaching the window length makes the sightings
+     * bracketing it isolated observations, exactly what D44's continuity requirement
+     * rejects. Time a round spends inside its own queries is watched time: counting it
+     * would let routine in-round latency — a leaderless partition burning the offset
+     * deadline, probe polls on idle channels — exceed the window every round and make a
+     * genuinely dead topic permanently unconfirmable (D88 corrects D85's spelling here).
      */
-    private boolean observeWindow(Map<UUID, ConfirmationWindow> windows, UUID id, long now) {
+    private boolean observeWindow(Map<UUID, ConfirmationWindow> windows, UUID id, long askedAt, long now) {
         ConfirmationWindow window = windows.get(id);
-        if (window == null || now - window.lastSeen >= deadConfirmationMillis) {
+        if (window == null || askedAt - window.lastSeen >= deadConfirmationMillis) {
             windows.put(id, new ConfirmationWindow(now));
             return false;
         }

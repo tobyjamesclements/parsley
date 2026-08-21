@@ -37,6 +37,8 @@ class AdminFactsSourceDebounceTest {
         final AtomicLong nowMillis;
         /** This round's by-name answer for "z": a NameVerdict, a UUID, or null for no answer. */
         volatile Object nameAnswerThisRound;
+        /** Clock advance applied inside each round's name query, simulating slow queries. */
+        volatile long inRoundLatencyMillis;
         volatile boolean abortThisRound;
         volatile boolean failPositionsThisRound;
 
@@ -59,6 +61,7 @@ class AdminFactsSourceDebounceTest {
 
         @Override
         Map<String, Object> describeByNames(Set<String> names) {
+            nowMillis.addAndGet(inRoundLatencyMillis);
             Map<String, Object> outcome = new HashMap<>();
             Object answer = nameAnswerThisRound;
             if (names.contains("z") && answer != null) {
@@ -197,6 +200,53 @@ class AdminFactsSourceDebounceTest {
                 "the reopened window has not yet spanned its length");
         assertEquals(Set.of(R), facts.round(5 * WINDOW_MILLIS, true).deadChannels(),
                 "an unbroken run from the reopened window still confirms death");
+    }
+
+    /**
+     * In-round latency is watched time, not a blind gap: a round that spends longer than
+     * the whole window on its own queries — a leaderless partition burning the offset
+     * deadline, probe polls on idle channels — must not restart the window it is itself
+     * corroborating, or a genuinely dead topic behind a slow broker could never be
+     * confirmed at all (D88). Only time during which no round asked breaks continuity.
+     */
+    @Test
+    void inRoundLatencyDoesNotBreakConfirmationContinuity() throws Exception {
+        ScriptedFacts facts = new ScriptedFacts();
+        facts.inRoundLatencyMillis = 4 * WINDOW_MILLIS;
+
+        assertTrue(facts.round(0, true).deadChannels().isEmpty(), "first observation opens the window");
+        assertEquals(Set.of(R), facts.round(4 * WINDOW_MILLIS + 100, true).deadChannels(),
+                "back-to-back slow rounds are continuous observation and must confirm death");
+    }
+
+    /**
+     * The dead-to-recreated upgrade window takes the same contrary-observation restarts as
+     * first classification: reappearance answers interleaved with unavailable answers are
+     * not a continuous run, however tightly spaced (D88). The tail is the positive control
+     * that an unbroken reappearance run still upgrades.
+     */
+    @Test
+    void aDeadVerdictUpgradeWindowRestartsOnContraryAnswers() throws Exception {
+        ScriptedFacts facts = new ScriptedFacts();
+        UUID newIncarnation = new UUID(9, 9);
+
+        facts.round(0, true);
+        facts.round(WINDOW_MILLIS / 2, true);
+        assertEquals(Set.of(R), facts.round(WINDOW_MILLIS, true).deadChannels(), "death confirmed");
+
+        long t = WINDOW_MILLIS;
+        for (int i = 0; i < 8; i++) {
+            t += WINDOW_MILLIS / 4;
+            Object answer = i % 2 == 0 ? newIncarnation : null;
+            assertTrue(facts.round(t, answer).recreatedChannels().isEmpty(),
+                    "reappearance interleaved with unavailable answers must not mature the upgrade (at "
+                            + t + "ms)");
+        }
+        t += WINDOW_MILLIS / 2;
+        facts.round(t, newIncarnation);
+        facts.round(t + WINDOW_MILLIS / 2, newIncarnation);
+        assertEquals(Set.of(R), facts.round(t + WINDOW_MILLIS, newIncarnation).recreatedChannels(),
+                "an unbroken reappearance run still upgrades dead to recreated");
     }
 
     /**
