@@ -64,28 +64,51 @@ final class GroupMembershipCommitter implements AutoCloseable {
             LOG.warn("{}: ignoring configured group.instance.id for the bootstrap member; static membership"
                     + " would hold the group past close and fail the Streams start that follows", groupId);
         }
-        Object sessionTimeout = null;
-        for (String key : new String[] {
-                org.apache.kafka.streams.StreamsConfig.mainConsumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
-                org.apache.kafka.streams.StreamsConfig.consumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
-                ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG}) {
-            if (sessionTimeout == null) {
-                sessionTimeout = props.get(key);
-            }
-        }
-        if (sessionTimeout == null) {
+        java.util.OptionalLong sessionTimeout = configuredSessionTimeoutMillis(props);
+        if (sessionTimeout.isEmpty()) {
             props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 10_000);
         } else {
             // Resolved across the Streams spellings too: a broker may enforce a minimum
             // above the default, and a timeout configured the idiomatic prefixed way must
             // reach this plain consumer or the join is rejected outright.
-            props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG,
-                    Integer.parseInt(String.valueOf(sessionTimeout)));
+            long millis = sessionTimeout.getAsLong();
+            if (millis < 1 || millis > Integer.MAX_VALUE) {
+                throw new IllegalArgumentException("session.timeout.ms value " + millis
+                        + " is outside the range Kafka accepts");
+            }
+            props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, (int) millis);
             LOG.info("{}: bootstrap member inherits session.timeout.ms={}; an ungraceful bootstrap exit"
-                    + " holds the group for that long", groupId, sessionTimeout);
+                    + " holds the group for that long", groupId, millis);
         }
         props.putIfAbsent(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 30_000);
         return props;
+    }
+
+    /**
+     * Resolves a configured session timeout across the Streams spellings, parsing the way
+     * Kafka's own config parser does — numbers as numbers, strings trimmed — so a value
+     * every other client in this process accepts cannot fail only inside the bootstrap,
+     * and a value nothing accepts fails naming its property (D87).
+     */
+    static java.util.OptionalLong configuredSessionTimeoutMillis(Map<String, Object> props) {
+        for (String key : new String[] {
+                org.apache.kafka.streams.StreamsConfig.mainConsumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
+                org.apache.kafka.streams.StreamsConfig.consumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
+                ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG}) {
+            Object value = props.get(key);
+            if (value == null) {
+                continue;
+            }
+            if (value instanceof Number number) {
+                return java.util.OptionalLong.of(number.longValue());
+            }
+            try {
+                return java.util.OptionalLong.of(Long.parseLong(String.valueOf(value).trim()));
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException(key + " value '" + value + "' is not a parsable integer", e);
+            }
+        }
+        return java.util.OptionalLong.empty();
     }
 
     /**

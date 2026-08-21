@@ -168,6 +168,15 @@ public final class ParsleyRuntime implements AutoCloseable {
                         + " (failing closed)", process, exception);
                 return;
             }
+            if (cause instanceof org.apache.kafka.common.errors.RecordTooLargeException) {
+                LOG.error("process {}: a record exceeded a size limit. When the failing topic is this"
+                        + " process's ordering changelog, a held message's persisted form — payload, headers"
+                        + " and causal metadata together — outgrew the changelog topic's max.message.bytes,"
+                        + " which the metadata budget alone does not bound. Raise max.message.bytes on the"
+                        + " changelog topic and, if needed, producer.max.request.size via streamsProperty,"
+                        + " then restart to deliver the held message (failing closed)", process, exception);
+                return;
+            }
             if (String.valueOf(cause.getMessage()).contains("invalid partitions")) {
                 LOG.error("process {}: the partition shape of its topics changed while it ran; parsley resolves"
                         + " partitions at start(). Restart the application: a width-preserving expansion is"
@@ -691,16 +700,10 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     private static java.time.Duration streamsSessionTimeout(Map<String, Object> clientProps) {
-        for (String key : new String[] {
-                StreamsConfig.mainConsumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
-                StreamsConfig.consumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
-                ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG}) {
-            Object value = clientProps.get(key);
-            if (value != null) {
-                return java.time.Duration.ofMillis(Long.parseLong(String.valueOf(value)));
-            }
-        }
-        return java.time.Duration.ofSeconds(45);
+        java.util.OptionalLong configured = GroupMembershipCommitter.configuredSessionTimeoutMillis(clientProps);
+        return configured.isEmpty()
+                ? java.time.Duration.ofSeconds(45)
+                : java.time.Duration.ofMillis(configured.getAsLong());
     }
 
     private static Properties streamsProperties(ParsleyConfig config, String applicationId) {

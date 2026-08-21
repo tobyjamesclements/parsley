@@ -2972,3 +2972,53 @@ A start whose group genuinely has offsets for only some received partitions — 
 received topic while the group's offsets survive, say — waits five extra seconds before the join it would
 have entered anyway. The retry-decision predicate is pinned by `BootstrapPreCheckTest`; the loop is
 exercised by every bootstrap integration test through the unchanged fast and join paths.
+
+### D87 — Seam and configuration minors from the kafka-layer audit, in one sweep
+
+**Context**
+
+Audit findings (kafka-layer audit, N2/N3/N6/N7/N8/N9), six contained defects. (N2) `deliver()` reset the
+seam-violation latch *after* the delivered payload's deserializers had run — application code that may hold a
+reader captured on an earlier delivery — so a refusal latched there was erased and the step committed; the
+latch was also a plain field, invisible across threads to application code that (incorrectly but possibly)
+holds the reader on another thread. (N9) The read seam handed application deserializers the raw header set,
+reserved transport header included, while the write seam serializes before the stamp goes on — contradicting
+D56's "invisible in both directions" one frame before `Delivery`'s own filter. (N3) `bootstrap.servers` was
+pinnable only in its plain spelling: Streams re-pins it for producers after applying prefixed overrides but
+not for consumers, so a `main.consumer.`/`restore.consumer.`/`global.consumer.` spelling pointed a consumer
+at a different cluster than the one start() resolved identities against. (N6) A positive sub-millisecond
+`factsInterval` passed `build()` and crashed the stream thread at task init (Streams punctuation is
+millisecond-grained), unattributed, after the bootstrap had committed. (N7) Session-timeout inheritance
+parsed stricter than Kafka's own config parser (no trim; int at one site, long at the other), refusing values
+every other client in the process accepts, as a bare NumberFormatException naming nothing. (N8) A held
+message's persisted blob — payload, headers and causal metadata together — can exceed the ordering
+changelog's `max.message.bytes`, which the metadata budget does not bound; the crash-loop surfaced with only
+the substrate's diagnosis.
+
+**Decision**
+
+The latch is checked-and-rethrown at every seam boundary — frame entry, post-deserialization, post-handler,
+post-apply — and never blanket-reset mid-frame; the field is volatile. Deserializers receive the application
+header view, matching `Delivery` and the write seam. `bootstrap.servers` joins `FORBIDDEN_SUFFIXES`.
+`factsInterval` requires at least one millisecond at declaration. Session-timeout resolution is one shared
+helper parsing as Kafka does (numbers as numbers, strings trimmed), refusing attributably, with the int-range
+check where the value meets the consumer config. `recordFailure` names the record-too-large condition with
+the changelog-sizing explanation and its remedy. The held-blob size itself remains unbounded by parsley:
+bounding it would refuse holds the broker would accept (the limit is the topic's, raisable by the operator),
+so the decision here is diagnosis-only, recorded as such.
+
+**Alternatives**
+
+* Setting `max.message.bytes` on the ordering changelog at creation — rejected: any value parsley picks
+  silently overrides broker policy, and the right bound depends on payload sizes parsley cannot know;
+  the diagnosis names the two knobs the operator already owns.
+* Keeping the latch reset and adding one more recheck before it — rejected: every reset mid-frame is a
+  window; check-and-rethrow at boundaries leaves no code between a latch and the next boundary.
+
+**Cost**
+
+None of substance. Pinned by `TopologyWiringTest#deserializerLatchedRefusalFailsTheStepEvenWhenSwallowed`,
+`#serializerLatchedRefusalDuringPlanningFailsTheStep` (the post-apply recheck's first executable pin),
+`#reservedTransportHeaderIsInvisibleToApplicationDeserializers`, `SessionTimeoutInheritanceTest`,
+`ApiValidationTest#subMillisecondFactsIntervalIsRefusedAtDeclaration` and the `bootstrap.servers` additions
+to `#guaranteeBearingConfigurationIsUnoverridable`.

@@ -38,7 +38,13 @@ public final class ParsleyConfig {
             // The group membership protocol selects the fencing semantics the initial-position
             // bootstrap's safety argument is built on; swapping it is a guarantee-bearing change.
             "group.protocol",
-            "group.remote.assignor");
+            "group.remote.assignor",
+            // Streams pins the plain spelling from its own config but applies prefixed
+            // consumer overrides on top without re-pinning (unlike its producer path), so a
+            // main.consumer./restore.consumer./global.consumer. spelling would point a
+            // consumer at a different cluster than the one start() resolved identities
+            // against (D87).
+            "bootstrap.servers");
 
     private final String bootstrapServers;
     private final String applicationIdPrefix;
@@ -183,6 +189,13 @@ public final class ParsleyConfig {
             }
             if (factsInterval.isNegative() || factsInterval.isZero()) {
                 throw new IllegalArgumentException("factsInterval must be positive");
+            }
+            if (factsInterval.toMillis() < 1) {
+                // Kafka Streams punctuation has millisecond granularity; a finer value
+                // passes here only to crash the stream thread at task initialisation,
+                // unattributed, after the bootstrap has already committed (D87).
+                throw new IllegalArgumentException("factsInterval must be at least one millisecond: "
+                        + factsInterval.toNanos() + "ns cannot be scheduled");
             }
             this.factsInterval = factsInterval;
             return this;
