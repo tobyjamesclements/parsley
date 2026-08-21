@@ -339,6 +339,10 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             value = message.value() == null
                     ? null : channel.valueSerde().deserializer().deserialize(topic, receivedHeaders, message.value());
         } catch (RuntimeException e) {
+            // A reader refusal thrown through the deserializer keeps its own reason: the
+            // latch identifies it, and wrapping it as a payload failure would mislabel
+            // the stop for status().
+            rethrowSeamViolation();
             throw new ParsleyFailClosedException(
                     ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
                     definition.name() + ": " + topic + "@" + message.position(), e);
@@ -501,6 +505,9 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                     ? serializer.serialize(topic, data)
                     : serializer.serialize(topic, headers, data);
         } catch (RuntimeException e) {
+            // A reader refusal thrown through the serializer keeps its own reason rather
+            // than being relabeled as a payload failure.
+            rethrowSeamViolation();
             throw new ParsleyFailClosedException(
                     ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
                     definition.name() + ": " + topic + " payload could not be serialized by the"

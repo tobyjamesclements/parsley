@@ -52,6 +52,22 @@ class SessionTimeoutInheritanceTest {
                 "the refusal names the property: " + e.getMessage());
     }
 
+    /**
+     * A Long-typed value is refused exactly as Kafka's INT parser refuses it: a laxer
+     * parse here would let the bootstrap succeed on a value StreamsConfig then rejects
+     * post-bootstrap, after initial positions were already committed (D88).
+     */
+    @Test
+    void longTypedValueIsRefusedLikeKafkasOwnParser() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> GroupMembershipCommitter.memberProperties(
+                        Map.of("bootstrap.servers", "b:9092",
+                                ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 10_000L), "g"),
+                "a Long must fail here, first, not post-bootstrap inside StreamsConfig");
+        assertTrue(e.getMessage().contains("session.timeout.ms"),
+                "the refusal names the property: " + e.getMessage());
+    }
+
     /** A value outside the int range Kafka accepts is refused rather than truncated. */
     @Test
     void outOfRangeValueIsRefusedNotTruncated() {

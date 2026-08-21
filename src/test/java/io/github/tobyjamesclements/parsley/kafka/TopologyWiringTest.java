@@ -464,6 +464,44 @@ class TopologyWiringTest {
     }
 
     /**
+     * A reader refusal that propagates out of a deserializer unswallowed keeps its own
+     * reason: relabeling it as an undecodable payload would point the operator at codecs
+     * when the condition is an undeclared-store access (D88).
+     */
+    @Test
+    void unswallowedReaderRefusalInADeserializerKeepsItsReason() {
+        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.api.StateReader> captured =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
+        Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
+        org.apache.kafka.common.serialization.Serde<String> readingSerde = Serdes.serdeFrom(
+                new StringSerializer(), (topic, data) -> {
+                    io.github.tobyjamesclements.parsley.api.StateReader reader = captured.get();
+                    if (reader != null) {
+                        reader.get(lookAlike, "k");
+                    }
+                    return new String(data, java.nio.charset.StandardCharsets.UTF_8);
+                });
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), readingSerde);
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    captured.set(state);
+                    return Effects.none();
+                })
+                .stores(declared)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        input("in1").pipeInput(new TestRecord<>("k".getBytes(), "first".getBytes()));
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "second".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+                () -> "the reader's refusal carries its own reason; got " + thrown);
+        assertFalse(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE),
+                () -> "the stop must not be relabeled as a payload-codec failure; got " + thrown);
+    }
+
+    /**
      * Application code can also run after the post-handler check: a value serializer
      * invoked during effect planning may hold the reader. Its latched refusal fails the
      * step at the post-apply recheck — the guard the processor promises for every

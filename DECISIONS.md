@@ -3022,3 +3022,76 @@ None of substance. Pinned by `TopologyWiringTest#deserializerLatchedRefusalFails
 `#reservedTransportHeaderIsInvisibleToApplicationDeserializers`, `SessionTimeoutInheritanceTest`,
 `ApiValidationTest#subMillisecondFactsIntervalIsRefusedAtDeclaration` and the `bootstrap.servers` additions
 to `#guaranteeBearingConfigurationIsUnoverridable`.
+
+### D88 — The audit fixes, reviewed adversarially; corrections to D82, D84, D85 and D87
+
+**Context**
+
+The D82–D87 changes were themselves put through the same adversarial review that produced them: four
+independent lenses over the diff, every finding verified against the pinned 4.3.1 sources. Fifteen findings
+survived, four of them substantive. (1) D85's continuity rule measured raw spacing between per-round answer
+timestamps, but a round's own queries sit inside that spacing — a leaderless partition burning the shared
+offset deadline, probe polls on idle channels — so any steady-state round tail at or beyond the window
+restarted the window every round and made a genuinely dead or recreated topic permanently unconfirmable: the
+held messages whose release needs the verdict are themselves what put the probes on the round's tail, a
+self-sustaining silent stall. D85's recorded cost ("confirmed roughly one window later") was wrong under
+these conditions. (2) The dead-to-recreated upgrade window lacked the contrary-observation restarts D85's
+own Decision paragraph records, so flapping answers at sub-window spacing could mature an upgrade the
+first-classification path would have kept restarting — converting a settled dead verdict into a permanent
+identity-changed stop. (3) With auto-create pinned off, an unknown-topic metadata answer to the changelog
+reader is an immediate empty partition list — not the timeout D82's record claimed — so the reader could
+conclude "no records" from one stale broker view: priorState flipped false, and a healthy concurrent
+sibling's Streams-stamped offsets then drew an ORDERING_STATE_LOST whose remedy destroys that sibling's
+offsets, the exact single-answer trust D84 removed from the describe path, reopened through the read path.
+(4) D84's check was whole-topic while the loss is per task: the version entry lives in each task's own
+changelog partition, so purging one partition of a multi-partition changelog left the merged view non-empty
+and resumed the purged task mid-log with an empty engine.
+
+**Decision**
+
+Window continuity is judged on blind time: the restart interval runs from the previous answer to the moment
+the current round began asking — time no round was watching — while time inside a round's own queries is
+watched time and extends the window. The upgrade path takes the same contrary-observation restarts as first
+classification. The changelog reader corroborates its partition list against the describe the read was keyed
+on, refusing a mismatch as a retryable transient; `RetryableStartException` carries every such transient
+uncaught through the bootstrap's wrapping catch, so a retry-heals condition is never dressed as a terminal
+diagnosis. And the lost-state refusal is per changelog partition: a non-bootstrap-stamped offset on
+partition p requires records in changelog partition p, with the whole-topic shapes falling out as every
+partition failing.
+
+Recorded corrections without code change. D84's premise is more precisely "a task's *first* committed step
+writes the version entry" (later steps need not rewrite it; compaction retains it — the conclusion stands).
+D85's "affirmative proof" for SAME_ID rescission overstates: the rescinding answer can itself be stale, so
+rescission can flap a genuine dead verdict back to unconfirmed — kept deliberately, because rescission's
+failure direction is a delayed settle (liveness) where holding the verdict's is settling a live channel
+(safety), and a genuine death reconfirms through the window. Three smaller closures ride along: the reserved
+zero topic id is refused when a *restored frontier* names it (UNKNOWN_ORDERING_STATE_FORMAT) — state
+persisted before D83's receipt refusal would otherwise re-express the unanswerable ghost forever, D83's
+describe tolerance notwithstanding; a reader refusal that propagates out of a payload deserializer or
+planning serializer unswallowed keeps its own reason instead of being relabeled as a payload-codec failure;
+and the session-timeout helper accepts exactly Kafka's INT parse (an Integer, or a trimmed string holding
+one) so the bootstrap can never succeed on a value StreamsConfig then rejects post-bootstrap.
+
+**Alternatives**
+
+* Budgeting the probe tail instead of re-spelling continuity — rejected as the primary fix: it shrinks the
+  common tail but leaves the rule wrong (any slow query still erases the window); the blind-time spelling
+  makes in-round latency irrelevant by construction. A probe budget remains open as a cadence improvement.
+* Debouncing SAME_ID rescission — rejected: delaying rescission extends the fail-open half of a spurious
+  verdict to protect against a liveness-only flap.
+* Keeping the whole-topic lost-state check with a partition-count side condition — rejected: the
+  per-partition rule subsumes it, needs no separate prior-state flag in the refusal, and scans every group
+  offset unchanged.
+
+**Cost**
+
+Confirmation can now take two observations when rounds are slower than the window — the pre-D85 semantics
+for a continuously-asking source, which is what a slow round is. The per-partition refusal also refuses
+externally-committed offsets naming partitions no changelog partition backs, where the whole-topic check
+under prior state ignored them; that direction is fail-closed and named. Pinned by
+`AdminFactsSourceDebounceTest#inRoundLatencyDoesNotBreakConfirmationContinuity` (red on the D85 spelling),
+`#aDeadVerdictUpgradeWindowRestartsOnContraryAnswers` (red on the D85 code),
+`BootstrapIntegrationTest#emptiedChangelogPartitionWithSurvivingOffsetsRefusesToStart` (red before the
+per-partition rule), `ProcessEngineTest#restoredFrontierNamingTheZeroTopicIdFailsClosed`,
+`TopologyWiringTest#unswallowedReaderRefusalInADeserializerKeepsItsReason`, and
+`SessionTimeoutInheritanceTest#longTypedValueIsRefusedLikeKafkasOwnParser`.

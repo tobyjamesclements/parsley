@@ -407,4 +407,25 @@ class ProcessEngineTest {
         engine.markDelivered(C2, 4);
         assertEquals(0, engine.heldCountTotal());
     }
+
+    /**
+     * A restored frontier naming the reserved zero topic id is untrustworthy state: it can
+     * only have entered through a forged causes header absorbed before wire-format
+     * constraint 5 refused it at receipt, and no substrate query can ever answer for it,
+     * so restoring it would re-express and re-persist the ghost on every emission forever
+     * (D88). Stored state that cannot be trusted is a reason to stop.
+     */
+    @Test
+    void restoredFrontierNamingTheZeroTopicIdFailsClosed() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        new ProcessEngine("p", BOTH, store);
+        store.put(StoreCodec.channelKey(StoreCodec.TAG_FRONTIER, new ChannelId(new UUID(0, 0), 0)),
+                StoreCodec.encodeLong(7));
+
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+                () -> new ProcessEngine("p", BOTH, store),
+                "state carrying the reserved zero id must refuse, not resume and re-express it");
+        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason(),
+                "the refusal names the untrusted-state condition");
+    }
 }

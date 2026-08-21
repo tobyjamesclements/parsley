@@ -72,9 +72,9 @@ final class GroupMembershipCommitter implements AutoCloseable {
             // above the default, and a timeout configured the idiomatic prefixed way must
             // reach this plain consumer or the join is rejected outright.
             long millis = sessionTimeout.getAsLong();
-            if (millis < 1 || millis > Integer.MAX_VALUE) {
+            if (millis < 1) {
                 throw new IllegalArgumentException("session.timeout.ms value " + millis
-                        + " is outside the range Kafka accepts");
+                        + " is not a usable timeout");
             }
             props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, (int) millis);
             LOG.info("{}: bootstrap member inherits session.timeout.ms={}; an ungraceful bootstrap exit"
@@ -85,10 +85,12 @@ final class GroupMembershipCommitter implements AutoCloseable {
     }
 
     /**
-     * Resolves a configured session timeout across the Streams spellings, parsing the way
-     * Kafka's own config parser does — numbers as numbers, strings trimmed — so a value
-     * every other client in this process accepts cannot fail only inside the bootstrap,
-     * and a value nothing accepts fails naming its property (D87).
+     * Resolves a configured session timeout across the Streams spellings, accepting
+     * exactly what Kafka's own config parser accepts for an INT config — an Integer, or a
+     * trimmed string holding one — so a value every other client in this process runs on
+     * cannot fail only inside the bootstrap, and a value the clients would reject
+     * post-bootstrap fails here, first and naming its property (D87, tightened by D88: a
+     * laxer parse would let the bootstrap succeed on a value StreamsConfig then rejects).
      */
     static java.util.OptionalLong configuredSessionTimeoutMillis(Map<String, Object> props) {
         for (String key : new String[] {
@@ -99,13 +101,18 @@ final class GroupMembershipCommitter implements AutoCloseable {
             if (value == null) {
                 continue;
             }
-            if (value instanceof Number number) {
-                return java.util.OptionalLong.of(number.longValue());
+            if (value instanceof Integer integer) {
+                return java.util.OptionalLong.of(integer);
+            }
+            if (value instanceof Number) {
+                throw new IllegalArgumentException(key + " value " + value + " must be a 32-bit integer,"
+                        + " as Kafka's own config parser requires");
             }
             try {
-                return java.util.OptionalLong.of(Long.parseLong(String.valueOf(value).trim()));
+                return java.util.OptionalLong.of(Integer.parseInt(String.valueOf(value).trim()));
             } catch (NumberFormatException e) {
-                throw new IllegalArgumentException(key + " value '" + value + "' is not a parsable integer", e);
+                throw new IllegalArgumentException(key + " value '" + value + "' is not a parsable 32-bit"
+                        + " integer", e);
             }
         }
         return java.util.OptionalLong.empty();

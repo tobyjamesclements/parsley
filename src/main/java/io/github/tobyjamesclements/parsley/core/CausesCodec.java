@@ -82,8 +82,8 @@ public final class CausesCodec {
      * @param headerValue the header value, which may be {@code null}
      * @return the frontier
      * @throws UndecodableMetadataException if the value is null, carries an unknown version,
-     *         is truncated, miscounts its entries, names a negative position, or lists
-     *         channels out of strictly ascending order
+     *         is truncated, miscounts its entries, names a negative position or the
+     *         reserved zero topic ID, or lists channels out of strictly ascending order
      */
     public static Causes decode(byte[] headerValue) throws UndecodableMetadataException {
         if (headerValue == null) {
