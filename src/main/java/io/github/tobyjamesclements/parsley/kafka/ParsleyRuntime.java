@@ -328,12 +328,30 @@ public final class ParsleyRuntime implements AutoCloseable {
      * defaults; a transaction configured to outlive the deadline fails the start loudly
      * rather than truncating the view.
      */
-    private Map<byte[], byte[]> readOrderingChangelog(String applicationId, Map<String, Object> clientProps) {
-        String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
+    /**
+     * Client properties for the bootstrap's ordering-changelog reader.
+     *
+     * <p>Two pins here carry refusals rather than tuning. {@code allow.auto.create.topics}
+     * is false because the reader's metadata requests must never create the very changelog
+     * whose record content start() keys prior state on: against a broker with auto-create
+     * enabled, a deletion racing the start would otherwise be resurrected as an empty
+     * impostor that passes every prior-state refusal (D82). {@code auto.offset.reset} is
+     * none so a log start advancing mid-scan fails the scan loudly instead of silently
+     * resetting to the end and truncating the restored view those refusals read.
+     */
+    static Map<String, Object> changelogReaderProperties(Map<String, Object> clientProps) {
         Map<String, Object> props = new HashMap<>(clientProps);
         props.put(ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+        props.put(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false);
         props.remove(ConsumerConfig.GROUP_ID_CONFIG);
+        return props;
+    }
+
+    private Map<byte[], byte[]> readOrderingChangelog(String applicationId, Map<String, Object> clientProps) {
+        String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
+        Map<String, Object> props = changelogReaderProperties(clientProps);
         Map<byte[], byte[]> latest = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
         try (var consumer = new org.apache.kafka.clients.consumer.KafkaConsumer<>(props,
                 new org.apache.kafka.common.serialization.ByteArrayDeserializer(),

@@ -32,10 +32,21 @@ final class GroupMembershipCommitter implements AutoCloseable {
      * @param groupId          the group to join
      */
     GroupMembershipCommitter(Map<String, Object> clientProperties, String groupId) {
+        this.consumer = new KafkaConsumer<>(memberProperties(clientProperties, groupId),
+                new ByteArrayDeserializer(), new ByteArrayDeserializer());
+    }
+
+    /** Client properties for the bootstrap member, with the guarantee-bearing pins applied. */
+    static Map<String, Object> memberProperties(Map<String, Object> clientProperties, String groupId) {
         Map<String, Object> props = new HashMap<>(clientProperties);
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+        // The member's subscription must never create a missing received topic: every
+        // received topic was resolved by start() moments before this join, so a deletion
+        // racing the bootstrap must surface as this join's failure, not be papered over by
+        // the metadata request auto-creating an empty impostor (D82).
+        props.put(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false);
         // committed() is a transaction-stable offset fetch regardless of configuration:
         // the consumer sets requireStable on every OffsetFetch it sends (verified in
         // kafka-clients 4.3.1, ConsumerCoordinator#sendOffsetFetchRequest), retrying
@@ -74,7 +85,7 @@ final class GroupMembershipCommitter implements AutoCloseable {
                     + " holds the group for that long", groupId, sessionTimeout);
         }
         props.putIfAbsent(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 30_000);
-        this.consumer = new KafkaConsumer<>(props, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+        return props;
     }
 
     /**

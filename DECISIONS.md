@@ -2744,3 +2744,45 @@ no-offset diagnosis into its two real causes.
 
 None of substance. Pinned by `TopologyWiringTest#nullEffectsFromAHandlerFailClosedWithTheirOwnReason` and
 `#undecodableStoredStateValueFailsClosedEvenWhenSwallowed`.
+
+### D82 — Hand-built consumers are pinned against mutating the cluster
+
+**Context**
+
+Audit finding (kafka-layer audit, C1/N1). The consumer default leaves `allow.auto.create.topics` true, so
+a bare metadata request against a broker with `auto.create.topics.enable=true` (the broker default) silently
+creates the topic it asks about. Kafka Streams pins the config false for every consumer it builds
+(`NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS`, verified in kafka-streams 4.3.1) precisely so a client never
+mutates the cluster — and the three consumers this layer builds by hand carried no such pin. Each one's
+metadata requests touch a topic whose absence is load-bearing: the bootstrap's changelog reader asks about
+the ordering changelog whose record content is the prior-state evidence, so a deletion racing the start
+could be resurrected as an empty impostor that passes every prior-state refusal and resumes mid-log with an
+empty engine — the ORDERING_STATE_LOST catastrophe D76 refuses, reached around its guard; the bootstrap
+member subscribes to received topics resolved moments earlier; and the probe asks about topics
+mid-deletion, where an auto-created impostor under a new id turns the designed dead-channel settle (D44)
+into a spurious CHANNEL_IDENTITY_CHANGED stop manufactured by the client's own side effect. The changelog
+reader also ran on the default `auto.offset.reset=latest` — the one consumer in the layer not pinned to
+`none` — so a log start advancing mid-scan would silently reset it to the end and truncate the restored
+view the refusals read.
+
+**Decision**
+
+Every hand-built consumer pins `allow.auto.create.topics=false`, and the changelog reader additionally pins
+`auto.offset.reset=none`. The property maps are composed in package-visible builders
+(`ParsleyRuntime.changelogReaderProperties`, `GroupMembershipCommitter.memberProperties`,
+`AdminFactsSource.probeProperties`) so the pins are pinned by `ClusterMutationPinningTest` rather than
+asserted in comments. With the pin, the deletion race fails the start loudly (the reader's metadata wait
+times out and the scan refuses) instead of resuming silently.
+
+**Alternatives**
+
+* Refusing `allow.auto.create.topics` in `ParsleyConfig` instead — insufficient: the default, not an
+  override, is the hazard; the layer's own consumers must pin it regardless of configuration.
+* An integration test deleting the changelog mid-start — rejected for now: the race window sits between two
+  admin calls inside `start()` and cannot be held open deterministically from outside; the property pin plus
+  the unit test carries the guard.
+
+**Cost**
+
+None of substance. A start racing a changelog deletion now fails with the reader's timeout rather than a
+crisper diagnosis; the failure is loud, transient in shape, and a restart reaches the absent-changelog path.

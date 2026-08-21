@@ -470,15 +470,25 @@ class AdminFactsSource implements FactsSource {
         });
     }
 
+    /** Client properties for the trailing-run probe, with the guarantee-bearing pins applied. */
+    static Map<String, Object> probeProperties(Map<String, Object> base) {
+        Map<String, Object> props = new HashMap<>(base);
+        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
+        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 1);
+        // The probe's metadata refreshes must never create a topic: a received topic
+        // deleted mid-run has to run the dead-confirmation window, and an auto-created
+        // empty impostor under a new id would turn the designed settle into a spurious
+        // identity-changed stop manufactured by this client's own side effect (D82).
+        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false);
+        props.remove(org.apache.kafka.clients.consumer.ConsumerConfig.GROUP_ID_CONFIG);
+        return props;
+    }
+
     private org.apache.kafka.clients.consumer.KafkaConsumer<byte[], byte[]> probeConsumer() {
         if (probe == null) {
-            Map<String, Object> props = new HashMap<>(probeConsumerProperties);
-            props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
-            props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
-            props.put(org.apache.kafka.clients.consumer.ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
-            props.put(org.apache.kafka.clients.consumer.ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 1);
-            props.remove(org.apache.kafka.clients.consumer.ConsumerConfig.GROUP_ID_CONFIG);
-            probe = new org.apache.kafka.clients.consumer.KafkaConsumer<>(props,
+            probe = new org.apache.kafka.clients.consumer.KafkaConsumer<>(probeProperties(probeConsumerProperties),
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer());
         }
