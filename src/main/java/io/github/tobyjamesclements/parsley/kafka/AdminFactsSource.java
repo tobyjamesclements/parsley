@@ -619,6 +619,15 @@ class AdminFactsSource implements FactsSource {
         }
     }
 
+    /**
+     * Records a name binding learned from a successful by-id describe: the one write path
+     * for non-declared bindings, kept as its own seam so a scripted describe honours the
+     * same learning contract as the real one.
+     */
+    void recordLearnedName(UUID id, String name) {
+        topicNamesById.put(id, name);
+    }
+
     Map<UUID, String> describeByIds(Set<UUID> topicIds) throws Exception {
         Map<UUID, String> names = new HashMap<>();
         if (topicIds.isEmpty()) {
@@ -632,7 +641,7 @@ class AdminFactsSource implements FactsSource {
             try {
                 TopicDescription description = entry.getValue().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 names.put(id, description.name());
-                topicNamesById.put(id, description.name());
+                recordLearnedName(id, description.name());
             } catch (ExecutionException e) {
                 // InvalidTopicException is the admin client's client-side answer for an id
                 // it deems unrepresentable (the reserved zero id): tolerated like unknown,
