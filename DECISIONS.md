@@ -3095,3 +3095,165 @@ under prior state ignored them; that direction is fail-closed and named. Pinned 
 per-partition rule), `ProcessEngineTest#restoredFrontierNamingTheZeroTopicIdFailsClosed`,
 `TopologyWiringTest#unswallowedReaderRefusalInADeserializerKeepsItsReason`, and
 `SessionTimeoutInheritanceTest#longTypedValueIsRefusedLikeKafkasOwnParser`.
+
+### D89 — The eviction horizon is pinned by scripted-round evidence; name learning extracted as a seam
+
+**Context**
+
+Issue #95 (gap B): D44's eviction horizon — tracking state evicted only when no task has asked about an
+id for eight confirmation windows, floored at five minutes, with declared ids pinned — was implemented
+but unpinned: no test failed if the sweep never ran, if it evicted pinned ids, if it dropped the ask
+timestamp without the verdict, or if the floor was lost. The scripted-round harness also could not build
+a dead verdict on a non-pinned id at all: the name learning that corroboration requires (D75) lives
+inside `describeByIds`, the very seam a scripted double overrides.
+
+**Decision**
+
+`AdminFactsSourceEvictionTest` pins the four regression directions through `gather()` results alone —
+verdict and learned-name amnesia past the horizon with death re-earned through a fresh window, pinned
+survival, re-evaluation of a reappearing topic (whose verdict is sticky by construction inside the
+horizon, eviction being its only exit), and retention one second inside the horizon, pinning the
+five-minute floor. Because the sweep stamps the current round's ask set before it runs, an id asked in
+the current round can never evict; the tests drive later rounds through an unrelated sweeper channel.
+The one production change is a pure extraction: package-private `recordLearnedName` pulls the
+`topicNamesById` write out of `describeByIds` so a scripted describe honours the same learning contract
+as the real one. Each test was verified red under the exact mutation it exists to catch — sweep deleted;
+pinned guard dropped; `confirmedDead` retained through the sweep; floor weakened to 8 × window — and
+green on the revert.
+
+**Alternatives**
+
+* Reflection over the private tracking maps — rejected: the suite observes behaviour through the seams,
+  never fields, and reflective pins survive refactors they should fail.
+* Pinning the ids under test via the constructor's known-names map — rejected: pinning is exactly the
+  property under test; the non-pinned learning path must be exercised as itself, which is what forced
+  the extraction seam.
+
+**Cost**
+
+The sweep's `confirmedRecreated.remove` line is not separately pinned — a mutation dropping only that
+removal would survive these tests; a recreated-verdict eviction test needs the same scaffolding again
+and can join this class when it earns its keep. The horizon boundary is pinned at one second either
+side, not at the exact boundary millisecond.
+
+### D90 — The 80%-of-budget warning is pinned through a latch seam plus one stderr-capture wiring test
+
+**Context**
+
+Issue #95 (gap A): D53 promised a single warning at 80% of the metadata budget, but nothing pinned it:
+the threshold could drift and the once-per-process latch could vanish with the suite green — the shape
+EVIDENCE.md's standard calls worse than no test. The suite has no log-capture infrastructure,
+slf4j-simple exposes no appender API, and mock frameworks are banned.
+
+**Decision**
+
+The threshold and the latch move into `ParsleyProcessor.BudgetAlarm`, a package-private seam
+`observeFrontier` delegates to — pure extraction, no behaviour change; the latch deliberately survives
+task revival, since D53's "once" is per process, not per incarnation. `BudgetWarningTest` pins the
+boundary at exactly 80% in both directions and the latch across repeated consultations through the
+seam, and pins the wiring the seam cannot see — that the wall-clock punctuator still consults the
+alarm — by driving `TopologyTestDriver` punctuations over a 61-byte frontier inside a 64-byte budget's
+[80%, 100%) band and counting the warn line on a swapped `System.err`, where slf4j-simple writes:
+exactly one warning across repeated punctuations. All three regression directions were
+mutation-verified red before landing.
+
+**Alternatives**
+
+* Log-capture/appender infrastructure — rejected: slf4j-simple has none, and inventing a logging seam
+  for one warning outweighs one contained stderr swap behind a specific marker string.
+* Seam-only pinning — rejected: it leaves `observeFrontier` free to stop consulting the alarm with the
+  suite green.
+
+**Cost**
+
+The wiring test depends on the test logging backend writing warn lines to `System.err` (slf4j-simple's
+default under the surefire configuration); a backend swap moves that one test, not the seam tests.
+EVIDENCE.md carries no Operational section today, so this entry is the record of what catches the
+warning breaking.
+
+### D91 — Mid-run supersession is pinned structurally over ProcessEngine, not through the sim harness
+
+**Context**
+
+Issue #95 (gap C): D77's most reachable COVERED_POSITION_FED case — a superseded execution's facts
+round observing its successor's committed progress — was pinned only by a hand-written PositionFacts
+(`ProcessEngineTest#feedAtAReportCoveredPositionFailsClosedAsCoveredPositionFed`), which cannot catch
+the facts round failing to adopt committed coverage, and pinned nothing about the refusal message's
+recovery promise. The sim harness cannot stage the condition: SimProcess holds one engine per lifetime,
+MemoryOrderingStore has no fork, ingestFacts derives committed positions from the process's own
+progress so a successor-ahead report is structurally unreachable, and Scenario's RefusalLedger would
+flag a COVERED_POSITION_FED refusal as a violation.
+
+**Decision**
+
+`SupersessionTest` stages two lifetimes of one logical process directly over ProcessEngine: lifetime
+one commits positions 0..2; a successor engine restored from that committed image over an independent
+store (forked purely through the OrderingStore surface — an empty-prefix scan copies the just-committed
+image, mirroring a second instance restoring from the shared changelog) commits 3..5; the superseded
+engine's facts round is built from the successor engine's actual `fedUpTo`, the way
+`ParsleyProcessor#probeHints` derives read positions. One test pins the refusal (reason, supersession
+named in the message, drop and delivery both loud); the second pins the promise that a restart restored
+from the successor's committed state drops the covered replay silently (D10) and delivers the next
+position, so the refusal does not recur.
+
+**Alternatives**
+
+* Extending the sim harness with engine forking, successor-ahead facts and a justifiable-refusal ledger
+  entry — rejected: three orthogonal harness changes to reach one branch that two direct-engine tests
+  reach exactly, and the harness's own-progress facts derivation is a deliberate Host-obligation model,
+  not a gap to widen.
+* Leaving the fabricated-report pin as sole coverage — rejected: it invents the successor's numbers, so
+  a regression in onFacts adopting committed coverage is invisible to it.
+
+**Cost**
+
+The staging duplicates a small restore-and-fork idiom inside one test class; no production or harness
+surface changed. The sabotage sweep still has no mode for the silent-drop direction of this refusal
+(REDELIVER_REFEEDS bypasses the whole covered-position block, the delivery direction only); a
+TREAT_COVERED_FEED_AS_REPLAY mode would be warranted if the sweep is to cover this class, and its
+meta-test would have to run directly over ProcessEngine as SupersessionTest does — recorded here, not
+taken now.
+
+### D92 — ParsleyRuntime's diagnosis, changelog-read and identity-floor behaviours get unit seams; pins issue #95's gaps E–G
+
+**Context**
+
+Three load-bearing runtime behaviours ran with no unit evidence. `recordFailure`'s diagnosis taxonomy
+(D81) and its refusal-retaining merge (D55's supervisor contract) executed only inside the
+uncaught-exception handler, so a reordered branch, a shrunk cause-chain bound, or a last-writer-wins
+merge would have reached operators unnoticed. `readOrderingChangelog`'s stall deadline,
+finished-partition pause and READ_UNCOMMITTED end-offset snapshot (D79) executed only against a live
+broker, and D79/D82 already record why the hang shape cannot be held open deterministically from
+outside. The zero-topic-ID refusal (SPEC Substrate 1, Assumption 2; relied on by D83) was the one hard
+broker-floor tripwire, and EVIDENCE.md honestly recorded it had no executable check.
+
+**Decision**
+
+Three behaviour-preserving package-private extractions, following the D82/D86 precedent
+(`changelogReaderProperties`, `preCheckLooksUnstable`): `classifyFailure` — an enum-returning
+cause-chain walk with the same 64-link bound and branch order — plus `preferFailClosedDiagnosis`, the
+merge remapping; `readToEnds` — the polling loop, taking the consumer, the end-offset snapshot and the
+stall deadline, production still passing the 30s constant — plus `changelogEndOffsetIsolation`; and
+`requireTopicId`, the per-description refusal `resolveTopics` runs. Pinned by
+`RecordFailureDiagnosticsTest`, `ChangelogReadStallTest` (over a hand-rolled `Consumer` double; empty
+polls nap, a poll budget turns an endless loop into an assertion failure) and `TopicIdentityFloorTest`;
+each test was verified red under the exact regression it catches (eleven recorded trials: every
+classification branch deleted, the depth bound shrunk, the merge flipped to last-writer-wins, the stall
+throw removed, the pause removed, the isolation flipped, the zero-id check deleted, the reason
+renamed). The classification's outward-in precedence — an outer link named before a deeper one is
+reached, type checks before the message probe within a link — is now pinned as observed behaviour
+rather than left implicit.
+
+**Alternatives**
+
+* Integration tests through `start()` against the embedded broker — rejected: the pause/stall interplay
+  needs a partition held below its end while a sibling is live-written, un-holdable deterministically
+  from outside, and a healthy 4.3.1 broker can produce neither a zero topic ID nor a 66-link cause
+  chain.
+* Reflection over the private methods — rejected: the suite's convention is narrow package-private
+  seams the production caller actually uses.
+
+**Cost**
+
+None of substance. Five package-private names join `ParsleyRuntime`'s surface; each is a direct
+factoring of code that existed, called from the same sites with the same values.
