@@ -138,6 +138,22 @@ final class GroupMembershipCommitter implements AutoCloseable {
             public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
             }
         });
+        awaitAssignment(consumer, timeout);
+    }
+
+    /**
+     * The join wait, extracted so the deadline and its diagnoses are pinnable over a
+     * consumer double: polls until the coordinator assigns, backing off on the protocol
+     * conflict a live Kafka Streams member provokes (D48), and ends loudly — at the
+     * deadline, naming the conflict when one was seen, or on an interrupt during the
+     * backoff. This deadline is what turns a contested or unreachable group into a
+     * diagnosed bootstrap failure instead of an infinite hang (Operational 2).
+     *
+     * @param consumer a subscribed consumer whose assignment is awaited
+     * @param timeout  how long to wait for the assignment
+     */
+    static void awaitAssignment(org.apache.kafka.clients.consumer.Consumer<byte[], byte[]> consumer,
+                                Duration timeout) {
         long deadline = System.nanoTime() + timeout.toNanos();
         org.apache.kafka.common.errors.InconsistentGroupProtocolException lastProtocolConflict = null;
         while (consumer.assignment().isEmpty()) {
