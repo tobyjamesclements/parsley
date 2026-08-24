@@ -946,6 +946,11 @@ receiver fails closed, and must not treat the metadata as absent.</p>
    right as unsigned bytes. At most one entry per channel, so the encoding of a given cause
    set is unique byte for byte.</li>
 <li><code>partition</code> and <code>position</code> are non-negative.</li>
+<li><code>topicId</code> is not all-zero bytes. The substrate reserves the zero topic ID and never
+   assigns it to a channel, so no genuine cause can name it; an entry carrying it is
+   undecodable. (A reader-side tightening, not a grammar change: no conforming writer has
+   ever produced such an entry, because writers only express channels the substrate named —
+   D83 records the reasoning.)</li>
 </ol>
 <h2 id="meaning">Meaning</h2>
 <p>Each entry <code>(topicId, partition, position)</code> expresses causes on one channel. The channel is

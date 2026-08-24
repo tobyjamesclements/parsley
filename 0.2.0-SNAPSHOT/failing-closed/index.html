@@ -939,7 +939,7 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 </tr>
 <tr>
 <td><code>ORDERING_STATE_LOST</code></td>
-<td>Committed read positions the bootstrap did not write (a previous Kafka Streams execution's stamp, or bare external commits) exist while the ordering-store changelog does not. If a prior execution ran, the state of its most recent committed step has been lost and resuming would silently under-express every cause delivered before the loss</td>
+<td>Committed read positions the bootstrap did not write (a previous Kafka Streams execution's stamp, or bare external commits) exist while the ordering-changelog partition behind them holds no records — the topic absent, or its records purged, in whole or for that one partition. If a prior execution ran, the state of its most recent committed step has been lost and resuming would silently under-express every cause delivered before the loss</td>
 </tr>
 <tr>
 <td><code>CHANNEL_REMOVED_WITH_HELD_MESSAGES</code></td>
@@ -959,7 +959,7 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 </tr>
 <tr>
 <td><code>UNKNOWN_ORDERING_STATE_FORMAT</code></td>
-<td>Stored state cannot be trusted: a format version this build cannot read, state present without its version entry (the changelog head has been lost), a corrupt entry — malformed key, wrong-length value, or a held blob whose lengths do not match its bytes — or held messages restored out of position order</td>
+<td>Stored state cannot be trusted: a format version this build cannot read, state present without its version entry (the changelog head has been lost), a corrupt entry — malformed key, wrong-length value, or a held blob whose lengths do not match its bytes — a restored frontier naming the reserved zero topic ID, or held messages restored out of position order</td>
 </tr>
 <tr>
 <td><code>EMISSION_TO_UNDECLARED_CHANNEL</code></td>
@@ -967,7 +967,7 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 </tr>
 <tr>
 <td><code>STATE_ACCESS_TO_UNDECLARED_STORE</code></td>
-<td>Application logic read or wrote a store its process never declared, or used a <code>Store</code> instance other than the declared one. Every effect target is validated before any write applies, so the refusal leaves no partial step behind — and a read refusal an application catch swallows is latched and rethrown when the handler returns, so the step still fails</td>
+<td>Application logic read or wrote a store its process never declared, or used a <code>Store</code> instance other than the declared one. Every effect target is validated before any write applies, so the refusal leaves no partial step behind — and a read refusal an application catch swallows is latched and rethrown at the delivery frame's next boundary (after the payload's deserializers, after the handler, and after the effects apply), so the step still fails wherever in the frame the read ran</td>
 </tr>
 <tr>
 <td><code>RESERVED_HEADER_USED</code></td>
@@ -979,7 +979,7 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 </tr>
 <tr>
 <td><code>APPLICATION_PAYLOAD_UNDECODABLE</code></td>
-<td>A payload — a delivered message's, or a stored state value read through the seam — could not be decoded by its declared serde. A state-read failure an application catch swallows is latched and rethrown when the handler returns</td>
+<td>A payload — a delivered message's, or a stored state value read through the seam — could not be decoded by its declared serde. A state-read failure an application catch swallows is latched and rethrown at the delivery frame's next boundary</td>
 </tr>
 <tr>
 <td><code>APPLICATION_PAYLOAD_UNSERIALIZABLE</code></td>
