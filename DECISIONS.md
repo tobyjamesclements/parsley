@@ -3257,3 +3257,205 @@ rather than left implicit.
 
 None of substance. Five package-private names join `ParsleyRuntime`'s surface; each is a direct
 factoring of code that existed, called from the same sites with the same values.
+
+### D93 — The engine's error sites are pinned at reason-and-message level; the per-message budget gate is discriminated by raw length
+
+**Context**
+
+The error-reachability sweep found five ProcessEngine error sites with weak or no pinning. The
+undeclared-channel refusal and both shapes of the markDelivered head guard had no test at all: deleting
+either guard left the suite green while a message from outside the declared received set was absorbed
+silently (causes merged, body held) or a non-head markDelivered removed a mid-buffer hold with no
+exception. The emission budget check in `causesHeaderForEmission` was unreachable through any growth
+path — receipt and merge both police the budget as the frontier grows — so deleting it was invisible;
+its one route is a frontier restored by the constructor, which deliberately carries no budget check,
+under a budget smaller than the one the state was committed with. The per-message header-length gate
+shares `METADATA_BUDGET_EXCEEDED` with the merged-frontier growth gate, and the existing fresh-channel
+test stayed green when the gate alone was deleted. And the dead-channel re-feed's reason and diagnosis
+(the `OUT_OF_ORDER_FEED` half D77 left behind; D21's sentinel) were asserted nowhere.
+
+**Decision**
+
+All five pinned in `ProcessEngineTest`, no production change. The undeclared-channel and markDelivered
+pins assert exception type, message fragment, and that nothing was absorbed or removed (frontier,
+holds, coverage, true head). The emission check is reached the only way it can be: an eleven-channel
+frontier committed under the default budget, restored under a 64-byte one — construction and an empty
+facts round pass, and `causesHeaderForEmission` stops with the "expressing the causal frontier"
+diagnosis. The per-message gate is discriminated by construction: a canonically-encoded header whose
+channels already sit in a within-budget frontier can never itself exceed the budget (the encoded size
+is affine and monotone in the entry count), so the discriminating message carries the canonical
+encoding of exactly the frontier's channels at their frontier positions, padded past the budget — the
+growth gate provably cannot fire, and the gate's judgement of raw length *before* any decode is what
+produces the budget diagnosis. Deleting the gate alone degrades that refusal to `UNDECODABLE_METADATA`
+and turns only the new test red while `#metadataBeyondTheBudgetFailsClosedOnReceipt` stays green — the
+recorded differential. The dead-channel re-feed now pins `OUT_OF_ORDER_FEED` and "recorded as no longer
+existing" in the existing restart test. Eight mutation trials recorded: both guards deleted, both
+budget throws deleted, the reason swapped, three messages garbled — each red, each revert green.
+
+**Alternatives**
+
+* A budget check on the constructor's frontier restore, stopping at restore instead of emission —
+  rejected here: a behaviour change beyond a pinning pass. An operator who lowers the budget below an
+  already-committed frontier today gets the emission-time stop with its own diagnosis, which is D52's
+  documented third enforcement point; restore-time enforcement would need its own decision.
+* Pinning the per-message gate with an over-budget *valid* header over fresh channels — rejected: that
+  is exactly the existing test's shape, which the growth gate masks with the same Reason.
+
+**Cost**
+
+The discriminating header is not decodable (padding), so the test leans on the gate's
+judge-length-before-decode order; a deliberate reversal of that order would need to rewrite the test
+alongside the decision that reversed it.
+
+### D94 — Codec refusal diagnoses are pinned message-level; the position floor is pinned at the value objects
+
+**Context**
+
+The codec cluster's refusals were pinned only at the exception-type level. `CausesCodec.decode`'s two
+catch clauses — the BufferUnderflowException wrap ("truncated causes header") and the
+IllegalArgumentException wrap ("malformed causes header: ...") — had no test at all: deleting either
+let a raw runtime exception escape into the receive path with the suite green, unwinding D8's
+classified stop for exactly the inputs D3 calls hostile. The negative-count and per-entry
+negative-position guards share their signature with sibling checks (the count/length mismatch below;
+`Causes.of`'s backstop through the IAE wrapper), so a deleted guard still refused — with the wrong
+diagnosis — and every type-level test stayed green, the shape EVIDENCE.md's standard calls worse than
+an empty cell. `StoreCodec.decodeHeld`'s length diagnoses had the same shape against its catch-all
+wrap, degrading a named stop (`docs/failing-closed.md`; D81) to a bare "corrupt held blob". And the
+value-object floor — `ReceivedMessage`'s negative-position refusal and `Causes.of`'s negative/null
+refusal, the very backstop the codec leans on — was itself unpinned.
+
+**Decision**
+
+Pure test additions; no production change, every site being reachable through crafted bytes or direct
+construction. `CausesCodecTest` gains two classification pins (a sub-5-byte header, and an entry whose
+negative partition only ChannelId's constructor refuses, must both come back as
+UndecodableMetadataException, never raw) and two message-level pins ("negative cause count -1";
+"negative position -5 on <channel>" from the per-entry check, not the backstop's wrapped text).
+`StoreCodecCorruptionTest` gains message-level pins for the header-value-length and readSizedBytes
+diagnoses, exact against validBlob()'s documented layout. `PositionRefusalTest` pins the value-object
+floor and records `Causes.of` as the backstop behind the codec's per-entry check. Eight mutations
+verified red and reverted green; in the shared-signature trials the type-level siblings stayed green
+under the deleted guard, which is precisely the gap the message pins close.
+
+**Alternatives**
+
+* Type-level assertions only — rejected: every deleted-guard mutation survives them through the sibling
+  or backstop refusal.
+* Full message equality on the store-blob diagnoses — rejected: the discriminating fragment (field
+  name, length, bytes remaining) is the load-bearing part; wholesale equality couples tests to
+  incidental prefix wording without catching more.
+
+**Cost**
+
+The truncation pin depends on a decode-order fact its Javadoc records: the count/length check refuses
+longer truncations arithmetically before an entry read can underflow, so the underflow catch's only
+live entrances are the version byte and the count int. Adjacent non-assigned diagnoses remain
+type-pinned only: CausesCodec's count/length mismatch text, and StoreCodec's header-count and
+cause-count texts — each would need its own message pin to catch a garbled diagnosis.
+
+### D95 — The processor's refusal sites, the bootstrap join wait and the facts round's abort paths get direct pins
+
+**Context**
+
+The error-reachability sweep found eight error sites in this cluster with no unit evidence. In
+`ParsleyProcessor`, the write-key serializer returning null (`planWrite`'s D81 refusal), the read-key
+serializer that throws (the D87 latch site — its returns-null sibling was pinned, the throwing shape
+was not) and the undeclared-topic guard in `process` were each deletable with the suite green. In
+`GroupMembershipCommitter`, nothing pinned the sub-millisecond session-timeout refusal, the join
+deadline — the site whose deletion turns a diagnosed bootstrap failure into an infinite hang
+(Operational 2) — its protocol-conflict diagnosis and cause, or the interrupted-backoff refusal. In
+`AdminFactsSource`, the rethrow that aborts a round on a describe failure outside D83's
+unknown/invalid tolerance was unreachable by the scripted-round tests, which override `describeByIds`
+wholesale and replace the very classification under test; the interrupt rethrow out of the
+earliest-offset wait was equally unpinned.
+
+**Decision**
+
+Two behaviour-preserving extractions, following the D89/D92 precedent. `GroupMembershipCommitter.join`'s
+wait loop becomes the package-private static `awaitAssignment(Consumer, Duration)` — the identical
+statement sequence, the consumer arriving as its interface — so `BootstrapMemberJoinTest` pins the
+deadline, its protocol-conflict explanation and cause, and the interrupt refusal over a hand-rolled
+never-assigned consumer double (empty polls nap; a poll budget turns an endless loop into an assertion
+failure; the interrupt is staged by self-interrupting ahead of the backoff's sleep).
+`AdminFactsSource.describeByIds`' admin call becomes `describeByIdFutures`, mirroring
+`earliestOffsetFutures`, so `AdminFactsSourceRoundAbortTest` fails a `KafkaFutureImpl` through the real
+tolerate-or-abort classification: the abort resets the confirmation streak — a name-gone run
+interrupted by the outage reopens rather than matures, an unbroken post-outage run still confirms —
+and a second test interrupts a gather thread blocked on an incomplete offset future and asserts the
+round aborts interrupted instead of completing under the per-partition warning. `ParsleyProcessor`
+needed no seam: `TopologyWiringTest` stages all three sites through the driver, the undeclared-topic
+guard via the width arm (a zero-width `TopicInfo` against the driver's task 0 exercises the same
+`partition < width` predicate as a task numbered at or above a real topic's width — the only reachable
+spelling, since the driver refuses records on unconnected topics). Every test was verified red under
+the exact mutation it exists to catch — nine recorded trials — and green on the revert.
+
+**Alternatives**
+
+* A MockAdminClient or mock-framework describe — rejected: the suite's convention is hand-rolled
+  doubles behind narrow package-private seams, and the future-level seam keeps the classification
+  itself real where a scripted `describeByIds` replaces it.
+* Pinning the join deadline against the embedded broker with a held group — rejected: the
+  contested-group shape needs a live Streams member ground against for the full deadline; the consumer
+  double stages the same loop deterministically in milliseconds, and `BootstrapIntegrationTest` keeps
+  the real-broker join covered.
+* Reflection over the private wait loop instead of the extraction — rejected: the suite's convention is
+  seams the production caller actually uses.
+
+**Cost**
+
+Two package-private names join the surface, each a direct factoring of code that existed, called from
+the same sites with the same values. The width-arm staging leans on `TopicInfo` not validating a
+positive width; if it ever does, that test needs a task numbered above zero instead. The conflict-path
+join tests spend real time in the loop's genuine 500ms backoff. EVIDENCE.md still carries no
+Operational section, so this entry is the record of what catches the join deadline and its diagnoses
+breaking.
+
+### D96 — Start-path refusal decisions are pinned through scripted functional seams; extends D92 into the determination and recheck loops
+
+**Context**
+
+Four start-path decisions ran with no unit evidence, three of them safety-bearing. describeChangelog's
+corroboration loop (D84) could regress to concluding absence from a generic transient — a timeout
+resuming a stateful process as a first start — with nothing red. The changelog reader's width
+corroboration (D88) could be deleted and a lagging broker's empty metadata answer scanned vacuously.
+refuseLostOrderingState's pre-refusal second look (D84) could be deleted or inverted, misdiagnosing a
+healthy concurrent sibling as ORDERING_STATE_LOST, whose printed remedy deletes the offsets that
+sibling just committed. And the D86 pre-check retry was pinned only through its shape predicate, not
+its relist wiring or interrupted arm.
+
+**Decision**
+
+Four behaviour-preserving package-private extractions, following D92's precedent, each a direct
+factoring called from the same site with the same values: describeChangelogCorroborated over a
+hand-rolled ChangelogDescribe (the retry loop verbatim); requireCorroboratedWidth (the comparison and
+retryable refusal verbatim); refuseLostOrderingState made static over a ChangelogRecheck returning
+Optional<ChangelogView> — production supplies describeChangelog(...).map(readOrderingChangelog(...)),
+preserving the lazy per-entry re-read and the presence-to-shape mapping; and awaitStablePreCheck over a
+StableOffsetListing. Pinned by PriorStateDeterminationTest, LostOrderingStateRecheckTest, and additions
+to ChangelogReadStallTest and BootstrapPreCheckTest, plus one embedded-broker case for the
+declared-topics resolution refusal
+(BootstrapIntegrationTest#aDeclaredTopicThatDoesNotExistRefusesToStartNamingTheResolutionFailure).
+Fourteen recorded mutation trials, each red under its exact regression and green on revert: the
+generic-failure arm falling through to absent, single-answer absence, both swallowed interrupts, the
+width guard deleted and inverted, the recheck throw deleted and inverted, the shape and provenance
+strings garbled, the bootstrap-stamp and records-present skips deleted, the relist loop inverted, and
+the resolution wrap swapped for a bare rethrow.
+
+**Alternatives**
+
+* Driving the concurrent-lifetime recheck through the embedded broker — rejected: it needs a sibling's
+  commit to land in the window between the first changelog read and the offset listing, an interleaving
+  no external test can hold open deterministically.
+* Pinning the three remaining catch-wrap diagnosis shells ("prior ordering state could not be read",
+  "initial read positions could not be established", "committed read positions could not be listed") —
+  declined for now: each needs a consumer-factory, committer-factory or Admin seam solely to reach a
+  wrap whose interior refusals are already pinned, and a wrap-helper unit test that feeds an exception
+  to a rethrow proves nothing. The Admin-injection seam through listStableOffsets is the refactor to
+  take if the third is ever judged worth a test.
+
+**Cost**
+
+Four package-private names and three one-method functional interfaces join ParsleyRuntime's surface.
+The corroborated-absence test sleeps through the loop's real half-second backoffs (~1s once per suite
+run). The seams pin the decisions, not their call sites: deleting a seam's invocation in production is
+caught only by the integration paths that reach it, the same residual D92 carries.
