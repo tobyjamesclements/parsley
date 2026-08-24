@@ -148,8 +148,23 @@ public final class ProcessEngine {
 
         store.scanPrefix(StoreCodec.tagPrefix(StoreCodec.TAG_FED_UP_TO),
                 (key, value) -> fedUpTo.put(StoreCodec.channelOfEntryKey(key), StoreCodec.decodeLong(value)));
-        store.scanPrefix(StoreCodec.tagPrefix(StoreCodec.TAG_FRONTIER),
-                (key, value) -> frontier.put(StoreCodec.channelOfEntryKey(key), StoreCodec.decodeLong(value)));
+        store.scanPrefix(StoreCodec.tagPrefix(StoreCodec.TAG_FRONTIER), (key, value) -> {
+            ChannelId channel = StoreCodec.channelOfEntryKey(key);
+            // The reserved zero topic id can only have entered a frontier through a forged
+            // header absorbed before wire-format constraint 5 refused it at receipt: no
+            // substrate query can ever answer for it, so restoring it would re-express and
+            // re-persist untrustworthy state forever. Stored state that cannot be trusted
+            // is a reason to stop (D88).
+            if (channel.topicId().getMostSignificantBits() == 0
+                    && channel.topicId().getLeastSignificantBits() == 0) {
+                throw new ParsleyFailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+                        "process " + processName + ": restored frontier names the reserved zero topic id;"
+                                + " this state absorbed a forged causes header before receipt refused it"
+                                + " (wire-format constraint 5). Reset the process's state and group offsets"
+                                + " deliberately to proceed.");
+            }
+            frontier.put(channel, StoreCodec.decodeLong(value));
+        });
         store.scanPrefix(StoreCodec.tagPrefix(StoreCodec.TAG_DELIVERED_PAST),
                 (key, value) -> deliveredPast.put(StoreCodec.channelOfEntryKey(key), StoreCodec.decodeLong(value)));
         store.scanPrefix(StoreCodec.tagPrefix(StoreCodec.TAG_HELD), (key, value) -> {

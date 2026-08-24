@@ -144,6 +144,17 @@ class ApiValidationTest {
                 () -> builder.streamsProperty("main.consumer.group.protocol", "consumer"));
         assertThrows(IllegalArgumentException.class,
                 () -> builder.streamsProperty("group.remote.assignor", "uniform"));
+
+        // Streams pins the plain bootstrap.servers from its own config but applies
+        // prefixed consumer overrides on top without re-pinning, so a prefixed spelling
+        // would point a consumer at a different cluster than the one start() resolved
+        // topic identities against (D87).
+        assertThrows(IllegalArgumentException.class,
+                () -> builder.streamsProperty("main.consumer.bootstrap.servers", "elsewhere:9092"));
+        assertThrows(IllegalArgumentException.class,
+                () -> builder.streamsProperty("restore.consumer.bootstrap.servers", "elsewhere:9092"));
+        assertThrows(IllegalArgumentException.class,
+                () -> builder.streamsProperty("bootstrap.servers", "elsewhere:9092"));
     }
 
     /** Processes must receive something. */
@@ -405,6 +416,19 @@ class ApiValidationTest {
         assertThrows(IllegalArgumentException.class,
                 () -> ParsleyConfig.builder("broker:9092", "p").factsInterval(Duration.ZERO),
                 "a zero interval would spin the facts executor");
+    }
+
+    /**
+     * A positive but sub-millisecond facts interval is refused at declaration: Kafka
+     * Streams punctuation has millisecond granularity, so the value would pass build()
+     * only to crash the stream thread at task initialisation, unattributed, after the
+     * bootstrap had already committed initial positions (D87).
+     */
+    @Test
+    void subMillisecondFactsIntervalIsRefusedAtDeclaration() {
+        assertThrows(IllegalArgumentException.class,
+                () -> ParsleyConfig.builder("broker:9092", "p").factsInterval(Duration.ofNanos(500_000)),
+                "a sub-millisecond interval cannot be scheduled and must fail here, not on the stream thread");
     }
 
     /** Null status components are refused at construction. */

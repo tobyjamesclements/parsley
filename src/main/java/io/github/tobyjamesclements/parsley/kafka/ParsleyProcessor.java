@@ -94,12 +94,15 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private final Map<String, String> serdeTopicByStore = new HashMap<>();
     private StateReader stateReader;
     /**
-     * A fail-closed refusal raised by the state reader inside the handler's frame. The
-     * reader latches it here before throwing, and {@code deliver} rethrows after the
-     * handler returns, so an application catch around its own handler body cannot commit a
-     * step whose reads were refused.
+     * A fail-closed refusal raised by the state reader inside application code. The reader
+     * latches it here before throwing, and {@code deliver} rethrows at every seam boundary
+     * — frame entry, after the delivered payload's deserializers, after the handler, and
+     * after the planned effects apply — so an application catch cannot commit a step whose
+     * reads were refused, wherever in the frame the read ran. Volatile because the reader
+     * is an object application code can hold: a latch written from an application thread
+     * must be visible to the stream thread's next check.
      */
-    private ParsleyFailClosedException swallowedSeamViolation;
+    private volatile ParsleyFailClosedException swallowedSeamViolation;
 
     /**
      * @param definition          the process this instance runs
@@ -316,9 +319,18 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     }
 
     private <K, V> void deliver(ProcessDefinition.Input<K, V> input, DeliverableMessage message) {
+        // Checked at entry, never blanket-reset mid-frame: a reset placed after any
+        // application code would erase what that code latched. The delivered payload's
+        // own deserializers are application code and run before the handler, so a refusal
+        // they latch through a captured reader must fail this step, not vanish.
+        rethrowSeamViolation();
         Channel<K, V> channel = input.channel();
         String topic = channel.topic();
-        RecordHeaders receivedHeaders = toKafkaHeaders(message.headers());
+        // Reserved transport headers are parsley's own carriage, invisible to application
+        // logic in both directions (D56): deserializers see exactly the headers the
+        // application sent, the same view Delivery presents one frame later.
+        List<HeaderKV> applicationHeaders = withoutReservedHeaders(message.headers());
+        RecordHeaders receivedHeaders = toKafkaHeaders(applicationHeaders);
         K key;
         V value;
         try {
@@ -327,23 +339,23 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             value = message.value() == null
                     ? null : channel.valueSerde().deserializer().deserialize(topic, receivedHeaders, message.value());
         } catch (RuntimeException e) {
+            // A reader refusal thrown through the deserializer keeps its own reason: the
+            // latch identifies it, and wrapping it as a payload failure would mislabel
+            // the stop for status().
+            rethrowSeamViolation();
             throw new ParsleyFailClosedException(
                     ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
                     definition.name() + ": " + topic + "@" + message.position(), e);
         }
+        rethrowSeamViolation();
 
         Delivery<K, V> delivery = Delivery.of(channel, message.channel().partition(), message.position(),
-                message.timestamp(), key, value, message.headers());
-        swallowedSeamViolation = null;
+                message.timestamp(), key, value, applicationHeaders);
         Effects effects = input.handler().handle(delivery, stateReader);
-        if (swallowedSeamViolation != null) {
-            // The reader's refusal was thrown inside the handler's own frame, where an
-            // application catch can swallow it; the latch makes the step fail regardless,
-            // as docs/failing-closed.md promises for every fail-closed event.
-            ParsleyFailClosedException violation = swallowedSeamViolation;
-            swallowedSeamViolation = null;
-            throw violation;
-        }
+        // The reader's refusal was thrown inside the handler's own frame, where an
+        // application catch can swallow it; the latch makes the step fail regardless,
+        // as docs/failing-closed.md promises for every fail-closed event.
+        rethrowSeamViolation();
         if (effects == null) {
             // A deliberate refusal that recurs identically on restart, so it carries its
             // own reason and reaches status() rather than an empty refusalReason.
@@ -377,15 +389,29 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         for (PlannedSend send : sends) {
             context.forward(send.record(), send.sinkName());
         }
-        if (swallowedSeamViolation != null) {
-            // Application code can still run after the post-handler check — a serializer
-            // invoked during planning may hold the reader and latch a refusal there. The
-            // step's effects have applied, but the EOS abort unwinds them; without this
-            // recheck the next delivery's reset would silently erase the violation.
-            ParsleyFailClosedException violation = swallowedSeamViolation;
+        // Application code can still run after the post-handler check — a serializer
+        // invoked during planning may hold the reader and latch a refusal there. The
+        // step's effects have applied, but the EOS abort unwinds them.
+        rethrowSeamViolation();
+    }
+
+    /** Rethrows a latched seam refusal, clearing the latch so it is raised exactly once. */
+    private void rethrowSeamViolation() {
+        ParsleyFailClosedException violation = swallowedSeamViolation;
+        if (violation != null) {
             swallowedSeamViolation = null;
             throw violation;
         }
+    }
+
+    private static List<HeaderKV> withoutReservedHeaders(List<HeaderKV> headers) {
+        List<HeaderKV> application = new ArrayList<>(headers.size());
+        for (HeaderKV header : headers) {
+            if (!header.key().startsWith(CausesCodec.RESERVED_HEADER_PREFIX)) {
+                application.add(header);
+            }
+        }
+        return application;
     }
 
     /** One resolved, serialized state write, ready to apply. */
@@ -479,6 +505,9 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                     ? serializer.serialize(topic, data)
                     : serializer.serialize(topic, headers, data);
         } catch (RuntimeException e) {
+            // A reader refusal thrown through the serializer keeps its own reason rather
+            // than being relabeled as a payload failure.
+            rethrowSeamViolation();
             throw new ParsleyFailClosedException(
                     ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
                     definition.name() + ": " + topic + " payload could not be serialized by the"

@@ -82,8 +82,8 @@ public final class CausesCodec {
      * @param headerValue the header value, which may be {@code null}
      * @return the frontier
      * @throws UndecodableMetadataException if the value is null, carries an unknown version,
-     *         is truncated, miscounts its entries, names a negative position, or lists
-     *         channels out of strictly ascending order
+     *         is truncated, miscounts its entries, names a negative position or the
+     *         reserved zero topic ID, or lists channels out of strictly ascending order
      */
     public static Causes decode(byte[] headerValue) throws UndecodableMetadataException {
         if (headerValue == null) {
@@ -107,6 +107,15 @@ public final class CausesCodec {
             ChannelId previous = null;
             for (int i = 0; i < count; i++) {
                 ChannelId channel = ChannelId.readFrom(buffer);
+                // The zero topic ID is reserved by the substrate and never assigned to a
+                // channel, so no genuine cause can carry it — and once merged it would sit
+                // in the frontier as an id no broker query can ever answer for. Refused
+                // here so it can never enter a frontier at all (wire-format.md, D83).
+                if (channel.topicId().getMostSignificantBits() == 0
+                        && channel.topicId().getLeastSignificantBits() == 0) {
+                    throw new UndecodableMetadataException("zero topic id at entry " + i
+                            + "; the substrate never assigns it to a channel");
+                }
                 long position = buffer.getLong();
                 if (position < 0) {
                     throw new UndecodableMetadataException("negative position " + position + " on " + channel);

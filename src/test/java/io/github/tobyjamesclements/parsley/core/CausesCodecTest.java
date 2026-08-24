@@ -100,6 +100,22 @@ class CausesCodecTest {
         assertThrows(CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()));
     }
 
+    /**
+     * Rejects the reserved zero topic ID (wire-format constraint 5, D83). The substrate
+     * never assigns it to a channel, and once merged it would sit in the frontier as an id
+     * no broker query can answer for — a well-framed forged header must not be able to
+     * plant it.
+     */
+    @Test
+    void rejectsZeroTopicId() {
+        ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 28);
+        buffer.put(CausesCodec.FORMAT_VERSION).putInt(1);
+        new ChannelId(new java.util.UUID(0, 0), 0).writeTo(buffer);
+        buffer.putLong(7);
+        assertThrows(CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()),
+                "an otherwise well-formed entry naming the zero topic id must be undecodable");
+    }
+
     /** Rejects unsorted or duplicate channels. */
     @Test
     void rejectsUnsortedOrDuplicateChannels() {

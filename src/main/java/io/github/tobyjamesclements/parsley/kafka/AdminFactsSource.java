@@ -72,11 +72,37 @@ class AdminFactsSource implements FactsSource {
     private final Map<UUID, String> topicNamesById = new HashMap<>();
 
     /**
-     * Anchors each open dead-confirmation window. Opened and extended only by an affirmed
+     * An open confirmation window: when its first affirmative observation landed, and when
+     * its latest did. Maturity needs both bounds — a span of window length between the
+     * first and latest observation, and no gap between consecutive observations reaching
+     * the window length, so two isolated sightings bracketing a blind period (a starved
+     * facts executor, a task out for a rebalance) can never confirm on elapsed time alone
+     * (D85).
+     */
+    private static final class ConfirmationWindow {
+        long since;
+        long lastSeen;
+
+        ConfirmationWindow(long now) {
+            this.since = now;
+            this.lastSeen = now;
+        }
+    }
+
+    /**
+     * The open dead-confirmation windows. Opened and extended only by an affirmed
      * name-gone answer; an id whose name was never learned has nothing to corroborate
      * against and is never confirmed dead at all.
      */
-    private final Map<UUID, Long> deadWindowSince = new HashMap<>();
+    private final Map<UUID, ConfirmationWindow> deadWindows = new HashMap<>();
+
+    /**
+     * The open recreation-confirmation windows. A recreated answer is as stale-prone as a
+     * name-gone one — a broker whose metadata lags this process's own resolution serves
+     * the previous incarnation's binding, indistinguishable from a genuine recreation —
+     * so it earns the same continuous corroboration before conviction (D85).
+     */
+    private final Map<UUID, ConfirmationWindow> recreatedWindows = new HashMap<>();
 
     private final Set<UUID> confirmedDead = new HashSet<>();
 
@@ -180,7 +206,8 @@ class AdminFactsSource implements FactsSource {
         try {
             liveNames = describeByIds(undescribed);
         } catch (Exception e) {
-            deadWindowSince.clear();
+            deadWindows.clear();
+            recreatedWindows.clear();
             throw e;
         }
 
@@ -194,11 +221,17 @@ class AdminFactsSource implements FactsSource {
             }
         }
 
-        Set<UUID> deadIdsToRecheck = new HashSet<>();
+        // Confirmed verdicts are re-checked by name every round the id is asked about: the
+        // topic reappearing under the same name with a different id upgrades dead to
+        // recreated, and the name resolving to the very id a verdict condemned is
+        // affirmative proof the confirming answers were stale — the substrate never
+        // reuses a topic id — so the verdict is rescinded rather than held against the
+        // evidence (D85).
+        Set<UUID> confirmedIdsToRecheck = new HashSet<>();
         for (UUID id : topicIds) {
             String lastKnown = topicNamesById.get(id);
-            if (confirmedDead.contains(id) && lastKnown != null) {
-                deadIdsToRecheck.add(id);
+            if ((confirmedDead.contains(id) || confirmedRecreated.contains(id)) && lastKnown != null) {
+                confirmedIdsToRecheck.add(id);
                 namesToCheck.add(lastKnown);
             }
         }
@@ -209,16 +242,29 @@ class AdminFactsSource implements FactsSource {
             String lastKnown = topicNamesById.get(id);
             NameVerdict verdict = classifyName(byNameOutcome, lastKnown, id);
             switch (verdict) {
-                case SAME_ID -> deadWindowSince.remove(id);
-                case RECREATED -> markRecreated(id);
+                case SAME_ID -> {
+                    deadWindows.remove(id);
+                    recreatedWindows.remove(id);
+                }
+                // A recreated answer is served from one broker's metadata view, which can
+                // lag this process's own resolution and serve the previous incarnation's
+                // binding — indistinguishable from a genuine recreation — so conviction
+                // takes the same continuously-corroborated window as death (D85).
+                case RECREATED -> {
+                    deadWindows.remove(id);
+                    if (observeWindow(recreatedWindows, id, askedAt, now)) {
+                        markRecreated(id);
+                    }
+                }
                 case DENIED -> {
-                    deadWindowSince.remove(id);
+                    deadWindows.remove(id);
+                    recreatedWindows.remove(id);
                     LOG.warn("{}: describe denied for topic '{}' ({}); treating as denied, not dead",
                             groupId, lastKnown, id);
                 }
                 case NAME_GONE -> {
-                    long since = deadWindowSince.computeIfAbsent(id, i -> now);
-                    if (now - since >= deadConfirmationMillis) {
+                    recreatedWindows.remove(id);
+                    if (observeWindow(deadWindows, id, askedAt, now)) {
                         markDead(id);
                     }
                 }
@@ -231,19 +277,41 @@ class AdminFactsSource implements FactsSource {
                 // time-only verdict here would prune a live cause (SPEC Structural 13).
                 // The id lingers unconfirmed — costing expression size, never safety —
                 // until its name is learned or its topic reappears.
-                case UNAVAILABLE -> deadWindowSince.remove(id);
+                case UNAVAILABLE -> {
+                    deadWindows.remove(id);
+                    recreatedWindows.remove(id);
+                }
             }
         }
-        for (UUID id : deadIdsToRecheck) {
-            if (classifyName(byNameOutcome, topicNamesById.get(id), id) == NameVerdict.RECREATED) {
-                markRecreated(id);
+        for (UUID id : confirmedIdsToRecheck) {
+            NameVerdict verdict = classifyName(byNameOutcome, topicNamesById.get(id), id);
+            if (verdict == NameVerdict.RECREATED && confirmedDead.contains(id)) {
+                if (observeWindow(recreatedWindows, id, askedAt, now)) {
+                    markRecreated(id);
+                }
+            } else if (verdict == NameVerdict.SAME_ID) {
+                LOG.warn("{}: {} verdict on topic '{}' ({}) rescinded: the name still resolves to the same"
+                                + " id, so the answers that confirmed it were stale",
+                        groupId, confirmedDead.contains(id) ? "dead" : "recreated",
+                        topicNamesById.get(id), id);
+                confirmedDead.remove(id);
+                confirmedRecreated.remove(id);
+                deadWindows.remove(id);
+                recreatedWindows.remove(id);
+            } else if (verdict != NameVerdict.RECREATED) {
+                // The upgrade window takes the same contrary-observation restarts as the
+                // first-classification path: a name-gone, denied or unavailable answer
+                // breaks the reappearance run's continuity, so flapping metadata cannot
+                // mature an upgrade the unknown-ids path would have kept restarting (D88).
+                recreatedWindows.remove(id);
             }
         }
 
         Set<UUID> deadTopicIds = new HashSet<>(confirmedDead);
         Set<UUID> recreatedTopicIds = new HashSet<>(confirmedRecreated);
         for (UUID id : liveNames.keySet()) {
-            deadWindowSince.remove(id);
+            deadWindows.remove(id);
+            recreatedWindows.remove(id);
         }
 
         Map<TopicPartition, OffsetSpec> offsetQueries = new HashMap<>();
@@ -317,13 +385,33 @@ class AdminFactsSource implements FactsSource {
         return new PositionFacts(committedNextRead, logStart, deadChannels, recreatedChannels);
     }
 
+    /**
+     * Extends or (re)opens a confirmation window on an affirmative observation, answering
+     * whether the window has matured.
+     *
+     * <p>Continuity is judged on blind time: the interval that restarts the window runs
+     * from the previous answer to the moment this round began asking, during which no
+     * round was watching the id at all — a starved facts executor, a task out for a
+     * rebalance. A blind interval reaching the window length makes the sightings
+     * bracketing it isolated observations, exactly what D44's continuity requirement
+     * rejects. Time a round spends inside its own queries is watched time: counting it
+     * would let routine in-round latency — a leaderless partition burning the offset
+     * deadline, probe polls on idle channels — exceed the window every round and make a
+     * genuinely dead topic permanently unconfirmable (D88 corrects D85's spelling here).
+     */
+    private boolean observeWindow(Map<UUID, ConfirmationWindow> windows, UUID id, long askedAt, long now) {
+        ConfirmationWindow window = windows.get(id);
+        if (window == null || askedAt - window.lastSeen >= deadConfirmationMillis) {
+            windows.put(id, new ConfirmationWindow(now));
+            return false;
+        }
+        window.lastSeen = now;
+        return now - window.since >= deadConfirmationMillis;
+    }
+
     private void markDead(UUID id) {
         confirmedDead.add(id);
-        deadWindowSince.remove(id);
-
-        if (!pinnedIds.contains(id)) {
-            topicNamesById.remove(id);
-        }
+        forget(id);
     }
 
     private void markRecreated(UUID id) {
@@ -332,9 +420,18 @@ class AdminFactsSource implements FactsSource {
         forget(id);
     }
 
+    /**
+     * Drops an id's confirmation windows, and its name binding unless the id is pinned.
+     * Pinned ids keep their name so a confirmed verdict stays recheckable by name — the
+     * recheck is what upgrades dead to recreated and rescinds a verdict its own evidence
+     * contradicts (D85).
+     */
     private void forget(UUID id) {
-        deadWindowSince.remove(id);
-        topicNamesById.remove(id);
+        deadWindows.remove(id);
+        recreatedWindows.remove(id);
+        if (!pinnedIds.contains(id)) {
+            topicNamesById.remove(id);
+        }
     }
 
     /**
@@ -470,15 +567,25 @@ class AdminFactsSource implements FactsSource {
         });
     }
 
+    /** Client properties for the trailing-run probe, with the guarantee-bearing pins applied. */
+    static Map<String, Object> probeProperties(Map<String, Object> base) {
+        Map<String, Object> props = new HashMap<>(base);
+        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
+        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 1);
+        // The probe's metadata refreshes must never create a topic: a received topic
+        // deleted mid-run has to run the dead-confirmation window, and an auto-created
+        // empty impostor under a new id would turn the designed settle into a spurious
+        // identity-changed stop manufactured by this client's own side effect (D82).
+        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false);
+        props.remove(org.apache.kafka.clients.consumer.ConsumerConfig.GROUP_ID_CONFIG);
+        return props;
+    }
+
     private org.apache.kafka.clients.consumer.KafkaConsumer<byte[], byte[]> probeConsumer() {
         if (probe == null) {
-            Map<String, Object> props = new HashMap<>(probeConsumerProperties);
-            props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
-            props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
-            props.put(org.apache.kafka.clients.consumer.ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
-            props.put(org.apache.kafka.clients.consumer.ConsumerConfig.MAX_POLL_RECORDS_CONFIG, 1);
-            props.remove(org.apache.kafka.clients.consumer.ConsumerConfig.GROUP_ID_CONFIG);
-            probe = new org.apache.kafka.clients.consumer.KafkaConsumer<>(props,
+            probe = new org.apache.kafka.clients.consumer.KafkaConsumer<>(probeProperties(probeConsumerProperties),
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
                     new org.apache.kafka.common.serialization.ByteArrayDeserializer());
         }
@@ -527,8 +634,14 @@ class AdminFactsSource implements FactsSource {
                 names.put(id, description.name());
                 topicNamesById.put(id, description.name());
             } catch (ExecutionException e) {
+                // InvalidTopicException is the admin client's client-side answer for an id
+                // it deems unrepresentable (the reserved zero id): tolerated like unknown,
+                // not rethrown, so one unanswerable id in the frontier cannot abort every
+                // round forever. The decode path refuses such ids at receipt (D83); this
+                // guards state persisted before that refusal existed.
                 if (e.getCause() instanceof UnknownTopicIdException
-                        || e.getCause() instanceof UnknownTopicOrPartitionException) {
+                        || e.getCause() instanceof UnknownTopicOrPartitionException
+                        || e.getCause() instanceof org.apache.kafka.common.errors.InvalidTopicException) {
                     continue;
                 }
                 throw e;

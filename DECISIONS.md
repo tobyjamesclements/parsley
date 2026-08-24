@@ -2744,3 +2744,354 @@ no-offset diagnosis into its two real causes.
 
 None of substance. Pinned by `TopologyWiringTest#nullEffectsFromAHandlerFailClosedWithTheirOwnReason` and
 `#undecodableStoredStateValueFailsClosedEvenWhenSwallowed`.
+
+### D82 — Hand-built consumers are pinned against mutating the cluster
+
+**Context**
+
+Audit finding (kafka-layer audit, C1/N1). The consumer default leaves `allow.auto.create.topics` true, so
+a bare metadata request against a broker with `auto.create.topics.enable=true` (the broker default) silently
+creates the topic it asks about. Kafka Streams pins the config false for every consumer it builds
+(`NON_CONFIGURABLE_CONSUMER_DEFAULT_CONFIGS`, verified in kafka-streams 4.3.1) precisely so a client never
+mutates the cluster — and the three consumers this layer builds by hand carried no such pin. Each one's
+metadata requests touch a topic whose absence is load-bearing: the bootstrap's changelog reader asks about
+the ordering changelog whose record content is the prior-state evidence, so a deletion racing the start
+could be resurrected as an empty impostor that passes every prior-state refusal and resumes mid-log with an
+empty engine — the ORDERING_STATE_LOST catastrophe D76 refuses, reached around its guard; the bootstrap
+member subscribes to received topics resolved moments earlier; and the probe asks about topics
+mid-deletion, where an auto-created impostor under a new id turns the designed dead-channel settle (D44)
+into a spurious CHANNEL_IDENTITY_CHANGED stop manufactured by the client's own side effect. The changelog
+reader also ran on the default `auto.offset.reset=latest` — the one consumer in the layer not pinned to
+`none` — so a log start advancing mid-scan would silently reset it to the end and truncate the restored
+view the refusals read.
+
+**Decision**
+
+Every hand-built consumer pins `allow.auto.create.topics=false`, and the changelog reader additionally pins
+`auto.offset.reset=none`. The property maps are composed in package-visible builders
+(`ParsleyRuntime.changelogReaderProperties`, `GroupMembershipCommitter.memberProperties`,
+`AdminFactsSource.probeProperties`) so the pins are pinned by `ClusterMutationPinningTest` rather than
+asserted in comments. With the pin, the deletion race fails the start loudly (the reader's metadata wait
+times out and the scan refuses) instead of resuming silently.
+
+**Alternatives**
+
+* Refusing `allow.auto.create.topics` in `ParsleyConfig` instead — insufficient: the default, not an
+  override, is the hazard; the layer's own consumers must pin it regardless of configuration.
+* An integration test deleting the changelog mid-start — rejected for now: the race window sits between two
+  admin calls inside `start()` and cannot be held open deterministically from outside; the property pin plus
+  the unit test carries the guard.
+
+**Cost**
+
+None of substance. A start racing a changelog deletion now fails with the reader's timeout rather than a
+crisper diagnosis; the failure is loud, transient in shape, and a restart reaches the absent-changelog path.
+
+### D83 — The reserved zero topic ID is undecodable metadata; the facts round tolerates unanswerable ids
+
+**Context**
+
+Audit finding (kafka-layer audit, M2). Nothing rejected an all-zero topic ID arriving in an otherwise
+well-formed `parsley.causes` header — the substrate reserves `Uuid.ZERO_UUID` and never assigns it
+(`Uuid.randomUuid` excludes reserved ids; `ParsleyRuntime.resolveTopics` refuses it at start under
+SUBSTRATE_MISCONFIGURED), so no genuine cause can name it, but a foreign producer can frame one in 33 valid
+bytes. Once decoded it merged into the persisted frontier, and every subsequent facts round died at the
+opening describe: the admin client answers a zero id locally with `InvalidTopicException`
+(`KafkaAdminClient.topicIdIsUnrepresentable`, verified in 4.3.1 sources), which `describeByIds` rethrew where
+it tolerates only unknown-topic answers. Facts stopped forever for the task — no settling, no dead or
+recreated verdicts, no truncation evidence — surfacing only as a repeating warn, surviving restarts through
+the durable frontier, and spreading to every downstream process via re-expression on emissions.
+
+**Decision**
+
+Two independent guards. `CausesCodec.decode` refuses an entry naming the zero topic ID as undecodable
+metadata — wire-format constraint 5, a reader-side tightening rather than a grammar change, because no
+conforming writer has ever produced such an entry (writers only express channels the substrate named, and
+the substrate never names this one). So the id can no longer enter a frontier at all, and the message
+carrying it fails closed with UNDECODABLE_METADATA like every other untrustworthy header.
+`AdminFactsSource.describeByIds` additionally tolerates `InvalidTopicException` exactly like an
+unknown-topic answer, so ordering state persisted before this refusal existed — which can still carry the
+id — degrades to "no facts for that channel" instead of aborting every round.
+
+**Alternatives**
+
+* Refusing in `ChannelId`'s constructor — rejected: the constructor also serves decode paths that must
+  report *undecodable metadata* with position context, and an `IllegalArgumentException` there would
+  surface as a malformed-header catch-all rather than the named condition.
+* Tolerating in `describeByIds` alone — rejected: the frontier would still carry and re-express the
+  ghost id forever, costing budget bytes on every emission and poisoning downstream frontiers.
+
+**Cost**
+
+A message whose forged header names the zero id now stops the process (fail closed) instead of delivering
+with the ghost merged. That is the project's stated preference: undecodable metadata is a reason to stop.
+Pinned by `CausesCodecTest#rejectsZeroTopicId` and
+`IdentityIntegrationTest#zeroTopicIdInTheFrontierDoesNotAbortTheFactsRound` (real admin client, real
+local InvalidTopicException answer).
+
+### D84 — Prior state is keyed on ordering records, and prior-state describes are corroborated; extends D76
+
+**Context**
+
+Audit findings (kafka-layer audit, M3/N4/N5), three weaknesses in one determination. First, `priorState` was
+keyed on the ordering changelog *topic* existing, but D76's refusal guards state, not topics: a changelog
+emptied of its records — `kafka-delete-records`, or a cleanup-policy excursion under a runbook reset followed
+halfway — passed every prior-state check vacuously, never consulted the bootstrap stamp (its guard is
+conditioned on no prior state), and resumed mid-log with an empty engine: the precise ORDERING_STATE_LOST
+fail-open D76 closes for the deleted-topic shape, reachable through record deletion. Every committed step's
+transaction wrote at least the store's version entry, which compaction retains, so "exists but recordless"
+is as detectable a loss shape as "absent". Second, absence itself rested on a single describe answer: one
+transient unknown-topic response — served from one broker's possibly lagging metadata view, the exact answer
+shape D44/D75 refuse to trust for deletion — flipped `priorState` to false and misdiagnosed a healthy start
+as state loss, with a remedy that deletes offsets. Third, the flag was fixed before the offsets were listed,
+and a pause between the two statements (SPEC Fault model 2) spans any concurrent sibling's first commit, so
+the refusal could assert "the changelog does not exist" about a changelog that now did.
+
+**Decision**
+
+Three coupled changes. `priorState` is `!orderingState.isEmpty()`: the changelog is read whenever the topic
+exists, and only committed records constitute prior state; the width refusal still keys on the topic, whose
+partition count outlives its records. `describeChangelog` concludes absence only from three consistent
+unknown answers spaced half a second apart — a genuine first start pays the extra describes once. And
+`refuseLostOrderingState` looks again before refusing: if the changelog now exists with records, the refusal
+is a transient "retry this start" naming the concurrent-lifetime condition, never a state-loss diagnosis
+whose remedy would delete offsets a healthy sibling just wrote; when it does refuse, the message names the
+shape it found ("does not exist" against "exists but holds no ordering records").
+
+**Alternatives**
+
+* Refusing "exists but empty" unconditionally, without the stamp check — rejected: a first-start bootstrap
+  that crashed after Streams created the (still-empty) changelog but before any commit is a legitimate
+  recovery, distinguished exactly by every offset carrying the bootstrap stamp.
+* A confirmation window for the describe, as the facts source keeps for deletion — rejected: start() is a
+  synchronous path with no rounds to observe across; bounded re-describes are the same evidence standard
+  scaled to a start-time budget.
+
+**Cost**
+
+A genuine first start performs two extra describes (~1s). The lost-state refusal path re-reads a changelog
+it already read; the path is terminal. Pinned by
+`BootstrapIntegrationTest#emptiedChangelogWithSurvivingOffsetsRefusesToStart` (would have resumed silently
+before this record) alongside D76's three existing pins, which all still hold.
+
+### D85 — Verdict windows require observed continuity; recreation is debounced; contradicted verdicts are rescinded (extends D44/D75)
+
+**Context**
+
+Audit findings (kafka-layer audit, M4/M5/M6), three unsoundnesses in the dead/recreated verdict machinery.
+First, D44's window promised death confirmed by *continuous* corroboration, but the implementation anchored a
+timestamp and confirmed on elapsed time at the next name-gone answer: during a blind gap — no round asking
+about the id at all, which is routine exactly when answers are least trustworthy, since one process's round
+grinding against 10s admin timeouts starves every other process's rounds on the runtime's shared single-thread
+facts executor, and a task sitting out a rebalance asks nothing — the anchor silently persisted, so two
+isolated stale sightings 3 seconds apart could confirm a live topic dead. A spuriously dead received channel
+settles to fed-to-end and releases held messages ahead of causes still coming; a spuriously dead frontier
+channel is pruned, under-expressing a live cause on every emission (SPEC Structural 13) — both fail open.
+Second, the RECREATED verdict convicted from a single by-name answer, immediately and stickily, on D44's
+argument that "a stale view can serve an old binding but cannot invent a new one" — but serving an old binding
+is precisely the false positive: when the process's own binding is fresher than the answering broker's
+metadata (topic deleted and recreated shortly before the process resolved the new id), one lagging broker
+self-consistently answers unknown-by-id and old-id-by-name, convicting the live topic into a permanent
+CHANNEL_IDENTITY_CHANGED stop whose remedy tells the operator to redo the reset they just performed. Third,
+the recheck loop computed SAME_ID for confirmed-dead ids — the name resolving to the very id the verdict
+condemned, affirmative proof of a spurious confirmation since the substrate never reuses a topic id — and
+discarded it, holding the verdict against its own contradicting evidence forever.
+
+**Decision**
+
+Confirmation windows carry both an anchor and a latest-observation bound: an observation gap reaching the
+window length restarts the window, so maturing always takes an unbroken run of at least three affirmative
+observations, and no pair of isolated sightings can confirm anything. The RECREATED verdict goes through the
+same windowed corroboration as NAME_GONE, in the first-classification path and in the dead-to-recreated
+upgrade alike; any contrary observation (same-id, denied, unavailable, live-by-id) restarts it. And the
+recheck acts on SAME_ID: the verdict — dead or recreated — is rescinded with a logged warning, the id
+returns to unconfirmed, and a genuine condition reconfirms through a fresh window. To keep confirmed
+verdicts recheckable, pinned ids retain their name binding through `forget`; unpinned ids (departed frontier
+entries) still drop it and remain non-rescindable, which costs expression size, never safety.
+
+**Alternatives**
+
+* A shorter continuity bound (half the window) — rejected: it would demand more than one observation per
+  facts interval to mature at all under the default window of three intervals, making healthy confirmation
+  flaky; the window-length bound already forces at least three unbroken observations.
+* Failing closed on the SAME_ID contradiction instead of rescinding — rejected: the contradiction proves the
+  *verdict* wrong, not the world; an engine that already consumed the spurious verdict fails closed on its
+  next feed regardless (OUT_OF_ORDER_FEED on a settled channel), which is the loud half, while rescission
+  stops the spurious verdict reaching engines that have not.
+* Corroborating recreation by describing the new id — rejected: the new id resolves fine on the lagging
+  broker too; freshness of the *binding* is what cannot be asked of one broker, and only sustained
+  observation answers it.
+
+**Cost**
+
+A genuine mid-run recreation or deletion is confirmed roughly one window later than before (default: three
+facts intervals, floor three seconds). The engine's own guards are unchanged and still fire immediately on
+affirmative evidence in the feed path. Pinned by the `AdminFactsSourceDebounceTest` additions and the
+reworked `AdminFactsSourceDegradationTest#verdictsRideTheRoundThroughAPartitionOutage`;
+`IdentityIntegrationTest#midRunRecreationOfAReceivedTopicStopsTheProcess` still passes on the real broker,
+one window later.
+
+### D86 — A partially-covering stable listing is retried before the group join; extends D79
+
+**Context**
+
+Audit finding (kafka-layer audit, M1). D79's requireStable pre-check asks the broker for stable offsets, and
+the admin client silently *skips* any partition answering partition-level UNSTABLE_OFFSET_COMMIT — the
+behaviour D79 itself records. Against a live sibling instance of the same process, offsets are committed
+transactionally every EOS commit interval (100ms by default), so at any listing instant some received
+partition is plausibly mid-commit: that partition vanishes from the listing, the containsAll fast path fails,
+and the start falls into the bootstrap group join — which, against a live Kafka Streams group, can only cycle
+on the protocol conflict until the join deadline (twice the session timeout, ~90 seconds by default) and then
+refuse the whole start. Starting a second instance beside a loaded first — routine horizontal scaling, which
+`EndToEndIntegrationTest`'s migration test itself relies on — was thus refused probabilistically, with a
+90-second hang and a diagnosis pointing nowhere near the cause.
+
+**Decision**
+
+A listing that covers some received partitions but not all is treated as the unstable-skip shape and
+re-listed for up to five seconds: pending transactional commits resolve within the transaction timeout
+(10 seconds under Streams EOS defaults, typically milliseconds), so a healthy sibling's listing completes
+within a retry or two. A listing that stays partial falls through to the join exactly as before — the join
+remains the authority on genuinely missing offsets, and the fencing argument (D48) is untouched. A first
+start lists nothing for the received set and skips the wait entirely, so the retry taxes only the shapes
+that were already heading for a 90-second failure.
+
+**Alternatives**
+
+* Dropping requireStable from the pre-check — rejected: D79 added it so the listing never *acts on* an
+  offset a live lifetime is about to replace; existence-checking on an unstable snapshot would reopen that.
+* Retrying on any incomplete listing, empty included — rejected: it would tax every genuine first start
+  five seconds for nothing; the partial shape is the one that evidences a live group.
+* Distinguishing skip-from-missing via the member's committed() fetch before joining — rejected: reading
+  committed offsets without membership is exactly what the pre-check does; a stable *fetch* needs the join
+  whose cost this record avoids.
+
+**Cost**
+
+A start whose group genuinely has offsets for only some received partitions — a partition added to a
+received topic while the group's offsets survive, say — waits five extra seconds before the join it would
+have entered anyway. The retry-decision predicate is pinned by `BootstrapPreCheckTest`; the loop is
+exercised by every bootstrap integration test through the unchanged fast and join paths.
+
+### D87 — Seam and configuration minors from the kafka-layer audit, in one sweep
+
+**Context**
+
+Audit findings (kafka-layer audit, N2/N3/N6/N7/N8/N9), six contained defects. (N2) `deliver()` reset the
+seam-violation latch *after* the delivered payload's deserializers had run — application code that may hold a
+reader captured on an earlier delivery — so a refusal latched there was erased and the step committed; the
+latch was also a plain field, invisible across threads to application code that (incorrectly but possibly)
+holds the reader on another thread. (N9) The read seam handed application deserializers the raw header set,
+reserved transport header included, while the write seam serializes before the stamp goes on — contradicting
+D56's "invisible in both directions" one frame before `Delivery`'s own filter. (N3) `bootstrap.servers` was
+pinnable only in its plain spelling: Streams re-pins it for producers after applying prefixed overrides but
+not for consumers, so a `main.consumer.`/`restore.consumer.`/`global.consumer.` spelling pointed a consumer
+at a different cluster than the one start() resolved identities against. (N6) A positive sub-millisecond
+`factsInterval` passed `build()` and crashed the stream thread at task init (Streams punctuation is
+millisecond-grained), unattributed, after the bootstrap had committed. (N7) Session-timeout inheritance
+parsed stricter than Kafka's own config parser (no trim; int at one site, long at the other), refusing values
+every other client in the process accepts, as a bare NumberFormatException naming nothing. (N8) A held
+message's persisted blob — payload, headers and causal metadata together — can exceed the ordering
+changelog's `max.message.bytes`, which the metadata budget does not bound; the crash-loop surfaced with only
+the substrate's diagnosis.
+
+**Decision**
+
+The latch is checked-and-rethrown at every seam boundary — frame entry, post-deserialization, post-handler,
+post-apply — and never blanket-reset mid-frame; the field is volatile. Deserializers receive the application
+header view, matching `Delivery` and the write seam. `bootstrap.servers` joins `FORBIDDEN_SUFFIXES`.
+`factsInterval` requires at least one millisecond at declaration. Session-timeout resolution is one shared
+helper parsing as Kafka does (numbers as numbers, strings trimmed), refusing attributably, with the int-range
+check where the value meets the consumer config. `recordFailure` names the record-too-large condition with
+the changelog-sizing explanation and its remedy. The held-blob size itself remains unbounded by parsley:
+bounding it would refuse holds the broker would accept (the limit is the topic's, raisable by the operator),
+so the decision here is diagnosis-only, recorded as such.
+
+**Alternatives**
+
+* Setting `max.message.bytes` on the ordering changelog at creation — rejected: any value parsley picks
+  silently overrides broker policy, and the right bound depends on payload sizes parsley cannot know;
+  the diagnosis names the two knobs the operator already owns.
+* Keeping the latch reset and adding one more recheck before it — rejected: every reset mid-frame is a
+  window; check-and-rethrow at boundaries leaves no code between a latch and the next boundary.
+
+**Cost**
+
+None of substance. Pinned by `TopologyWiringTest#deserializerLatchedRefusalFailsTheStepEvenWhenSwallowed`,
+`#serializerLatchedRefusalDuringPlanningFailsTheStep` (the post-apply recheck's first executable pin),
+`#reservedTransportHeaderIsInvisibleToApplicationDeserializers`, `SessionTimeoutInheritanceTest`,
+`ApiValidationTest#subMillisecondFactsIntervalIsRefusedAtDeclaration` and the `bootstrap.servers` additions
+to `#guaranteeBearingConfigurationIsUnoverridable`.
+
+### D88 — The audit fixes, reviewed adversarially; corrections to D82, D84, D85 and D87
+
+**Context**
+
+The D82–D87 changes were themselves put through the same adversarial review that produced them: four
+independent lenses over the diff, every finding verified against the pinned 4.3.1 sources. Fifteen findings
+survived, four of them substantive. (1) D85's continuity rule measured raw spacing between per-round answer
+timestamps, but a round's own queries sit inside that spacing — a leaderless partition burning the shared
+offset deadline, probe polls on idle channels — so any steady-state round tail at or beyond the window
+restarted the window every round and made a genuinely dead or recreated topic permanently unconfirmable: the
+held messages whose release needs the verdict are themselves what put the probes on the round's tail, a
+self-sustaining silent stall. D85's recorded cost ("confirmed roughly one window later") was wrong under
+these conditions. (2) The dead-to-recreated upgrade window lacked the contrary-observation restarts D85's
+own Decision paragraph records, so flapping answers at sub-window spacing could mature an upgrade the
+first-classification path would have kept restarting — converting a settled dead verdict into a permanent
+identity-changed stop. (3) With auto-create pinned off, an unknown-topic metadata answer to the changelog
+reader is an immediate empty partition list — not the timeout D82's record claimed — so the reader could
+conclude "no records" from one stale broker view: priorState flipped false, and a healthy concurrent
+sibling's Streams-stamped offsets then drew an ORDERING_STATE_LOST whose remedy destroys that sibling's
+offsets, the exact single-answer trust D84 removed from the describe path, reopened through the read path.
+(4) D84's check was whole-topic while the loss is per task: the version entry lives in each task's own
+changelog partition, so purging one partition of a multi-partition changelog left the merged view non-empty
+and resumed the purged task mid-log with an empty engine.
+
+**Decision**
+
+Window continuity is judged on blind time: the restart interval runs from the previous answer to the moment
+the current round began asking — time no round was watching — while time inside a round's own queries is
+watched time and extends the window. The upgrade path takes the same contrary-observation restarts as first
+classification. The changelog reader corroborates its partition list against the describe the read was keyed
+on, refusing a mismatch as a retryable transient; `RetryableStartException` carries every such transient
+uncaught through the bootstrap's wrapping catch, so a retry-heals condition is never dressed as a terminal
+diagnosis. And the lost-state refusal is per changelog partition: a non-bootstrap-stamped offset on
+partition p requires records in changelog partition p, with the whole-topic shapes falling out as every
+partition failing.
+
+Recorded corrections without code change. D84's premise is more precisely "a task's *first* committed step
+writes the version entry" (later steps need not rewrite it; compaction retains it — the conclusion stands).
+D85's "affirmative proof" for SAME_ID rescission overstates: the rescinding answer can itself be stale, so
+rescission can flap a genuine dead verdict back to unconfirmed — kept deliberately, because rescission's
+failure direction is a delayed settle (liveness) where holding the verdict's is settling a live channel
+(safety), and a genuine death reconfirms through the window. Three smaller closures ride along: the reserved
+zero topic id is refused when a *restored frontier* names it (UNKNOWN_ORDERING_STATE_FORMAT) — state
+persisted before D83's receipt refusal would otherwise re-express the unanswerable ghost forever, D83's
+describe tolerance notwithstanding; a reader refusal that propagates out of a payload deserializer or
+planning serializer unswallowed keeps its own reason instead of being relabeled as a payload-codec failure;
+and the session-timeout helper accepts exactly Kafka's INT parse (an Integer, or a trimmed string holding
+one) so the bootstrap can never succeed on a value StreamsConfig then rejects post-bootstrap.
+
+**Alternatives**
+
+* Budgeting the probe tail instead of re-spelling continuity — rejected as the primary fix: it shrinks the
+  common tail but leaves the rule wrong (any slow query still erases the window); the blind-time spelling
+  makes in-round latency irrelevant by construction. A probe budget remains open as a cadence improvement.
+* Debouncing SAME_ID rescission — rejected: delaying rescission extends the fail-open half of a spurious
+  verdict to protect against a liveness-only flap.
+* Keeping the whole-topic lost-state check with a partition-count side condition — rejected: the
+  per-partition rule subsumes it, needs no separate prior-state flag in the refusal, and scans every group
+  offset unchanged.
+
+**Cost**
+
+Confirmation can now take two observations when rounds are slower than the window — the pre-D85 semantics
+for a continuously-asking source, which is what a slow round is. The per-partition refusal also refuses
+externally-committed offsets naming partitions no changelog partition backs, where the whole-topic check
+under prior state ignored them; that direction is fail-closed and named. Pinned by
+`AdminFactsSourceDebounceTest#inRoundLatencyDoesNotBreakConfirmationContinuity` (red on the D85 spelling),
+`#aDeadVerdictUpgradeWindowRestartsOnContraryAnswers` (red on the D85 code),
+`BootstrapIntegrationTest#emptiedChangelogPartitionWithSurvivingOffsetsRefusesToStart` (red before the
+per-partition rule), `ProcessEngineTest#restoredFrontierNamingTheZeroTopicIdFailsClosed`,
+`TopologyWiringTest#unswallowedReaderRefusalInADeserializerKeepsItsReason`, and
+`SessionTimeoutInheritanceTest#longTypedValueIsRefusedLikeKafkasOwnParser`.

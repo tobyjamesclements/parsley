@@ -421,6 +421,175 @@ class TopologyWiringTest {
     }
 
     /**
+     * The delivered payload's own deserializers are application code running before the
+     * handler: one holding a reader captured on an earlier delivery must not have its
+     * latched refusal erased by a frame reset. The step fails even when the deserializer
+     * swallows the thrown exception (D87) — previously the reset ran after the
+     * deserializers and silently discarded exactly this refusal.
+     */
+    @Test
+    void deserializerLatchedRefusalFailsTheStepEvenWhenSwallowed() {
+        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.api.StateReader> captured =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
+        Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
+        org.apache.kafka.common.serialization.Serde<String> capturingSerde = Serdes.serdeFrom(
+                new StringSerializer(), (topic, data) -> {
+                    io.github.tobyjamesclements.parsley.api.StateReader reader = captured.get();
+                    if (reader != null) {
+                        try {
+                            reader.get(lookAlike, "k");
+                        } catch (RuntimeException swallowed) {
+                            // an application fallback path: the refusal must not be swallowable
+                        }
+                    }
+                    return new String(data, java.nio.charset.StandardCharsets.UTF_8);
+                });
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), capturingSerde);
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    captured.set(state);
+                    return Effects.none();
+                })
+                .stores(declared)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        input("in1").pipeInput(new TestRecord<>("k".getBytes(), "first".getBytes()));
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "second".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+                () -> "a refusal latched by the delivered payload's deserializer must fail the step, not be"
+                        + " erased before the handler runs; got " + thrown);
+    }
+
+    /**
+     * A reader refusal that propagates out of a deserializer unswallowed keeps its own
+     * reason: relabeling it as an undecodable payload would point the operator at codecs
+     * when the condition is an undeclared-store access (D88).
+     */
+    @Test
+    void unswallowedReaderRefusalInADeserializerKeepsItsReason() {
+        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.api.StateReader> captured =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
+        Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
+        org.apache.kafka.common.serialization.Serde<String> readingSerde = Serdes.serdeFrom(
+                new StringSerializer(), (topic, data) -> {
+                    io.github.tobyjamesclements.parsley.api.StateReader reader = captured.get();
+                    if (reader != null) {
+                        reader.get(lookAlike, "k");
+                    }
+                    return new String(data, java.nio.charset.StandardCharsets.UTF_8);
+                });
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), readingSerde);
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    captured.set(state);
+                    return Effects.none();
+                })
+                .stores(declared)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        input("in1").pipeInput(new TestRecord<>("k".getBytes(), "first".getBytes()));
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "second".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+                () -> "the reader's refusal carries its own reason; got " + thrown);
+        assertFalse(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE),
+                () -> "the stop must not be relabeled as a payload-codec failure; got " + thrown);
+    }
+
+    /**
+     * Application code can also run after the post-handler check: a value serializer
+     * invoked during effect planning may hold the reader. Its latched refusal fails the
+     * step at the post-apply recheck — the guard the processor promises for every
+     * fail-closed event, here pinned rather than asserted in a comment.
+     */
+    @Test
+    void serializerLatchedRefusalDuringPlanningFailsTheStep() {
+        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.api.StateReader> captured =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
+        Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
+        org.apache.kafka.common.serialization.Serde<String> readingSerializerSerde = Serdes.serdeFrom(
+                (topic, data) -> {
+                    try {
+                        captured.get().get(lookAlike, "k");
+                    } catch (RuntimeException swallowed) {
+                        // an application fallback path: the refusal must not be swallowable
+                    }
+                    return data.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                }, Serdes.String().deserializer());
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Channel<String, String> out = Channel.of("out", Serdes.String(), readingSerializerSerde);
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    captured.set(state);
+                    return Effects.builder().send(out, "k", "v").build();
+                })
+                .sends(out)
+                .stores(declared)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+                () -> "a refusal latched during planning must fail the step at the post-apply recheck;"
+                        + " got " + thrown);
+    }
+
+    /**
+     * The read seam hides parsley's transport header from application deserializers — the
+     * mirror of the write seam serializing before the stamp goes on (D56): a header-aware
+     * codec sees the same header set on both sides of the wire, and application logic has
+     * no way to observe the causal metadata.
+     */
+    @Test
+    void reservedTransportHeaderIsInvisibleToApplicationDeserializers() {
+        List<String> seenKeys = new ArrayList<>();
+        org.apache.kafka.common.serialization.Deserializer<String> headerAware =
+                new org.apache.kafka.common.serialization.Deserializer<>() {
+                    @Override
+                    public String deserialize(String topic, byte[] data) {
+                        return new String(data, java.nio.charset.StandardCharsets.UTF_8);
+                    }
+
+                    @Override
+                    public String deserialize(String topic, org.apache.kafka.common.header.Headers headers,
+                                              byte[] data) {
+                        for (org.apache.kafka.common.header.Header header : headers) {
+                            seenKeys.add(header.key());
+                        }
+                        return deserialize(topic, data);
+                    }
+                };
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(),
+                Serdes.serdeFrom(new StringSerializer(), headerAware));
+        List<String> delivered = new ArrayList<>();
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    delivered.add(delivery.value());
+                    return Effects.none();
+                })
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        var headers = new RecordHeaders();
+        headers.add(new RecordHeader("app.trace", new byte[] {7}));
+        headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.none())));
+        input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes(), headers));
+
+        assertEquals(List.of("v"), delivered, "the message delivers");
+        assertTrue(seenKeys.contains("app.trace"), "application headers reach the deserializer");
+        assertTrue(seenKeys.stream().noneMatch(key -> key.startsWith(CausesCodec.RESERVED_HEADER_PREFIX)),
+                () -> "the reserved transport header must be invisible to application deserializers;"
+                        + " saw " + seenKeys);
+    }
+
+    /**
      * A handler returning null is a seam-contract breach parsley itself detects, and it
      * recurs identically on every restart, so it must carry its own refusal reason —
      * status() reporting a stop with an empty refusalReason would misread as transient.

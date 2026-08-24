@@ -373,6 +373,110 @@ class BootstrapIntegrationTest {
     }
 
     /**
+     * The changelog topic surviving with its records purged carries no more state than a
+     * deleted one: the version entry every committed step's transaction wrote is gone, so
+     * the surviving Streams-stamped offsets are evidence of a committed step whose state
+     * cannot be restored. Keying prior state on the topic's mere existence let this shape
+     * resume mid-log with an empty engine; it must refuse exactly like the deleted shape
+     * (D84), and the diagnosis must name the shape it found.
+     */
+    @Test
+    void emptiedChangelogWithSurvivingOffsetsRefusesToStart() throws Exception {
+        createTopics(new NewTopic("lostc-in", 1, (short) 1));
+        Channel<String, String> in = Channel.of("lostc-in", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition p = ProcessDefinition.named("lostc")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("lostc"), p)) {
+            produce("lostc-in", null, "k", "m0");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+            awaitCommitted("lostc-lostc", "lostc-in", 1);
+        }
+
+        String changelog = "lostc-lostc-__parsley.ordering-changelog";
+        TopicPartition tp = new TopicPartition(changelog, 0);
+        // The operator excursion the refusal guards against: compaction briefly turned
+        // off, records purged, the topic never stopping existing.
+        var resource = new org.apache.kafka.common.config.ConfigResource(
+                org.apache.kafka.common.config.ConfigResource.Type.TOPIC, changelog);
+        admin.incrementalAlterConfigs(Map.of(resource, List.of(new org.apache.kafka.clients.admin.AlterConfigOp(
+                        new org.apache.kafka.clients.admin.ConfigEntry("cleanup.policy", "delete"),
+                        org.apache.kafka.clients.admin.AlterConfigOp.OpType.SET))))
+                .all().get(30, TimeUnit.SECONDS);
+        long end = admin.listOffsets(Map.of(tp, org.apache.kafka.clients.admin.OffsetSpec.latest()))
+                .all().get(30, TimeUnit.SECONDS).get(tp).offset();
+        admin.deleteRecords(Map.of(tp, org.apache.kafka.clients.admin.RecordsToDelete.beforeOffset(end)))
+                .all().get(30, TimeUnit.SECONDS);
+
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+                () -> Parsley.start(config("lostc"), p),
+                "surviving Streams-stamped offsets with a recordless changelog mean committed state was lost");
+        assertEquals(ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertTrue(e.getMessage().contains("holds no ordering records"),
+                "the diagnosis names the emptied-changelog shape, not a missing topic");
+    }
+
+    /**
+     * The loss shape is per changelog partition: purging one partition's records while its
+     * siblings keep theirs must refuse exactly like the whole topic emptied — the purged
+     * task's state is gone however healthy the merged view looks (D88 tightens D84's
+     * whole-topic check, which this shape slipped past).
+     */
+    @Test
+    void emptiedChangelogPartitionWithSurvivingOffsetsRefusesToStart() throws Exception {
+        createTopics(new NewTopic("lostp-in", 2, (short) 1));
+        Channel<String, String> in = Channel.of("lostp-in", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition p = ProcessDefinition.named("lostp")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("lostp"), p)) {
+            produce("lostp-in", 0, "k0", "m0");
+            produce("lostp-in", 1, "k1", "m1");
+            await("both partitions' messages to deliver", () -> delivered.size() == 2, Duration.ofSeconds(120));
+            awaitCommitted("lostp-lostp", "lostp-in", 1);
+            await("partition 1's read position to commit", () -> {
+                try {
+                    var committed = admin.listConsumerGroupOffsets("lostp-lostp").partitionsToOffsetAndMetadata()
+                            .get(10, TimeUnit.SECONDS).get(new TopicPartition("lostp-in", 1));
+                    return committed != null && committed.offset() >= 1;
+                } catch (Exception e) {
+                    return false;
+                }
+            }, Duration.ofSeconds(60));
+        }
+
+        String changelog = "lostp-lostp-__parsley.ordering-changelog";
+        TopicPartition purged = new TopicPartition(changelog, 1);
+        var resource = new org.apache.kafka.common.config.ConfigResource(
+                org.apache.kafka.common.config.ConfigResource.Type.TOPIC, changelog);
+        admin.incrementalAlterConfigs(Map.of(resource, List.of(new org.apache.kafka.clients.admin.AlterConfigOp(
+                        new org.apache.kafka.clients.admin.ConfigEntry("cleanup.policy", "delete"),
+                        org.apache.kafka.clients.admin.AlterConfigOp.OpType.SET))))
+                .all().get(30, TimeUnit.SECONDS);
+        long end = admin.listOffsets(Map.of(purged, org.apache.kafka.clients.admin.OffsetSpec.latest()))
+                .all().get(30, TimeUnit.SECONDS).get(purged).offset();
+        admin.deleteRecords(Map.of(purged, org.apache.kafka.clients.admin.RecordsToDelete.beforeOffset(end)))
+                .all().get(30, TimeUnit.SECONDS);
+
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+                () -> Parsley.start(config("lostp"), p),
+                "one purged changelog partition is the whole loss for its task and must refuse");
+        assertEquals(ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertTrue(e.getMessage().contains("partition 1"),
+                "the diagnosis names the emptied partition: " + e.getMessage());
+    }
+
+    /**
      * The counterpart bound: a first-start bootstrap that crashed after committing initial
      * positions also leaves offsets without a changelog, but its commits carry the
      * bootstrap's own stamp where Kafka Streams overwrites every commit with its own.

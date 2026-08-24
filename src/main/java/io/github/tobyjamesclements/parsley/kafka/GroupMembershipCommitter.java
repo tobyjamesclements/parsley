@@ -32,10 +32,21 @@ final class GroupMembershipCommitter implements AutoCloseable {
      * @param groupId          the group to join
      */
     GroupMembershipCommitter(Map<String, Object> clientProperties, String groupId) {
+        this.consumer = new KafkaConsumer<>(memberProperties(clientProperties, groupId),
+                new ByteArrayDeserializer(), new ByteArrayDeserializer());
+    }
+
+    /** Client properties for the bootstrap member, with the guarantee-bearing pins applied. */
+    static Map<String, Object> memberProperties(Map<String, Object> clientProperties, String groupId) {
         Map<String, Object> props = new HashMap<>(clientProperties);
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
+        // The member's subscription must never create a missing received topic: every
+        // received topic was resolved by start() moments before this join, so a deletion
+        // racing the bootstrap must surface as this join's failure, not be papered over by
+        // the metadata request auto-creating an empty impostor (D82).
+        props.put(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false);
         // committed() is a transaction-stable offset fetch regardless of configuration:
         // the consumer sets requireStable on every OffsetFetch it sends (verified in
         // kafka-clients 4.3.1, ConsumerCoordinator#sendOffsetFetchRequest), retrying
@@ -53,28 +64,58 @@ final class GroupMembershipCommitter implements AutoCloseable {
             LOG.warn("{}: ignoring configured group.instance.id for the bootstrap member; static membership"
                     + " would hold the group past close and fail the Streams start that follows", groupId);
         }
-        Object sessionTimeout = null;
-        for (String key : new String[] {
-                org.apache.kafka.streams.StreamsConfig.mainConsumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
-                org.apache.kafka.streams.StreamsConfig.consumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
-                ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG}) {
-            if (sessionTimeout == null) {
-                sessionTimeout = props.get(key);
-            }
-        }
-        if (sessionTimeout == null) {
+        java.util.OptionalLong sessionTimeout = configuredSessionTimeoutMillis(props);
+        if (sessionTimeout.isEmpty()) {
             props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 10_000);
         } else {
             // Resolved across the Streams spellings too: a broker may enforce a minimum
             // above the default, and a timeout configured the idiomatic prefixed way must
             // reach this plain consumer or the join is rejected outright.
-            props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG,
-                    Integer.parseInt(String.valueOf(sessionTimeout)));
+            long millis = sessionTimeout.getAsLong();
+            if (millis < 1) {
+                throw new IllegalArgumentException("session.timeout.ms value " + millis
+                        + " is not a usable timeout");
+            }
+            props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, (int) millis);
             LOG.info("{}: bootstrap member inherits session.timeout.ms={}; an ungraceful bootstrap exit"
-                    + " holds the group for that long", groupId, sessionTimeout);
+                    + " holds the group for that long", groupId, millis);
         }
         props.putIfAbsent(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 30_000);
-        this.consumer = new KafkaConsumer<>(props, new ByteArrayDeserializer(), new ByteArrayDeserializer());
+        return props;
+    }
+
+    /**
+     * Resolves a configured session timeout across the Streams spellings, accepting
+     * exactly what Kafka's own config parser accepts for an INT config — an Integer, or a
+     * trimmed string holding one — so a value every other client in this process runs on
+     * cannot fail only inside the bootstrap, and a value the clients would reject
+     * post-bootstrap fails here, first and naming its property (D87, tightened by D88: a
+     * laxer parse would let the bootstrap succeed on a value StreamsConfig then rejects).
+     */
+    static java.util.OptionalLong configuredSessionTimeoutMillis(Map<String, Object> props) {
+        for (String key : new String[] {
+                org.apache.kafka.streams.StreamsConfig.mainConsumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
+                org.apache.kafka.streams.StreamsConfig.consumerPrefix(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG),
+                ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG}) {
+            Object value = props.get(key);
+            if (value == null) {
+                continue;
+            }
+            if (value instanceof Integer integer) {
+                return java.util.OptionalLong.of(integer);
+            }
+            if (value instanceof Number) {
+                throw new IllegalArgumentException(key + " value " + value + " must be a 32-bit integer,"
+                        + " as Kafka's own config parser requires");
+            }
+            try {
+                return java.util.OptionalLong.of(Integer.parseInt(String.valueOf(value).trim()));
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException(key + " value '" + value + "' is not a parsable 32-bit"
+                        + " integer", e);
+            }
+        }
+        return java.util.OptionalLong.empty();
     }
 
     /**
