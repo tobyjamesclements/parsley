@@ -370,10 +370,29 @@ public final class ParsleyRuntime implements AutoCloseable {
      */
     private java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelog(String applicationId) {
         String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
+        return describeChangelogCorroborated(applicationId, () -> admin.describeTopics(List.of(changelog))
+                .allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(changelog));
+    }
+
+    /** One describe of the ordering changelog, as the substrate answers it — the seam the
+     * corroboration loop retries through, so tests can script the answer sequence. */
+    @FunctionalInterface
+    interface ChangelogDescribe {
+        TopicDescription describe() throws Exception;
+    }
+
+    /**
+     * The corroboration loop behind {@link #describeChangelog}: absence is concluded only
+     * from three consistent unknown-topic answers; any other failure refuses the start
+     * rather than concluding anything (D84). Letting a transient generic failure — a
+     * timeout, a broker outage — fall through to "absent" would resume a process with
+     * prior state as a first start, the exact single-answer trust D84 removed.
+     */
+    static java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelogCorroborated(
+            String applicationId, ChangelogDescribe describe) {
         for (int attempt = 0; ; attempt++) {
             try {
-                return java.util.Optional.of(admin.describeTopics(List.of(changelog)).allTopicNames()
-                        .get(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(changelog));
+                return java.util.Optional.of(describe.describe());
             } catch (Exception e) {
                 if (!(e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException)) {
                     throw new IllegalStateException(
@@ -544,11 +563,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                 new org.apache.kafka.common.serialization.ByteArrayDeserializer())) {
             List<TopicPartition> parts = consumer.partitionsFor(changelog).stream()
                     .map(pi -> new TopicPartition(pi.topic(), pi.partition())).toList();
-            if (parts.size() != expectedPartitions) {
-                throw new RetryableStartException(applicationId + ": the ordering changelog is described"
-                        + " with " + expectedPartitions + " partition(s) but the reader's metadata answered "
-                        + parts.size() + "; a broker's metadata view is lagging. Retry this start.");
-            }
+            requireCorroboratedWidth(applicationId, expectedPartitions, parts.size());
             consumer.assign(parts);
             consumer.seekToBeginning(parts);
             Map<TopicPartition, OffsetSpec> latestSpecs = new HashMap<>();
@@ -567,6 +582,25 @@ public final class ParsleyRuntime implements AutoCloseable {
         } catch (Exception e) {
             throw new IllegalStateException(
                     applicationId + ": prior ordering state could not be read; refusing to start", e);
+        }
+    }
+
+    /**
+     * Corroborates the changelog reader's own metadata answer against the describe the
+     * read was keyed on, refusing a disagreement as a retryable transient.
+     *
+     * <p>With auto-create pinned off, a broker whose metadata lags the changelog's
+     * creation answers an empty partition list immediately — no retry, no timeout — and
+     * trusting it would flip prior state off one stale view, the exact single-answer
+     * trust D84 removed from the describe path (D88). The refusal must stay retryable:
+     * dressing it as a terminal diagnosis would hand the operator a destructive remedy
+     * for a broker that merely needs a moment.
+     */
+    static void requireCorroboratedWidth(String applicationId, int describedPartitions, int readerAnswered) {
+        if (readerAnswered != describedPartitions) {
+            throw new RetryableStartException(applicationId + ": the ordering changelog is described"
+                    + " with " + describedPartitions + " partition(s) but the reader's metadata answered "
+                    + readerAnswered + "; a broker's metadata view is lagging. Retry this start.");
         }
     }
 
@@ -610,31 +644,12 @@ public final class ParsleyRuntime implements AutoCloseable {
                                         Map<String, TopicInfo> topics, boolean priorState,
                                         ChangelogView orderingView, Map<String, Object> clientProps) {
         java.util.Set<TopicPartition> received = receivedPartitions(definition, topics);
-        Map<TopicPartition, OffsetAndMetadata> preCheck = listStableOffsets(applicationId);
-        // A listing that covers some received partitions but not all is, over a healthy
-        // group, usually not missing offsets at all: the stable listing silently omits any
-        // partition whose offset has a pending transactional commit (partition-level
-        // UNSTABLE_OFFSET_COMMIT is skipped, not failed, by the admin client), and a live
-        // sibling under EOS commits every commit interval, so some partition is routinely
-        // mid-commit at the listing instant. Concluding "missing" from that snapshot sends
-        // the start into the group join, which can only grind against the sibling's
-        // protocol until the join deadline and then refuse a legitimate scale-out.
-        // Pending commits resolve within the transaction timeout, so a partial listing is
-        // retried briefly; one that stays partial falls through to the join, which remains
-        // authoritative (D86). A first start lists nothing for the received set and skips
-        // the wait entirely.
-        long retryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (preCheckLooksUnstable(received, preCheck.keySet()) && System.nanoTime() - retryDeadline < 0) {
-            try {
-                Thread.sleep(200);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException(
-                        applicationId + ": interrupted while listing read positions; refusing to start", e);
-            }
-            preCheck = listStableOffsets(applicationId);
-        }
-        refuseLostOrderingState(applicationId, orderingView, preCheck, clientProps);
+        Map<TopicPartition, OffsetAndMetadata> preCheck = awaitStablePreCheck(applicationId, received,
+                listStableOffsets(applicationId), () -> listStableOffsets(applicationId));
+        ChangelogRecheck recheck = () -> describeChangelog(applicationId)
+                .map(description -> readOrderingChangelog(applicationId, clientProps,
+                        description.partitions().size()));
+        refuseLostOrderingState(applicationId, orderingView, preCheck, recheck);
         if (preCheck.keySet().containsAll(received)) {
             return;
         }
@@ -648,7 +663,7 @@ public final class ParsleyRuntime implements AutoCloseable {
             // admin client), so a lost-state stamp could hide from the pre-check. The
             // member's committed() is a stable fetch that retries until the transaction
             // resolves, so what it returns is authoritative.
-            refuseLostOrderingState(applicationId, orderingView, committed, clientProps);
+            refuseLostOrderingState(applicationId, orderingView, committed, recheck);
             Map<TopicPartition, OffsetSpec> wanted = new HashMap<>();
             for (TopicPartition tp : received) {
                 if (committed.get(tp) == null) {
@@ -682,6 +697,16 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     /**
+     * The second look {@link #refuseLostOrderingState} takes at the ordering changelog
+     * immediately before refusing: empty when the changelog does not exist, the re-read
+     * view when it does. A seam, so tests can script what the second look finds.
+     */
+    @FunctionalInterface
+    interface ChangelogRecheck {
+        java.util.Optional<ChangelogView> reread();
+    }
+
+    /**
      * Refuses a start whose group carries committed read positions the bootstrap did not
      * write, while the ordering-changelog partition behind them holds no records.
      *
@@ -706,11 +731,12 @@ public final class ParsleyRuntime implements AutoCloseable {
      * statements (SPEC Fault model 2), so a concurrent lifetime of this process can have
      * created records — and committed — in the window. That shape refuses as a retryable
      * transient, not as state loss: a state-loss diagnosis here would tell the operator
-     * to delete offsets a healthy sibling just wrote.
+     * to delete offsets a healthy sibling just wrote. The recheck is a seam so the
+     * decision — which answer shapes refuse, and as what — is testable without a broker.
      */
-    private void refuseLostOrderingState(String applicationId, ChangelogView view,
-                                         Map<TopicPartition, OffsetAndMetadata> committed,
-                                         Map<String, Object> clientProps) {
+    static void refuseLostOrderingState(String applicationId, ChangelogView view,
+                                        Map<TopicPartition, OffsetAndMetadata> committed,
+                                        ChangelogRecheck recheck) {
         for (var entry : committed.entrySet()) {
             OffsetAndMetadata offset = entry.getValue();
             if (offset == null || BOOTSTRAP_OFFSET_STAMP.equals(offset.metadata())) {
@@ -720,15 +746,11 @@ public final class ParsleyRuntime implements AutoCloseable {
             if (view.partitionsWithRecords().contains(partition)) {
                 continue;
             }
-            java.util.Optional<TopicDescription> now = describeChangelog(applicationId);
-            if (now.isPresent()) {
-                ChangelogView recheck = readOrderingChangelog(applicationId, clientProps,
-                        now.get().partitions().size());
-                if (recheck.partitionsWithRecords().contains(partition)) {
-                    throw new RetryableStartException(applicationId + ": ordering records appeared while"
-                            + " this start was determining prior state; a concurrent lifetime of this process"
-                            + " is starting or running. Retry this start.");
-                }
+            java.util.Optional<ChangelogView> now = recheck.reread();
+            if (now.isPresent() && now.get().partitionsWithRecords().contains(partition)) {
+                throw new RetryableStartException(applicationId + ": ordering records appeared while"
+                        + " this start was determining prior state; a concurrent lifetime of this process"
+                        + " is starting or running. Retry this start.");
             }
             String shape = now.isPresent()
                     ? "partition " + partition + " of this process's ordering-store changelog holds no"
@@ -811,6 +833,48 @@ public final class ParsleyRuntime implements AutoCloseable {
             throw new IllegalStateException(
                     applicationId + ": committed read positions could not be listed; refusing to start", e);
         }
+    }
+
+    /** One stable listing of the group's committed read positions — the seam the
+     * pre-check retry relists through, so tests can script what each retry sees. */
+    @FunctionalInterface
+    interface StableOffsetListing {
+        Map<TopicPartition, OffsetAndMetadata> list();
+    }
+
+    /**
+     * Retries a partially-covering stable listing briefly before adopting it.
+     *
+     * <p>A listing that covers some received partitions but not all is, over a healthy
+     * group, usually not missing offsets at all: the stable listing silently omits any
+     * partition whose offset has a pending transactional commit (partition-level
+     * UNSTABLE_OFFSET_COMMIT is skipped, not failed, by the admin client), and a live
+     * sibling under EOS commits every commit interval, so some partition is routinely
+     * mid-commit at the listing instant. Concluding "missing" from that snapshot sends
+     * the start into the group join, which can only grind against the sibling's
+     * protocol until the join deadline and then refuse a legitimate scale-out.
+     * Pending commits resolve within the transaction timeout, so a partial listing is
+     * retried briefly; one that stays partial falls through to the join, which remains
+     * authoritative (D86). A first start lists nothing for the received set and skips
+     * the wait entirely.
+     */
+    static Map<TopicPartition, OffsetAndMetadata> awaitStablePreCheck(String applicationId,
+                                                                      java.util.Set<TopicPartition> received,
+                                                                      Map<TopicPartition, OffsetAndMetadata> firstListing,
+                                                                      StableOffsetListing relist) {
+        Map<TopicPartition, OffsetAndMetadata> preCheck = firstListing;
+        long retryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (preCheckLooksUnstable(received, preCheck.keySet()) && System.nanoTime() - retryDeadline < 0) {
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                        applicationId + ": interrupted while listing read positions; refusing to start", e);
+            }
+            preCheck = relist.list();
+        }
+        return preCheck;
     }
 
     /**

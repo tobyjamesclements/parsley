@@ -507,6 +507,40 @@ class BootstrapIntegrationTest {
         }
     }
 
+    /**
+     * Catches the declared-topics resolution wrap being swapped for a bare rethrow: a
+     * declared topic that does not exist — parsley never auto-creates, and every
+     * hand-built consumer pins auto-create off (D82) — must refuse to start with the
+     * declared-topics-could-not-be-resolved diagnosis, keeping the broker's unknown-topic
+     * answer in the cause chain so the operator sees which lookup actually failed rather
+     * than a raw client exception with no verdict.
+     */
+    @Test
+    void aDeclaredTopicThatDoesNotExistRefusesToStartNamingTheResolutionFailure() {
+        Channel<String, String> in = Channel.of("nx-never-created", Serdes.String(), Serdes.String());
+        ProcessDefinition p = ProcessDefinition.named("nx")
+                .receives(in, (d, s) -> Effects.none())
+                .build();
+
+        IllegalStateException refusal = assertThrows(IllegalStateException.class,
+                () -> Parsley.start(config("nx"), p),
+                "a declared topic the broker does not know must refuse the start loudly");
+        assertTrue(refusal.getMessage().contains("declared topics could not be resolved; refusing to start"),
+                "the refusal must carry the resolution diagnosis, not a raw client exception: "
+                        + refusal.getMessage());
+        boolean unknownTopicInChain = false;
+        Throwable cause = refusal;
+        for (int depth = 0; cause != null && depth < 16; depth++, cause = cause.getCause()) {
+            if (cause instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException) {
+                unknownTopicInChain = true;
+                break;
+            }
+        }
+        assertTrue(unknownTopicInChain,
+                "the broker's unknown-topic answer must survive in the cause chain; the operator"
+                        + " has to see which lookup failed: " + refusal);
+    }
+
     /** Stranded held messages refuse at start. */
     @Test
     void strandedHeldMessagesRefuseAtStart() throws Exception {

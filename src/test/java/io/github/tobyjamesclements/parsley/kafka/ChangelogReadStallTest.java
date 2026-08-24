@@ -38,6 +38,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * every sibling listing asks for the committed view, so an orphaned open transaction
  * cannot silently hide committed tail records from the checks the view feeds.
  *
+ * <p>Before the loop ever runs, the reader's own metadata answer is corroborated against
+ * the describe the read was keyed on: with auto-create pinned off, a lagging broker
+ * answers an empty partition list immediately, and trusting it would flip prior state off
+ * one stale view (D88). That comparison is pinned here too.
+ *
  * <p>Each test is bounded twice: a JUnit timeout, and a poll budget inside the consumer
  * double that turns an endless loop into an assertion failure rather than a hang.
  */
@@ -135,6 +140,44 @@ class ChangelogReadStallTest {
         assertEquals(Set.of(0, 1), view.partitionsWithRecords(),
                 "exactly the partitions that held records must be reported; an empty partition"
                         + " reporting records would hide the per-partition loss shape (D88)");
+    }
+
+    /**
+     * Catches the width-corroboration guard being deleted (SAFETY): a reader whose
+     * metadata answers fewer partitions than the changelog was described with is reading
+     * a lagging broker's view — with auto-create pinned off, an empty answer arrives
+     * immediately, no retry, no timeout — and scanning it vacuously would flip prior
+     * state off one stale view, the exact single-answer trust D84 removed from the
+     * describe path (D88). The refusal must be the retryable transient naming both
+     * counts, never a terminal diagnosis with a destructive remedy.
+     */
+    @Test
+    void aLaggingReaderMetadataAnswerRefusesTheStartAsRetryable() {
+        ParsleyRuntime.RetryableStartException lag =
+                assertThrows(ParsleyRuntime.RetryableStartException.class,
+                        () -> ParsleyRuntime.requireCorroboratedWidth("app-shipper", 3, 0),
+                        "a reader answering fewer partitions than described must refuse the start,"
+                                + " not scan the lagging view vacuously");
+        assertTrue(lag.getMessage().contains("described with 3 partition(s)"),
+                "the diagnosis must carry the described count the reader failed to corroborate: "
+                        + lag.getMessage());
+        assertTrue(lag.getMessage().contains("metadata answered 0"),
+                "the diagnosis must carry the reader's contradicting answer: " + lag.getMessage());
+        assertTrue(lag.getMessage().contains("Retry this start."),
+                "the printed remedy must be a retry; a lagging broker needs a moment, not a reset: "
+                        + lag.getMessage());
+    }
+
+    /**
+     * Catches the corroboration over-reaching: a reader whose metadata agrees with the
+     * describe is the healthy path, and the guard must pass it silently — a spurious
+     * refusal here would turn every start into a retry loop.
+     */
+    @Test
+    void anAgreeingReaderMetadataAnswerPassesCorroboration() {
+        org.junit.jupiter.api.Assertions.assertDoesNotThrow(
+                () -> ParsleyRuntime.requireCorroboratedWidth("app-shipper", 3, 3),
+                "an agreeing metadata answer is corroboration; the guard must not refuse it");
     }
 
     private static byte[] bytes(String text) {
