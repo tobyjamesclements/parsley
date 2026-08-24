@@ -73,7 +73,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      */
     private final java.util.concurrent.atomic.AtomicLong gatherSlot =
             new java.util.concurrent.atomic.AtomicLong();
-    private boolean budgetWarned;
+    private final BudgetAlarm budgetAlarm = new BudgetAlarm();
     private Cancellable factsPunctuator;
 
     /**
@@ -241,10 +241,38 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         }
     }
 
+    /**
+     * The once-per-process latch behind the 80%-of-budget warning (D53): the operator is
+     * pointed at the growth law once, ahead of the budget's fail-closed wall, not on every
+     * facts round the frontier spends above the line. Deliberately never reset by
+     * {@code init} or {@code close}: a revived task is the same process, and D53's "warns
+     * once" is per process, not per incarnation. Extracted so the threshold and the latch
+     * are pinnable without capturing log output; {@link #observeFrontier()} owns the
+     * message.
+     */
+    static final class BudgetAlarm {
+        private boolean warned;
+
+        /**
+         * Decides whether the warning fires now: exactly once, the first time the encoded
+         * frontier reaches 80% of the budget.
+         *
+         * @param frontierBytes the frontier's encoded width, in bytes
+         * @param budgetBytes   the metadata budget, in bytes
+         * @return whether to emit the warning
+         */
+        boolean shouldWarn(int frontierBytes, int budgetBytes) {
+            if (warned || frontierBytes < budgetBytes * 0.8) {
+                return false;
+            }
+            warned = true;
+            return true;
+        }
+    }
+
     private void observeFrontier() {
         int bytes = engine.frontierBytes();
-        if (!budgetWarned && bytes >= metadataBudgetBytes * 0.8) {
-            budgetWarned = true;
+        if (budgetAlarm.shouldWarn(bytes, metadataBudgetBytes)) {
             LOG.warn("{}: causal metadata at {} bytes ({} channels), at 80% of the {}-byte budget, the process"
                             + " will fail closed on reaching it; see docs/model.md for the growth law",
                     definition.name(), bytes, engine.frontierSize(), metadataBudgetBytes);
