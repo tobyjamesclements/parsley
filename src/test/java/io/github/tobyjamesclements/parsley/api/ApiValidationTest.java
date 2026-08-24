@@ -109,6 +109,52 @@ class ApiValidationTest {
                         + " mention: " + e.getMessage());
     }
 
+    /**
+     * Two processes sharing one name would compose the same application id and therefore
+     * the same consumer group and changelog topics, each restoring the other's records —
+     * the identical-name degenerate of the composition collision
+     * {@link #composedChangelogNameCollisionAcrossProcessesIsRefused} pins (D73). The
+     * duplicate is refused by name as the first statement of start, before any broker
+     * contact, which is why the unreachable bootstrap never matters here.
+     */
+    @Test
+    void duplicateProcessNamesAreRefusedBeforeAnyBrokerContact() {
+        ProcessDefinition p1 = ProcessDefinition.named("orders")
+                .receives(channel("in1"), (d, s) -> Effects.none())
+                .build();
+        ProcessDefinition p2 = ProcessDefinition.named("orders")
+                .receives(channel("in2"), (d, s) -> Effects.none())
+                .build();
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> Parsley.start(ParsleyConfig.builder("unreachable:1", "app").build(), p1, p2),
+                "two processes named \"orders\" would run two Streams applications under one"
+                        + " application id, sharing a consumer group and changelog topics");
+        assertTrue(e.getMessage().contains("duplicate process name"),
+                "the refusal names its condition, distinct from the composed-collision"
+                        + " message: " + e.getMessage());
+        assertTrue(e.getMessage().contains("orders"),
+                "the refusal names the duplicated process so the operator knows which"
+                        + " declaration to fix: " + e.getMessage());
+    }
+
+    /**
+     * The varargs signature makes {@code Parsley.start(config)} compile with zero
+     * processes; it must refuse at the entry point rather than return a handle owning
+     * nothing, whose {@code healthy()} would be vacuously true forever and whose
+     * {@code status()} would break its own never-empty promise. Null array and null
+     * elements are pinned separately ({@link #nullProcessArrayIsRefusedByStart}); this is
+     * the empty case, refused before any broker contact.
+     */
+    @Test
+    void startWithZeroProcessesIsRefused() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> Parsley.start(ParsleyConfig.builder("unreachable:1", "app").build()),
+                "an empty start would otherwise return a runtime that reports healthy while"
+                        + " running nothing");
+        assertTrue(e.getMessage().contains("at least one process"),
+                "the refusal says what is missing: " + e.getMessage());
+    }
+
     /** Guarantee bearing configuration is unoverridable. */
     @Test
     void guaranteeBearingConfigurationIsUnoverridable() {
