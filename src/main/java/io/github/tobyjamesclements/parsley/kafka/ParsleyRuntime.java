@@ -149,46 +149,93 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    private void recordFailure(String process, Throwable exception) {
-        failuresByProcess.merge(process, exception, (existing, latest) ->
-                ParsleyFailClosedException.findIn(existing) == null && ParsleyFailClosedException.findIn(latest) != null ? latest : existing);
+    /**
+     * The named condition a stream thread's uncaught failure evidences, driving the
+     * diagnosis {@link #recordFailure} logs (D59/D81/D87).
+     */
+    enum FailureDiagnosis {
+        /** Retention discarded committed read positions before they were read (SPEC Safety 8). */
+        POSITIONS_DISCARDED_UNREAD,
+        /** A received partition has no committed read position (D81 splits the causes). */
+        NO_COMMITTED_POSITION,
+        /** A record exceeded a size limit, typically the changelog's max.message.bytes (D87). */
+        RECORD_TOO_LARGE,
+        /** The partition shape of the process's topics changed while it ran (D59). */
+        PARTITION_SHAPE_CHANGED,
+        /** No named condition; the failure is logged as-is. */
+        UNRECOGNISED
+    }
 
+    /**
+     * Walks a failure's cause chain outward-in and names the first recognised condition.
+     *
+     * <p>The walk is bounded exactly as {@link ParsleyFailClosedException#findIn}, to guard
+     * against a cyclic chain. Within each link the instanceof checks precede the message
+     * probe, and the first match anywhere wins: an outer link's condition is named even
+     * when a deeper link would match a different branch.
+     */
+    static FailureDiagnosis classifyFailure(Throwable exception) {
         Throwable cause = exception;
         for (int depth = 0; cause != null && depth < 64; depth++, cause = cause.getCause()) {
             if (cause instanceof org.apache.kafka.clients.consumer.OffsetOutOfRangeException) {
+                return FailureDiagnosis.POSITIONS_DISCARDED_UNREAD;
+            }
+            if (cause instanceof org.apache.kafka.clients.consumer.NoOffsetForPartitionException) {
+                return FailureDiagnosis.NO_COMMITTED_POSITION;
+            }
+            if (cause instanceof org.apache.kafka.common.errors.RecordTooLargeException) {
+                return FailureDiagnosis.RECORD_TOO_LARGE;
+            }
+            if (String.valueOf(cause.getMessage()).contains("invalid partitions")) {
+                return FailureDiagnosis.PARTITION_SHAPE_CHANGED;
+            }
+        }
+        return FailureDiagnosis.UNRECOGNISED;
+    }
+
+    /**
+     * The failure {@code status()} keeps when a process fails more than once: the first
+     * recorded failure stands, unless it lacks a fail-closed diagnosis a later failure
+     * carries — the refusal is what {@code status()} unwraps for the operator (D55), so a
+     * follow-on transient must never bury it, and the first refusal is never displaced by
+     * a second.
+     */
+    static Throwable preferFailClosedDiagnosis(Throwable existing, Throwable latest) {
+        return ParsleyFailClosedException.findIn(existing) == null
+                && ParsleyFailClosedException.findIn(latest) != null ? latest : existing;
+    }
+
+    private void recordFailure(String process, Throwable exception) {
+        failuresByProcess.merge(process, exception, ParsleyRuntime::preferFailClosedDiagnosis);
+
+        switch (classifyFailure(exception)) {
+            case POSITIONS_DISCARDED_UNREAD ->
                 LOG.error("process {}: the broker no longer retains this process's committed read position;"
                         + " positions were discarded before they were read, and auto.offset.reset=none stops"
                         + " the process rather than skipping the gap (SPEC Safety 8, the"
                         + " POSITIONS_DISCARDED_UNREAD condition). Reset the process's state and group offsets"
                         + " deliberately to proceed (failing closed)", process, exception);
-                return;
-            }
-            if (cause instanceof org.apache.kafka.clients.consumer.NoOffsetForPartitionException) {
+            case NO_COMMITTED_POSITION ->
                 LOG.error("process {}: a received partition has no committed read position; either a partition"
                         + " was added while the process ran, or the group's committed offsets were removed"
                         + " mid-run. Restart the application: a width-preserving expansion is re-resolved and"
                         + " pre-committed; a width change refuses with TASK_WIDTH_CHANGED and its remedy"
                         + " (failing closed)", process, exception);
-                return;
-            }
-            if (cause instanceof org.apache.kafka.common.errors.RecordTooLargeException) {
+            case RECORD_TOO_LARGE ->
                 LOG.error("process {}: a record exceeded a size limit. When the failing topic is this"
                         + " process's ordering changelog, a held message's persisted form — payload, headers"
                         + " and causal metadata together — outgrew the changelog topic's max.message.bytes,"
                         + " which the metadata budget alone does not bound. Raise max.message.bytes on the"
                         + " changelog topic and, if needed, producer.max.request.size via streamsProperty,"
                         + " then restart to deliver the held message (failing closed)", process, exception);
-                return;
-            }
-            if (String.valueOf(cause.getMessage()).contains("invalid partitions")) {
+            case PARTITION_SHAPE_CHANGED ->
                 LOG.error("process {}: the partition shape of its topics changed while it ran; parsley resolves"
                         + " partitions at start(). Restart the application: a width-preserving expansion is"
                         + " re-resolved and pre-committed; a width change refuses with TASK_WIDTH_CHANGED and its"
                         + " remedy (failing closed)", process, exception);
-                return;
-            }
+            case UNRECOGNISED ->
+                LOG.error("process {} failed; shutting its application down (failing closed)", process, exception);
         }
-        LOG.error("process {} failed; shutting its application down (failing closed)", process, exception);
     }
 
     /**
@@ -275,21 +322,33 @@ public final class ParsleyRuntime implements AutoCloseable {
         return topics;
     }
 
+    /**
+     * Maps one resolved description to its {@link TopicInfo}, refusing a substrate that
+     * cannot provide channel identity.
+     *
+     * <p>The substrate reserves {@link org.apache.kafka.common.Uuid#ZERO_UUID} and never
+     * assigns it, so a description carrying it means the broker predates topic IDs — below
+     * the supported 3.7.0 floor, channel identity does not exist (SPEC Substrate 1,
+     * Assumption 2), and D83's whole identity machinery relies on this refusal keeping the
+     * zero id out of every resolved view.
+     */
+    static TopicInfo requireTopicId(String name, TopicDescription description) {
+        if (org.apache.kafka.common.Uuid.ZERO_UUID.equals(description.topicId())) {
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
+                    "topic '" + name + "' has no topic ID; brokers below the supported 3.7.0 floor cannot"
+                            + " provide channel identity (SPEC Substrate 1, Assumption 2); refusing to start");
+        }
+        return new TopicInfo(
+                TopicInfo.toJavaUuid(description.topicId()), description.partitions().size());
+    }
+
     private Map<String, TopicInfo> resolveTopics(Set<String> names) {
         try {
             Map<String, TopicDescription> descriptions =
                     admin.describeTopics(names).allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             Map<String, TopicInfo> topics = new LinkedHashMap<>();
-            descriptions.forEach((name, description) -> {
-                if (org.apache.kafka.common.Uuid.ZERO_UUID.equals(description.topicId())) {
-                    throw new ParsleyFailClosedException(
-                            ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
-                            "topic '" + name + "' has no topic ID; brokers below the supported 3.7.0 floor cannot"
-                                    + " provide channel identity (SPEC Substrate 1, Assumption 2); refusing to start");
-                }
-                topics.put(name, new TopicInfo(
-                        TopicInfo.toJavaUuid(description.topicId()), description.partitions().size()));
-            });
+            descriptions.forEach((name, description) -> topics.put(name, requireTopicId(name, description)));
             return topics;
         } catch (ParsleyFailClosedException e) {
             throw e;
@@ -401,6 +460,63 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     /**
+     * The isolation the changelog read's end-offset snapshot asks for.
+     *
+     * <p>READ_UNCOMMITTED is the load-bearing choice, not a default left to chance: this
+     * bound must be the log's true end, where the sibling listOffsets in
+     * commitInitialPositions deliberately asks for the read-committed view. Stopping at
+     * the last stable offset would silently hide committed tail records sitting above a
+     * superseded execution's open transaction (D79).
+     */
+    static ListOffsetsOptions changelogEndOffsetIsolation() {
+        return new ListOffsetsOptions(IsolationLevel.READ_UNCOMMITTED);
+    }
+
+    /**
+     * Drains an assigned, rewound consumer up to the end-offset snapshot in {@code ends},
+     * compacting to the latest value per key and tracking which partitions held records.
+     *
+     * <p>No progress for {@code stallTimeout} fails the read loudly rather than hanging
+     * the start; a partition that reached its snapshot end is paused so records past the
+     * snapshot cannot keep resetting the stall deadline forever while another partition
+     * sits pinned below its end, turning the promised loud stall into an indefinite hang
+     * (D79). Production passes the 30s deadline that outlasts the default producer
+     * transaction timeout.
+     */
+    static ChangelogView readToEnds(org.apache.kafka.clients.consumer.Consumer<byte[], byte[]> consumer,
+                                    String changelog, List<TopicPartition> parts,
+                                    Map<TopicPartition, Long> ends, java.time.Duration stallTimeout) {
+        Map<byte[], byte[]> latest = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
+        java.util.Set<Integer> partitionsWithRecords = new HashSet<>();
+        long stallDeadline = System.nanoTime() + stallTimeout.toNanos();
+        while (parts.stream().anyMatch(tp -> consumer.position(tp) < ends.get(tp))) {
+            var polled = consumer.poll(java.time.Duration.ofMillis(500));
+            if (polled.isEmpty()) {
+                if (System.nanoTime() - stallDeadline > 0) {
+                    throw new IllegalStateException("no progress reading " + changelog + " for "
+                            + stallTimeout.toSeconds() + "s while reading prior ordering state");
+                }
+            } else {
+                stallDeadline = System.nanoTime() + stallTimeout.toNanos();
+                polled.forEach(record -> {
+                    latest.put(record.key(), record.value());
+                    partitionsWithRecords.add(record.partition());
+                });
+            }
+            // A partition that reached its snapshot end stops feeding the loop:
+            // records past the snapshot would otherwise keep resetting the stall
+            // deadline forever while another partition sits pinned below its end,
+            // turning the promised loud stall into an indefinite hang.
+            for (TopicPartition tp : parts) {
+                if (consumer.position(tp) >= ends.get(tp) && !consumer.paused().contains(tp)) {
+                    consumer.pause(List.of(tp));
+                }
+            }
+        }
+        return new ChangelogView(latest, java.util.Set.copyOf(partitionsWithRecords));
+    }
+
+    /**
      * Reads the process's ordering-store changelog end to end, compacted in memory to the
      * latest value per key, tracking which partitions held records.
      *
@@ -423,8 +539,6 @@ public final class ParsleyRuntime implements AutoCloseable {
                                                 int expectedPartitions) {
         String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
         Map<String, Object> props = changelogReaderProperties(clientProps);
-        Map<byte[], byte[]> latest = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
-        java.util.Set<Integer> partitionsWithRecords = new HashSet<>();
         try (var consumer = new org.apache.kafka.clients.consumer.KafkaConsumer<>(props,
                 new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
                 new org.apache.kafka.common.serialization.ByteArrayDeserializer())) {
@@ -442,45 +556,18 @@ public final class ParsleyRuntime implements AutoCloseable {
                 latestSpecs.put(tp, OffsetSpec.latest());
             }
             Map<TopicPartition, Long> ends = new HashMap<>();
-            // READ_UNCOMMITTED is the load-bearing choice, not a default left to chance:
-            // this bound must be the log's true end, where the sibling listOffsets in
-            // commitInitialPositions deliberately asks for the read-committed view.
-            admin.listOffsets(latestSpecs, new ListOffsetsOptions(IsolationLevel.READ_UNCOMMITTED)).all()
+            admin.listOffsets(latestSpecs, changelogEndOffsetIsolation()).all()
                     .get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
                     .forEach((tp, info) -> ends.put(tp, info.offset()));
 
-            long stallDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
-            while (parts.stream().anyMatch(tp -> consumer.position(tp) < ends.get(tp))) {
-                var polled = consumer.poll(java.time.Duration.ofMillis(500));
-                if (polled.isEmpty()) {
-                    if (System.nanoTime() - stallDeadline > 0) {
-                        throw new IllegalStateException("no progress reading " + changelog + " for "
-                                + TIMEOUT_SECONDS + "s while reading prior ordering state");
-                    }
-                } else {
-                    stallDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
-                    polled.forEach(record -> {
-                        latest.put(record.key(), record.value());
-                        partitionsWithRecords.add(record.partition());
-                    });
-                }
-                // A partition that reached its snapshot end stops feeding the loop:
-                // records past the snapshot would otherwise keep resetting the stall
-                // deadline forever while another partition sits pinned below its end,
-                // turning the promised loud stall into an indefinite hang.
-                for (TopicPartition tp : parts) {
-                    if (consumer.position(tp) >= ends.get(tp) && !consumer.paused().contains(tp)) {
-                        consumer.pause(List.of(tp));
-                    }
-                }
-            }
+            return readToEnds(consumer, changelog, parts, ends,
+                    java.time.Duration.ofSeconds(TIMEOUT_SECONDS));
         } catch (RetryableStartException e) {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException(
                     applicationId + ": prior ordering state could not be read; refusing to start", e);
         }
-        return new ChangelogView(latest, java.util.Set.copyOf(partitionsWithRecords));
     }
 
     private void refuseStrandedHeldMessages(String applicationId, ProcessDefinition definition,
