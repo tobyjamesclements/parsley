@@ -3,7 +3,6 @@ package io.github.tobyjamesclements.parsley.kafka;
 import org.apache.kafka.clients.admin.ListOffsetsResult;
 import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.admin.TopicDescription;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
@@ -19,7 +18,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import io.github.tobyjamesclements.parsley.core.ChannelId;
@@ -45,28 +43,17 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @Timeout(value = 30)
 class AdminFactsSourceRoundAbortTest {
-    private static final UUID Z_ID = new UUID(3, 3);
-    private static final ChannelId R = new ChannelId(Z_ID, 0);
-    private static final long WINDOW_MILLIS = 1_000;
+    private static final ChannelId R = new ChannelId(ScriptedAdminFacts.Z_ID, 0);
+    private static final long WINDOW_MILLIS = ScriptedAdminFacts.WINDOW_MILLIS;
 
     /**
      * Fails every by-id describe future exactly as scripted, but through the real
      * {@code describeByIds} classification — the tolerate-or-abort branch under test —
      * with the by-name answer for "z" always affirmative name-gone.
      */
-    static final class ScriptedDescribeFacts extends AdminFactsSource {
-        final AtomicLong nowMillis;
+    static final class ScriptedDescribeFacts extends ScriptedAdminFacts {
         /** What this round's by-id describe futures complete exceptionally with. */
         volatile Exception byIdFailure = new UnknownTopicIdException("unknown topic id");
-
-        ScriptedDescribeFacts() {
-            this(new AtomicLong());
-        }
-
-        private ScriptedDescribeFacts(AtomicLong nowMillis) {
-            super(null, "g", Map.of(Z_ID, "z"), Map.of(), WINDOW_MILLIS, nowMillis::get);
-            this.nowMillis = nowMillis;
-        }
 
         @Override
         Map<Uuid, KafkaFuture<TopicDescription>> describeByIdFutures(Set<UUID> topicIds) {
@@ -86,17 +73,6 @@ class AdminFactsSourceRoundAbortTest {
                 outcome.put("z", NameVerdict.NAME_GONE);
             }
             return outcome;
-        }
-
-        @Override
-        Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsetFutures(
-                Map<TopicPartition, OffsetSpec> queries) {
-            return Map.of();
-        }
-
-        @Override
-        Map<TopicPartition, OffsetAndMetadata> committedOffsets() {
-            return Map.of();
         }
 
         PositionFacts nameGoneRound(long atMillis) throws Exception {
@@ -132,7 +108,7 @@ class AdminFactsSourceRoundAbortTest {
         Exception aborted = assertThrows(Exception.class, () -> facts.nameGoneRound(WINDOW_MILLIS / 2),
                 "a describe failure that is not an unknown/invalid-topic answer must abort the"
                         + " round, not be tolerated as one more unanswerable id");
-        assertTrue(causeChainContains(aborted, outage),
+        assertTrue(TestChains.chainContains(aborted, outage),
                 () -> "the abort carries the broker failure for the retry log: " + aborted);
         facts.byIdFailure = new UnknownTopicIdException("unknown topic id");
 
@@ -155,12 +131,8 @@ class AdminFactsSourceRoundAbortTest {
      * Resolves "z" by id but leaves every earliest-offset future incomplete, so the round
      * blocks in the per-partition wait until something ends it.
      */
-    static final class BlockedOffsetsFacts extends AdminFactsSource {
+    static final class BlockedOffsetsFacts extends ScriptedAdminFacts {
         final CountDownLatch offsetWaitEntered = new CountDownLatch(1);
-
-        BlockedOffsetsFacts() {
-            super(null, "g", Map.of(Z_ID, "z"), Map.of(), WINDOW_MILLIS, () -> 0L);
-        }
 
         @Override
         Map<UUID, String> describeByIds(Set<UUID> topicIds) {
@@ -172,11 +144,6 @@ class AdminFactsSourceRoundAbortTest {
         }
 
         @Override
-        Map<String, Object> describeByNames(Set<String> names) {
-            return Map.of();
-        }
-
-        @Override
         Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsetFutures(
                 Map<TopicPartition, OffsetSpec> queries) {
             Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> futures = new HashMap<>();
@@ -185,11 +152,6 @@ class AdminFactsSourceRoundAbortTest {
             }
             offsetWaitEntered.countDown();
             return futures;
-        }
-
-        @Override
-        Map<TopicPartition, OffsetAndMetadata> committedOffsets() {
-            return Map.of();
         }
     }
 
@@ -232,12 +194,4 @@ class AdminFactsSourceRoundAbortTest {
                         + " complete it under a per-partition warning; got " + outcome.get());
     }
 
-    private static boolean causeChainContains(Throwable thrown, Throwable wanted) {
-        for (Throwable cause = thrown; cause != null; cause = cause.getCause()) {
-            if (cause == wanted) {
-                return true;
-            }
-        }
-        return false;
-    }
 }

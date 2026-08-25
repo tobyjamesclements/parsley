@@ -774,7 +774,7 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(chainContainsIllegalState(thrown, "p fed from undeclared topic in1"),
+        assertTrue(TestChains.chainContains(thrown, IllegalStateException.class, "p fed from undeclared topic in1"),
                 () -> "a record with no channel for this task must be refused naming the"
                         + " process and the topic; got " + thrown);
     }
@@ -793,7 +793,7 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(chainContainsIllegalArgument(thrown, "store must be non-null"),
+        assertTrue(TestChains.chainContains(thrown, IllegalArgumentException.class, "store must be non-null"),
                 () -> "a null store must be refused per the taxonomy, not surface as a bare NPE"
                         + " from store.name(); got " + thrown);
     }
@@ -814,29 +814,9 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(chainContainsIllegalArgument(thrown, "state read key must be non-null"),
+        assertTrue(TestChains.chainContains(thrown, IllegalArgumentException.class, "state read key must be non-null"),
                 () -> "a null read key must be refused like a null write key, not reach the"
                         + " state backend as null bytes; got " + thrown);
-    }
-
-    private static boolean chainContainsIllegalArgument(Throwable thrown, String messagePart) {
-        for (Throwable cause = thrown; cause != null; cause = cause.getCause()) {
-            if (cause instanceof IllegalArgumentException
-                    && cause.getMessage() != null && cause.getMessage().contains(messagePart)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean chainContainsIllegalState(Throwable thrown, String messagePart) {
-        for (Throwable cause = thrown; cause != null; cause = cause.getCause()) {
-            if (cause instanceof IllegalStateException
-                    && cause.getMessage() != null && cause.getMessage().contains(messagePart)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /** A state write ahead of a refused emission is not applied. */

@@ -1,11 +1,7 @@
 package io.github.tobyjamesclements.parsley.kafka;
 
-import org.apache.kafka.clients.admin.ListOffsetsResult;
-import org.apache.kafka.clients.admin.OffsetSpec;
 import org.apache.kafka.clients.admin.TopicDescription;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.KafkaFuture;
-import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.errors.UnknownTopicIdException;
 import org.apache.kafka.common.internals.KafkaFutureImpl;
@@ -16,7 +12,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.atomic.AtomicLong;
 
 import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.PositionFacts;
@@ -42,8 +37,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * results.
  */
 class AdminFactsSourceEvictionTest {
-    /** Declared in the constructor's known-names map, and therefore pinned. */
-    private static final UUID Z_ID = new UUID(3, 3);
+    /** Declared in the scripted base's known-names map, and therefore pinned. */
+    private static final UUID Z_ID = ScriptedAdminFacts.Z_ID;
     /** Frontier-only ids: their names are learned from describes, never pinned. */
     private static final UUID DEAD_ID = new UUID(1, 1);
     private static final UUID LEARNED_ID = new UUID(2, 2);
@@ -52,26 +47,16 @@ class AdminFactsSourceEvictionTest {
     private static final ChannelId D = new ChannelId(DEAD_ID, 0);
     private static final ChannelId N = new ChannelId(LEARNED_ID, 0);
     private static final ChannelId SWEEPER = new ChannelId(SWEEPER_ID, 0);
-    private static final long WINDOW_MILLIS = 1_000;
+    private static final long WINDOW_MILLIS = ScriptedAdminFacts.WINDOW_MILLIS;
     /** max(8 × WINDOW_MILLIS, 5 minutes): at this window length the five-minute floor dominates. */
     private static final long EVICTION_MILLIS = 300_000;
 
     /** Topics resolve by id and by name exactly as scripted for the round; everything else is silent. */
-    static final class ScriptedFacts extends AdminFactsSource {
-        final AtomicLong nowMillis;
+    static final class ScriptedFacts extends ScriptedAdminFacts {
         /** Ids the broker currently resolves by id, with their names. */
         final Map<UUID, String> liveById = new HashMap<>();
         /** This round's by-name answers: a NameVerdict or a resolved UUID per name. */
         final Map<String, Object> nameAnswers = new HashMap<>();
-
-        ScriptedFacts() {
-            this(new AtomicLong());
-        }
-
-        private ScriptedFacts(AtomicLong nowMillis) {
-            super(null, "g", Map.of(Z_ID, "z"), Map.of(), WINDOW_MILLIS, nowMillis::get);
-            this.nowMillis = nowMillis;
-        }
 
         /**
          * Scripts the by-id describe at the future level, as the round-abort tests do: a
@@ -105,17 +90,6 @@ class AdminFactsSourceEvictionTest {
                 }
             }
             return outcome;
-        }
-
-        @Override
-        Map<TopicPartition, KafkaFuture<ListOffsetsResult.ListOffsetsResultInfo>> earliestOffsetFutures(
-                Map<TopicPartition, OffsetSpec> queries) {
-            return Map.of();
-        }
-
-        @Override
-        Map<TopicPartition, OffsetAndMetadata> committedOffsets() {
-            return Map.of();
         }
 
         /** A round asking about {@code channel} alone, with whatever answers are scripted. */

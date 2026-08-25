@@ -1,18 +1,15 @@
 package io.github.tobyjamesclements.parsley.kafka;
 
 import org.apache.kafka.clients.admin.TopicDescription;
-import org.apache.kafka.common.Node;
-import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
-import java.util.List;
-import java.util.Set;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static io.github.tobyjamesclements.parsley.kafka.StartPathFixtures.assertRefusesWhenInterrupted;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -37,16 +34,6 @@ class PriorStateDeterminationTest {
     private static final String APP = "app-shipper";
     /** Scripted answers carry no real broker latency, so the loop's backoff is ~zero. */
     private static final java.time.Duration NO_BACKOFF = java.time.Duration.ZERO;
-
-    private static TopicDescription description(int partitions) {
-        Node node = new Node(1, "broker", 9092);
-        List<TopicPartitionInfo> infos = new java.util.ArrayList<>();
-        for (int partition = 0; partition < partitions; partition++) {
-            infos.add(new TopicPartitionInfo(partition, node, List.of(node), List.of(node)));
-        }
-        return new TopicDescription(ProcessTopology.changelogName(APP, ProcessTopology.ORDERING_STORE),
-                false, infos, Set.of(), Uuid.randomUuid());
-    }
 
     /**
      * Catches the generic-failure arm being deleted or falling through to "absent"
@@ -111,7 +98,8 @@ class PriorStateDeterminationTest {
      */
     @Test
     void aTransientUnknownFollowedBySuccessReturnsTheDescription() {
-        TopicDescription real = description(2);
+        TopicDescription real = StartPathFixtures.describedTopic(
+                ProcessTopology.changelogName(APP, ProcessTopology.ORDERING_STORE), Uuid.randomUuid(), 2);
         AtomicInteger describes = new AtomicInteger();
 
         var verdict = ParsleyRuntime.describeChangelogCorroborated(APP, () -> {
@@ -139,24 +127,10 @@ class PriorStateDeterminationTest {
      */
     @Test
     void interruptionBetweenAttemptsRefusesAndPreservesTheInterrupt() {
-        try {
-            Thread.currentThread().interrupt();
-            IllegalStateException refusal = assertThrows(IllegalStateException.class,
-                    () -> ParsleyRuntime.describeChangelogCorroborated(APP, () -> {
-                        throw new ExecutionException(new UnknownTopicOrPartitionException("scripted unknown"));
-                    }, NO_BACKOFF),
-                    "an interrupted determination must refuse, not conclude absence from the"
-                            + " answers it never finished corroborating");
-            assertTrue(refusal.getMessage().contains(
-                            APP + ": interrupted while determining prior state; refusing to start"),
-                    "the refusal must name the interruption, not the generic determination failure: "
-                            + refusal.getMessage());
-            assertTrue(Thread.currentThread().isInterrupted(),
-                    "the interrupt flag must be restored; swallowing it hides the shutdown signal"
-                            + " from the caller");
-        } finally {
-            // Clear the flag so it cannot leak into whatever test the runner schedules next.
-            Thread.interrupted();
-        }
+        assertRefusesWhenInterrupted(
+                () -> ParsleyRuntime.describeChangelogCorroborated(APP, () -> {
+                    throw new ExecutionException(new UnknownTopicOrPartitionException("scripted unknown"));
+                }, NO_BACKOFF),
+                APP + ": interrupted while determining prior state; refusing to start");
     }
 }

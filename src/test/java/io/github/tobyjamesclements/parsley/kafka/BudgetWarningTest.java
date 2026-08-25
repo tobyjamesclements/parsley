@@ -101,6 +101,13 @@ class BudgetWarningTest {
      * dropping the latch leaves it red with one warning per punctuation. Two delivered
      * channels put the frontier at 61 encoded bytes, inside the 64-byte budget's
      * [80%, 100%) band, so the warning fires without the budget's fail-closed refusal.
+     *
+     * <p>Two environmental hazards this capture leans on: JUnit parallel execution would
+     * break the exact-count assertion, because {@code System.err} is process-global and a
+     * concurrent test's output — or its own stream swap — would land in or around the
+     * capture. And slf4j-simple's {@code cacheOutputStream=true} would latch the original
+     * {@code System.err} at first use, so the swapped-in capture would read nothing; the
+     * suite relies on the default, which reads {@code System.err} at each write.
      */
     @Test
     void punctuatorEmitsTheBudgetWarningThroughTheAlarmExactlyOnce() {

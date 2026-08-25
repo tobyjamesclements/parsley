@@ -1,14 +1,8 @@
 package io.github.tobyjamesclements.parsley.kafka;
 
 import org.apache.kafka.clients.admin.TopicDescription;
-import org.apache.kafka.common.Node;
-import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Set;
 
 import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
 
@@ -30,12 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class TopicIdentityFloorTest {
 
     private static TopicDescription description(Uuid topicId, int partitions) {
-        Node node = new Node(1, "broker", 9092);
-        List<TopicPartitionInfo> infos = new ArrayList<>();
-        for (int partition = 0; partition < partitions; partition++) {
-            infos.add(new TopicPartitionInfo(partition, node, List.of(node), List.of(node)));
-        }
-        return new TopicDescription("orders", false, infos, Set.of(), topicId);
+        return StartPathFixtures.describedTopic("orders", topicId, partitions);
     }
 
     /**

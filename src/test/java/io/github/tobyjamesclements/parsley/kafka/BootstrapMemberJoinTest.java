@@ -1,6 +1,5 @@
 package io.github.tobyjamesclements.parsley.kafka;
 
-import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.TopicPartition;
@@ -9,11 +8,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
 import java.time.Duration;
-import java.util.Collection;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import static io.github.tobyjamesclements.parsley.kafka.StartPathFixtures.assertRefusesWhenInterrupted;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -112,33 +110,23 @@ class BootstrapMemberJoinTest {
         UnassignedConsumer consumer = new UnassignedConsumer();
         consumer.pollThrows = new InconsistentGroupProtocolException("streams member holds the group");
 
-        Thread.currentThread().interrupt();
-        IllegalStateException e;
-        boolean interrupted;
-        try {
-            e = assertThrows(IllegalStateException.class,
-                    () -> GroupMembershipCommitter.awaitAssignment(consumer, Duration.ofSeconds(2), TEST_BACKOFF),
-                    "an interrupt in the backoff must fail the join, not be swallowed");
-        } finally {
-            // read-and-clear so a failure above cannot leak interrupt status into later tests
-            interrupted = Thread.interrupted();
-        }
-        assertTrue(e.getMessage().contains("interrupted while joining the group"),
-                "the failure names the interrupt, not the deadline: " + e.getMessage());
+        IllegalStateException e = assertRefusesWhenInterrupted(
+                () -> GroupMembershipCommitter.awaitAssignment(consumer, Duration.ofSeconds(2), TEST_BACKOFF),
+                "interrupted while joining the group");
         assertInstanceOf(InterruptedException.class, e.getCause(),
                 "the interrupt rides as the cause");
-        assertTrue(interrupted, "the interrupt status must be restored for the caller");
     }
 
     /**
      * A hand-rolled consumer double for the join wait: never assigned, every poll empty —
-     * or throwing the scripted protocol conflict. Implements only what
-     * {@code awaitAssignment} uses — {@code assignment} and {@code poll} — and refuses
-     * everything else, so the loop growing a new dependency fails loudly here. An empty
-     * poll naps briefly, as the real consumer's poll timeout would, and a poll budget
-     * turns an endless loop into an assertion failure rather than a hang.
+     * or throwing the scripted protocol conflict. Scripts only what
+     * {@code awaitAssignment} uses — {@code assignment} and {@code poll} — and inherits
+     * {@link RefusingConsumer}'s refusal of everything else, so the loop growing a new
+     * dependency fails loudly here. An empty poll naps briefly, as the real consumer's
+     * poll timeout would, and a poll budget turns an endless loop into an assertion
+     * failure rather than a hang.
      */
-    private static final class UnassignedConsumer implements Consumer<byte[], byte[]> {
+    private static final class UnassignedConsumer extends RefusingConsumer {
         volatile RuntimeException pollThrows;
         private int polls;
 
@@ -164,265 +152,6 @@ class BootstrapMemberJoinTest {
                 throw new org.apache.kafka.common.errors.InterruptException(e);
             }
             return new ConsumerRecords<>(Map.of(), Map.of());
-        }
-
-        private static UnsupportedOperationException notUsed() {
-            return new UnsupportedOperationException("not used by awaitAssignment");
-        }
-
-        @Override
-        public Set<String> subscription() {
-            throw notUsed();
-        }
-
-        @Override
-        public void subscribe(Collection<String> topics) {
-            throw notUsed();
-        }
-
-        @Override
-        public void subscribe(Collection<String> topics,
-                              org.apache.kafka.clients.consumer.ConsumerRebalanceListener callback) {
-            throw notUsed();
-        }
-
-        @Override
-        public void assign(Collection<TopicPartition> partitions) {
-            throw notUsed();
-        }
-
-        @Override
-        public void subscribe(java.util.regex.Pattern pattern,
-                              org.apache.kafka.clients.consumer.ConsumerRebalanceListener callback) {
-            throw notUsed();
-        }
-
-        @Override
-        public void subscribe(java.util.regex.Pattern pattern) {
-            throw notUsed();
-        }
-
-        @Override
-        public void subscribe(org.apache.kafka.clients.consumer.SubscriptionPattern pattern,
-                              org.apache.kafka.clients.consumer.ConsumerRebalanceListener callback) {
-            throw notUsed();
-        }
-
-        @Override
-        public void subscribe(org.apache.kafka.clients.consumer.SubscriptionPattern pattern) {
-            throw notUsed();
-        }
-
-        @Override
-        public void unsubscribe() {
-            throw notUsed();
-        }
-
-        @Override
-        public void commitSync() {
-            throw notUsed();
-        }
-
-        @Override
-        public void commitSync(Duration timeout) {
-            throw notUsed();
-        }
-
-        @Override
-        public void commitSync(Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> offsets) {
-            throw notUsed();
-        }
-
-        @Override
-        public void commitSync(Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> offsets,
-                               Duration timeout) {
-            throw notUsed();
-        }
-
-        @Override
-        public void commitAsync() {
-            throw notUsed();
-        }
-
-        @Override
-        public void commitAsync(org.apache.kafka.clients.consumer.OffsetCommitCallback callback) {
-            throw notUsed();
-        }
-
-        @Override
-        public void commitAsync(Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> offsets,
-                                org.apache.kafka.clients.consumer.OffsetCommitCallback callback) {
-            throw notUsed();
-        }
-
-        @Override
-        public void registerMetricForSubscription(org.apache.kafka.common.metrics.KafkaMetric metric) {
-            throw notUsed();
-        }
-
-        @Override
-        public void unregisterMetricFromSubscription(org.apache.kafka.common.metrics.KafkaMetric metric) {
-            throw notUsed();
-        }
-
-        @Override
-        public void seek(TopicPartition partition, long offset) {
-            throw notUsed();
-        }
-
-        @Override
-        public void seek(TopicPartition partition,
-                         org.apache.kafka.clients.consumer.OffsetAndMetadata offsetAndMetadata) {
-            throw notUsed();
-        }
-
-        @Override
-        public void seekToBeginning(Collection<TopicPartition> partitions) {
-            throw notUsed();
-        }
-
-        @Override
-        public void seekToEnd(Collection<TopicPartition> partitions) {
-            throw notUsed();
-        }
-
-        @Override
-        public long position(TopicPartition partition) {
-            throw notUsed();
-        }
-
-        @Override
-        public long position(TopicPartition partition, Duration timeout) {
-            throw notUsed();
-        }
-
-        @Override
-        public Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> committed(
-                Set<TopicPartition> partitions) {
-            throw notUsed();
-        }
-
-        @Override
-        public Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> committed(
-                Set<TopicPartition> partitions, Duration timeout) {
-            throw notUsed();
-        }
-
-        @Override
-        public org.apache.kafka.common.Uuid clientInstanceId(Duration timeout) {
-            throw notUsed();
-        }
-
-        @Override
-        public Map<org.apache.kafka.common.MetricName, ? extends org.apache.kafka.common.Metric> metrics() {
-            throw notUsed();
-        }
-
-        @Override
-        public List<org.apache.kafka.common.PartitionInfo> partitionsFor(String topic) {
-            throw notUsed();
-        }
-
-        @Override
-        public List<org.apache.kafka.common.PartitionInfo> partitionsFor(String topic, Duration timeout) {
-            throw notUsed();
-        }
-
-        @Override
-        public Map<String, List<org.apache.kafka.common.PartitionInfo>> listTopics() {
-            throw notUsed();
-        }
-
-        @Override
-        public Map<String, List<org.apache.kafka.common.PartitionInfo>> listTopics(Duration timeout) {
-            throw notUsed();
-        }
-
-        @Override
-        public void pause(Collection<TopicPartition> partitions) {
-            throw notUsed();
-        }
-
-        @Override
-        public Set<TopicPartition> paused() {
-            throw notUsed();
-        }
-
-        @Override
-        public void resume(Collection<TopicPartition> partitions) {
-            throw notUsed();
-        }
-
-        @Override
-        public Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndTimestamp> offsetsForTimes(
-                Map<TopicPartition, Long> timestampsToSearch) {
-            throw notUsed();
-        }
-
-        @Override
-        public Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndTimestamp> offsetsForTimes(
-                Map<TopicPartition, Long> timestampsToSearch, Duration timeout) {
-            throw notUsed();
-        }
-
-        @Override
-        public Map<TopicPartition, Long> beginningOffsets(Collection<TopicPartition> partitions) {
-            throw notUsed();
-        }
-
-        @Override
-        public Map<TopicPartition, Long> beginningOffsets(Collection<TopicPartition> partitions, Duration timeout) {
-            throw notUsed();
-        }
-
-        @Override
-        public Map<TopicPartition, Long> endOffsets(Collection<TopicPartition> partitions) {
-            throw notUsed();
-        }
-
-        @Override
-        public Map<TopicPartition, Long> endOffsets(Collection<TopicPartition> partitions, Duration timeout) {
-            throw notUsed();
-        }
-
-        @Override
-        public java.util.OptionalLong currentLag(TopicPartition topicPartition) {
-            throw notUsed();
-        }
-
-        @Override
-        public org.apache.kafka.clients.consumer.ConsumerGroupMetadata groupMetadata() {
-            throw notUsed();
-        }
-
-        @Override
-        public void enforceRebalance() {
-            throw notUsed();
-        }
-
-        @Override
-        public void enforceRebalance(String reason) {
-            throw notUsed();
-        }
-
-        @Override
-        public void close() {
-            throw notUsed();
-        }
-
-        @Override
-        public void close(Duration timeout) {
-            throw notUsed();
-        }
-
-        @Override
-        public void close(org.apache.kafka.clients.consumer.CloseOptions option) {
-            throw notUsed();
-        }
-
-        @Override
-        public void wakeup() {
-            throw notUsed();
         }
     }
 }

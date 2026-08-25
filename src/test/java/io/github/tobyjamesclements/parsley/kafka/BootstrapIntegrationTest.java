@@ -539,15 +539,8 @@ class BootstrapIntegrationTest {
         assertTrue(refusal.getMessage().contains("declared topics could not be resolved; refusing to start"),
                 "the refusal must carry the resolution diagnosis, not a raw client exception: "
                         + refusal.getMessage());
-        boolean unknownTopicInChain = false;
-        Throwable cause = refusal;
-        for (int depth = 0; cause != null && depth < 16; depth++, cause = cause.getCause()) {
-            if (cause instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException) {
-                unknownTopicInChain = true;
-                break;
-            }
-        }
-        assertTrue(unknownTopicInChain,
+        assertTrue(TestChains.chainContains(refusal,
+                        org.apache.kafka.common.errors.UnknownTopicOrPartitionException.class, null),
                 "the broker's unknown-topic answer must survive in the cause chain; the operator"
                         + " has to see which lookup failed: " + refusal);
     }

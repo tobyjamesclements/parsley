@@ -10,9 +10,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import static io.github.tobyjamesclements.parsley.kafka.StartPathFixtures.assertRefusesWhenInterrupted;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -170,30 +170,17 @@ class BootstrapPreCheckTest {
     void interruptionDuringThePreCheckRetryRefusesAndPreservesTheInterrupt() {
         Map<TopicPartition, OffsetAndMetadata> partial = Map.of(P0, new OffsetAndMetadata(3));
         AtomicInteger listings = new AtomicInteger();
-        try {
-            Thread.currentThread().interrupt();
-            IllegalStateException refusal = assertThrows(IllegalStateException.class,
-                    () -> ParsleyRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), () -> {
-                        if (listings.incrementAndGet() > 1) {
-                            throw new AssertionError("an interrupted wait must refuse before relisting");
-                        }
-                        return partial;
-                    }, NO_BACKOFF, AMPLE_BUDGET),
-                    "an interrupted pre-check wait must refuse the start, not act on the"
-                            + " unstable snapshot it was waiting to replace");
-            assertTrue(refusal.getMessage().contains(
-                            APP + ": interrupted while listing read positions; refusing to start"),
-                    "the refusal must name the interrupted listing, not a generic failure: "
-                            + refusal.getMessage());
-            assertTrue(Thread.currentThread().isInterrupted(),
-                    "the interrupt flag must be restored; swallowing it hides the shutdown"
-                            + " signal from the caller");
-            assertEquals(1, listings.get(),
-                    "only the first look is paid; the interrupt fires in the wait before any"
-                            + " relist");
-        } finally {
-            // Clear the flag so it cannot leak into whatever test the runner schedules next.
-            Thread.interrupted();
-        }
+
+        assertRefusesWhenInterrupted(
+                () -> ParsleyRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), () -> {
+                    if (listings.incrementAndGet() > 1) {
+                        throw new AssertionError("an interrupted wait must refuse before relisting");
+                    }
+                    return partial;
+                }, NO_BACKOFF, AMPLE_BUDGET),
+                APP + ": interrupted while listing read positions; refusing to start");
+        assertEquals(1, listings.get(),
+                "only the first look is paid; the interrupt fires in the wait before any"
+                        + " relist");
     }
 }

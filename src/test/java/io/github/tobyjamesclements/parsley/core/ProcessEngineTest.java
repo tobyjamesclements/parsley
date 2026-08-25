@@ -10,6 +10,7 @@ import java.util.UUID;
 
 import io.github.tobyjamesclements.parsley.sim.MemoryOrderingStore;
 
+import static io.github.tobyjamesclements.parsley.core.EngineTestFactory.plain;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,10 +25,6 @@ class ProcessEngineTest {
     private static final ChannelId C1 = new ChannelId(new UUID(9, 1), 0);
     private static final ChannelId C2 = new ChannelId(new UUID(9, 2), 0);
     private static final Map<ChannelId, String> BOTH = Map.of(C1, "c1", C2, "c2");
-
-    private static ReceivedMessage plain(ChannelId channel, long position, String uid) {
-        return new ReceivedMessage(channel, position, position, uid.getBytes(), uid.getBytes(), List.of());
-    }
 
     private static ReceivedMessage caused(ChannelId channel, long position, String uid, Map<ChannelId, Long> causes) {
         byte[] header = CausesCodec.encode(Causes.of(causes));
