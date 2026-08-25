@@ -3459,3 +3459,65 @@ Four package-private names and three one-method functional interfaces join Parsl
 The corroborated-absence test sleeps through the loop's real half-second backoffs (~1s once per suite
 run). The seams pin the decisions, not their call sites: deleting a seam's invocation in production is
 caught only by the integration paths that reach it, the same residual D92 carries.
+
+### D97 — Review corrections to the D89–D96 pins: two trials that did not discriminate, seam waits parameterized, wiring gaps closed, two claims narrowed (corrects D89, D92, D95, D96)
+
+**Context**
+
+An adversarial nine-angle review of the D89–D96 pinning work found three pins whose recorded
+mutation trials did not hold at the commit they were recorded for, plus wiring the extractions had
+left uncovered. (1) `classifyFailure`'s depth pin probed depth 65 where the first excluded depth is
+64, so D92's trial covered only the shrink direction — growing the bound to 65 passed, silently
+desynchronising it from `ParsleyFailClosedException.findIn`'s 64 (confirmed empirically before
+fixing). (2) `AdminFactsSourceRoundAbortTest`'s streak-reset leg landed its post-outage sighting at
+exactly one confirmation window, where `observeWindow`'s blind-gap rule restarts the window
+regardless of the abort's clears — deleting `deadWindows.clear()`/`recreatedWindows.clear()` left
+the suite green, so D95's recorded red trial for that mutation did not hold (confirmed empirically).
+(3) The production `ChangelogRecheck` lambda in `commitInitialPositions` was unpinned: replacing it
+with the stale first view passed the entire suite, the deleted-topic integration tests asserting
+`reason()` only (confirmed empirically). Additionally: `readToEnds` rendered sub-second stall
+deadlines as "0s"; `describeChangelogCorroborated`, `awaitStablePreCheck` and `awaitAssignment`
+hardcoded their sleeps so their scripted tests paid ~3s of real waits and the pre-check's give-up
+arm was untestable; `awaitStablePreCheck` took both an eager first listing and the relist seam, so
+production spelled `listStableOffsets` twice with the first listing's wiring uncovered; and
+`recordFailure`'s enum-to-remedy switch and merge wiring were unpinned behind the D92 extraction.
+
+**Decision**
+
+The depth probe moved to depth 64 (`depthSixtyThreeIsClassifiedAndDepthSixtyFourIsNot`); both bound
+directions now red. The streak-reset test lands its first post-outage sighting strictly inside the
+window and asserts no confirmation where an un-reset anchor would mature; the clears-deleted
+mutation is now red. The two deleted-topic integration tests assert the missing-topic loss shape,
+which the stale-view recheck mutation flips — red now, green before. Sub-second stall deadlines
+render in milliseconds (the production 30s message is byte-identical). All three loop seams take
+their waits as parameters — production passes the exact prior constants — and the pre-check's
+give-up arm is pinned (a listing partial past the budget is adopted for the join, per D86) through
+the now-single `StableOffsetListing` seam. `recordFailure` and the runtime's Admin-bearing
+constructor were relaxed to package-private so the merge wiring (a refusal survives surrounding
+transients) and the per-diagnosis remedy lines (stderr capture, D90's technique) are pinned
+directly. The `recordLearnedName` seam is retired (corrects D89): the eviction double now scripts
+`describeByIdFutures` — the D95 seam — so the real `describeByIds` performs both classification and
+learning; all four eviction trials were re-run red/green after the rework. Two claims were narrowed
+rather than forced: the isolation pin covers the spelling of `changelogEndOffsetIsolation` only
+(READ_UNCOMMITTED is also the `ListOffsetsOptions` default, and nothing pins the `listOffsets` call
+site), and the width-corroboration pin covers the decision, not its call site — both residuals
+recorded here, both closable by the Admin-level seam D96 already names. Shared test scaffolding was
+consolidated (`RefusingConsumer`, `ScriptedAdminFacts`, `TestChains` with findIn's 64-link bound,
+`StartPathFixtures`, `EngineTestFactory.plain`), with the four riskiest pins re-verified by
+mutation afterwards.
+
+**Alternatives**
+
+* Treating the two non-discriminating trials as harmless because the behaviours still hold —
+  rejected: EVIDENCE.md's standard calls a test that stays green when the behaviour breaks worse
+  than no test, and both entries claimed trials that were not discriminating at the recorded commit.
+* Pinning the isolation and width-corroboration call sites now — rejected as disproportionate for
+  this pass: each needs an Admin/consumer-level injection seam; D96's Alternatives already name that
+  refactor as the one to take.
+
+**Cost**
+
+`ParsleyRuntime`'s constructor and `recordFailure` are package-private for the wiring pins — the
+test constructs the runtime with a null Admin the failure path never touches. The streak-reset
+test's final confirmation exercises `observeWindow`'s `>=` boundary at equality; a deliberate move
+to a strict bound would need that assertion revisited alongside the decision.
