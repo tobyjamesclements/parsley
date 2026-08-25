@@ -29,8 +29,13 @@ public final class CausesCodec {
     /** Header prefix reserved for Parsley, which application headers may not use. */
     public static final String RESERVED_HEADER_PREFIX = "parsley.";
 
-    /** Version byte leading every frontier this codec encodes. */
-    public static final byte FORMAT_VERSION = 1;
+    /**
+     * Version byte of the flat grammar, which {@link #encode(Causes)} writes until the
+     * writer flip (D98). Each constant names its grammar, never the writer's current
+     * choice, so neither ever changes meaning: the flip re-points {@code encode}, not a
+     * name.
+     */
+    public static final byte FLAT_FORMAT_VERSION = 1;
 
     /**
      * Version byte of the grouped grammar, which {@link #decode(byte[])} accepts now and
@@ -79,7 +84,7 @@ public final class CausesCodec {
      */
     public static byte[] encode(Causes causes) {
         ByteBuffer buffer = ByteBuffer.allocate(encodedSize(causes.size()));
-        buffer.put(FORMAT_VERSION);
+        buffer.put(FLAT_FORMAT_VERSION);
         buffer.putInt(causes.size());
         causes.byChannel().forEach((channel, position) -> {
             channel.writeTo(buffer);
@@ -200,7 +205,7 @@ public final class CausesCodec {
         ByteBuffer buffer = ByteBuffer.wrap(headerValue);
         try {
             byte version = buffer.get();
-            if (version == FORMAT_VERSION) {
+            if (version == FLAT_FORMAT_VERSION) {
                 return decodeFlat(buffer);
             }
             if (version == GROUPED_FORMAT_VERSION) {

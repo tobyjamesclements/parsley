@@ -101,7 +101,7 @@ class CausesCodecTest {
     @Test
     void rejectsNegativePosition() {
         ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 28);
-        buffer.put(CausesCodec.FORMAT_VERSION).putInt(1);
+        buffer.put(CausesCodec.FLAT_FORMAT_VERSION).putInt(1);
         CH_A.writeTo(buffer);
         buffer.putLong(-5);
         assertThrows(CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()));
@@ -116,7 +116,7 @@ class CausesCodecTest {
     @Test
     void rejectsZeroTopicId() {
         ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 28);
-        buffer.put(CausesCodec.FORMAT_VERSION).putInt(1);
+        buffer.put(CausesCodec.FLAT_FORMAT_VERSION).putInt(1);
         new ChannelId(new java.util.UUID(0, 0), 0).writeTo(buffer);
         buffer.putLong(7);
         assertThrows(CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()),
@@ -127,7 +127,7 @@ class CausesCodecTest {
     @Test
     void rejectsUnsortedOrDuplicateChannels() {
         ByteBuffer unsorted = ByteBuffer.allocate(1 + 4 + 56);
-        unsorted.put(CausesCodec.FORMAT_VERSION).putInt(2);
+        unsorted.put(CausesCodec.FLAT_FORMAT_VERSION).putInt(2);
         CH_B.writeTo(unsorted);
         unsorted.putLong(1);
         CH_A.writeTo(unsorted);
@@ -135,7 +135,7 @@ class CausesCodecTest {
         assertThrows(CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(unsorted.array()));
 
         ByteBuffer duplicate = ByteBuffer.allocate(1 + 4 + 56);
-        duplicate.put(CausesCodec.FORMAT_VERSION).putInt(2);
+        duplicate.put(CausesCodec.FLAT_FORMAT_VERSION).putInt(2);
         CH_A.writeTo(duplicate);
         duplicate.putLong(1);
         CH_A.writeTo(duplicate);
@@ -153,7 +153,7 @@ class CausesCodecTest {
     @Test
     void rejectsNegativeCount() {
         ByteBuffer buffer = ByteBuffer.allocate(5);
-        buffer.put(CausesCodec.FORMAT_VERSION).putInt(-1);
+        buffer.put(CausesCodec.FLAT_FORMAT_VERSION).putInt(-1);
         assertThrows(CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()));
     }
 
@@ -170,7 +170,7 @@ class CausesCodecTest {
      */
     @Test
     void truncationBelowTheCountIsClassifiedNotARawUnderflow() {
-        byte[] midCount = {CausesCodec.FORMAT_VERSION, 0, 0};
+        byte[] midCount = {CausesCodec.FLAT_FORMAT_VERSION, 0, 0};
         CausesCodec.UndecodableMetadataException insideCount = assertThrows(
                 CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(midCount),
                 "a header ending inside its count int must classify as undecodable, not underflow raw");
@@ -196,7 +196,7 @@ class CausesCodecTest {
     @Test
     void malformedEntryBelowTheCodecsOwnChecksIsClassified() {
         ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 28);
-        buffer.put(CausesCodec.FORMAT_VERSION).putInt(1);
+        buffer.put(CausesCodec.FLAT_FORMAT_VERSION).putInt(1);
         buffer.putLong(1).putLong(1).putInt(-3);
         buffer.putLong(7);
         CausesCodec.UndecodableMetadataException thrown = assertThrows(
@@ -218,7 +218,7 @@ class CausesCodecTest {
     @Test
     void negativeCountIsDiagnosedAsNegativeCauseCount() {
         ByteBuffer buffer = ByteBuffer.allocate(5);
-        buffer.put(CausesCodec.FORMAT_VERSION).putInt(-1);
+        buffer.put(CausesCodec.FLAT_FORMAT_VERSION).putInt(-1);
         CausesCodec.UndecodableMetadataException thrown = assertThrows(
                 CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()),
                 "a negative count must be undecodable");
@@ -239,7 +239,7 @@ class CausesCodecTest {
     @Test
     void negativePositionIsDiagnosedPerEntryNamingItsChannel() {
         ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 28);
-        buffer.put(CausesCodec.FORMAT_VERSION).putInt(1);
+        buffer.put(CausesCodec.FLAT_FORMAT_VERSION).putInt(1);
         CH_A.writeTo(buffer);
         buffer.putLong(-5);
         CausesCodec.UndecodableMetadataException thrown = assertThrows(
