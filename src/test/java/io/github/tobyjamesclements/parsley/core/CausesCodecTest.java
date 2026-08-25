@@ -446,35 +446,39 @@ class CausesCodecTest {
                 () -> "the diagnosis must name the surplus: " + trailing.getMessage());
     }
 
-    /** Rejects grouped count miscounts: topic counts and partition counts must match the bytes exactly. */
+    /**
+     * Rejects grouped count miscounts: topic counts and partition counts must match the
+     * bytes exactly. Each probe mutates one count byte of real encoder output — the file's
+     * encode-then-mutate pattern — so the vectors cannot drift from the grammar and each
+     * refusal is pinned to exactly that one delta. At these values every count is a
+     * one-byte varint: the topic count at offset 1, the first group's partition count at
+     * offset 18.
+     */
     @Test
     void rejectsGroupedCountMiscounts() {
-        ByteBuffer topicsOverstated = grouped(1 + 1 + 26);
-        topicsOverstated.put((byte) 2);
-        topicsOverstated.putLong(1).putLong(1).put((byte) 1).put((byte) 0).putLong(1);
+        byte[] oneTopic = CausesCodec.encodeGrouped(Causes.of(Map.of(CH_A, 1L)));
+        byte[] topicsOverstated = oneTopic.clone();
+        topicsOverstated[1] = 2;
         assertThrows(CausesCodec.UndecodableMetadataException.class,
-                () -> CausesCodec.decode(topicsOverstated.array()));
+                () -> CausesCodec.decode(topicsOverstated));
 
-        ByteBuffer topicsUnderstated = grouped(1 + 1 + 2 * 26);
-        topicsUnderstated.put((byte) 1);
-        topicsUnderstated.putLong(1).putLong(1).put((byte) 1).put((byte) 0).putLong(1);
-        topicsUnderstated.putLong(1).putLong(2).put((byte) 1).put((byte) 0).putLong(2);
+        byte[] twoTopics = CausesCodec.encodeGrouped(Causes.of(Map.of(CH_A, 1L, CH_B, 2L)));
+        byte[] topicsUnderstated = twoTopics.clone();
+        topicsUnderstated[1] = 1;
         assertThrows(CausesCodec.UndecodableMetadataException.class,
-                () -> CausesCodec.decode(topicsUnderstated.array()));
+                () -> CausesCodec.decode(topicsUnderstated));
 
-        ByteBuffer partitionsOverstated = grouped(1 + 1 + 16 + 1 + 9);
-        partitionsOverstated.put((byte) 1);
-        partitionsOverstated.putLong(1).putLong(1).put((byte) 2).put((byte) 0).putLong(1);
+        byte[] partitionsOverstated = oneTopic.clone();
+        partitionsOverstated[18] = 2;
         assertThrows(CausesCodec.UndecodableMetadataException.class,
-                () -> CausesCodec.decode(partitionsOverstated.array()));
+                () -> CausesCodec.decode(partitionsOverstated));
 
-        ByteBuffer partitionsUnderstated = grouped(1 + 1 + 16 + 1 + 2 * 9);
-        partitionsUnderstated.put((byte) 1);
-        partitionsUnderstated.putLong(1).putLong(1).put((byte) 1);
-        partitionsUnderstated.put((byte) 0).putLong(1);
-        partitionsUnderstated.put((byte) 1).putLong(2);
+        byte[] twoPartitions = CausesCodec.encodeGrouped(
+                Causes.of(Map.of(CH_A, 1L, new ChannelId(CH_A.topicId(), 6), 2L)));
+        byte[] partitionsUnderstated = twoPartitions.clone();
+        partitionsUnderstated[18] = 1;
         assertThrows(CausesCodec.UndecodableMetadataException.class,
-                () -> CausesCodec.decode(partitionsUnderstated.array()));
+                () -> CausesCodec.decode(partitionsUnderstated));
     }
 
     /**

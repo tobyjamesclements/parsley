@@ -40,8 +40,6 @@ public final class CausesCodec {
 
     private static final int ENTRY_LENGTH = ChannelId.ENCODED_LENGTH + Long.BYTES;
 
-    private static final int TOPIC_ID_LENGTH = 2 * Long.BYTES;
-
     private CausesCodec() {
     }
 
@@ -58,7 +56,9 @@ public final class CausesCodec {
     }
 
     /**
-     * The exact encoded width of a frontier.
+     * The exact encoded width of a frontier in the version-1 flat grammar — the grammar
+     * {@link #encode(Causes)} writes, and the arithmetic the metadata budget is priced in
+     * until the writer flip (D98) replaces both.
      *
      * @param entries how many channels the frontier names
      * @return the byte count, used to test a frontier against the metadata budget before
@@ -107,13 +107,7 @@ public final class CausesCodec {
         ByteBuffer buffer = ByteBuffer.allocate(groupedSize(causes));
         buffer.put(GROUPED_FORMAT_VERSION);
         List<Map.Entry<ChannelId, Long>> entries = List.copyOf(causes.byChannel().entrySet());
-        int topics = 0;
-        for (int i = 0; i < entries.size(); i++) {
-            if (i == 0 || !entries.get(i).getKey().topicId().equals(entries.get(i - 1).getKey().topicId())) {
-                topics++;
-            }
-        }
-        writeUnsignedVarint(buffer, topics);
+        writeUnsignedVarint(buffer, topicCount(causes));
         int i = 0;
         while (i < entries.size()) {
             UUID topicId = entries.get(i).getKey().topicId();
@@ -133,8 +127,7 @@ public final class CausesCodec {
     }
 
     private static int groupedSize(Causes causes) {
-        int size = 1;
-        int topics = 0;
+        int size = 1 + unsignedVarintSize(topicCount(causes));
         UUID currentTopic = null;
         int partitions = 0;
         for (ChannelId channel : causes.byChannel().keySet()) {
@@ -144,8 +137,7 @@ public final class CausesCodec {
                 }
                 currentTopic = channel.topicId();
                 partitions = 0;
-                topics++;
-                size += TOPIC_ID_LENGTH;
+                size += 2 * Long.BYTES;
             }
             partitions++;
             size += unsignedVarintSize(channel.partition()) + Long.BYTES;
@@ -153,7 +145,20 @@ public final class CausesCodec {
         if (currentTopic != null) {
             size += unsignedVarintSize(partitions);
         }
-        return size + unsignedVarintSize(topics);
+        return size;
+    }
+
+    /** The one spelling of "entries with equal topic id form one group": distinct topics, in order. */
+    private static int topicCount(Causes causes) {
+        int topics = 0;
+        UUID currentTopic = null;
+        for (ChannelId channel : causes.byChannel().keySet()) {
+            if (!channel.topicId().equals(currentTopic)) {
+                currentTopic = channel.topicId();
+                topics++;
+            }
+        }
+        return topics;
     }
 
     private static void writeUnsignedVarint(ByteBuffer buffer, int value) {
@@ -183,9 +188,10 @@ public final class CausesCodec {
      * @param headerValue the header value, which may be {@code null}
      * @return the frontier
      * @throws UndecodableMetadataException if the value is null, carries an unknown version,
-     *         is truncated, miscounts its entries or groups, names a negative position or
-     *         the reserved zero topic ID, lists channels out of strictly ascending order,
-     *         or spells a varint non-minimally or beyond the non-negative int range
+     *         is truncated, miscounts its entries or groups, names a negative position, the
+     *         reserved zero topic ID or a topic with zero partitions, lists channels out of
+     *         strictly ascending order, or spells a varint non-minimally or beyond the
+     *         non-negative int range
      */
     public static Causes decode(byte[] headerValue) throws UndecodableMetadataException {
         if (headerValue == null) {
@@ -225,8 +231,7 @@ public final class CausesCodec {
             // channel, so no genuine cause can carry it — and once merged it would sit
             // in the frontier as an id no broker query can ever answer for. Refused
             // here so it can never enter a frontier at all (wire-format.md, D83).
-            if (channel.topicId().getMostSignificantBits() == 0
-                    && channel.topicId().getLeastSignificantBits() == 0) {
+            if (ChannelId.isZeroTopicId(channel.topicId())) {
                 throw new UndecodableMetadataException("zero topic id at entry " + i
                         + "; the substrate never assigns it to a channel");
             }
@@ -248,15 +253,13 @@ public final class CausesCodec {
         TreeMap<ChannelId, Long> byChannel = new TreeMap<>();
         UUID previousTopic = null;
         for (int group = 0; group < topicCount; group++) {
-            long msb = buffer.getLong();
-            long lsb = buffer.getLong();
-            UUID topicId = new UUID(msb, lsb);
+            UUID topicId = new UUID(buffer.getLong(), buffer.getLong());
             // Same refusal as the flat grammar's, once per group (wire-format.md, D83).
-            if (msb == 0 && lsb == 0) {
+            if (ChannelId.isZeroTopicId(topicId)) {
                 throw new UndecodableMetadataException("zero topic id at group " + group
                         + "; the substrate never assigns it to a channel");
             }
-            if (previousTopic != null && compareTopics(topicId, previousTopic) <= 0) {
+            if (previousTopic != null && ChannelId.compareTopicIds(topicId, previousTopic) <= 0) {
                 throw new UndecodableMetadataException("topics not strictly ascending at " + topicId);
             }
             previousTopic = topicId;
@@ -285,11 +288,6 @@ public final class CausesCodec {
                     buffer.remaining() + " trailing bytes after " + topicCount + " topic groups");
         }
         return Causes.of(byChannel);
-    }
-
-    private static int compareTopics(UUID a, UUID b) {
-        int c = Long.compareUnsigned(a.getMostSignificantBits(), b.getMostSignificantBits());
-        return c != 0 ? c : Long.compareUnsigned(a.getLeastSignificantBits(), b.getLeastSignificantBits());
     }
 
     /**

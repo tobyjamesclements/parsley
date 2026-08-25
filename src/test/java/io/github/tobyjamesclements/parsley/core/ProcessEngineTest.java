@@ -32,6 +32,13 @@ class ProcessEngineTest {
                 List.of(new HeaderKV(CausesCodec.HEADER_KEY, header)));
     }
 
+    private static ReceivedMessage groupedCaused(
+            ChannelId channel, long position, String uid, Map<ChannelId, Long> causes) {
+        byte[] header = CausesCodec.encodeGrouped(Causes.of(causes));
+        return new ReceivedMessage(channel, position, position, uid.getBytes(), uid.getBytes(),
+                List.of(new HeaderKV(CausesCodec.HEADER_KEY, header)));
+    }
+
     /** Holds until facts settle the cause. */
     @Test
     void holdsUntilFactsSettleTheCause() {
@@ -159,6 +166,57 @@ class ProcessEngineTest {
                 () -> engine.onReceive(caused(C1, 0, "M", big)),
                 "metadata beyond the budget must fail closed with parsley's diagnosis, not ride toward the wall");
         assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
+    }
+
+    /**
+     * A grouped (version-2) header flows through receipt, holding and delivery exactly as
+     * its flat spelling does — engine behaviour depends on the decoded frontier, not the
+     * grammar that carried it (D98 phase 1: readers accept version 2 before any writer
+     * emits it).
+     */
+    @Test
+    void groupedHeaderIsReceivedExactlyAsItsFlatSpelling() throws Exception {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        engine.onReceive(groupedCaused(C2, 0, "B", Map.of(C1, 3L)));
+        assertTrue(engine.nextDeliverable().isEmpty(), "the grouped-carried cause must hold the message");
+
+        engine.onFacts(new PositionFacts(Map.of(C1, 4L), Map.of(), Set.of()));
+        assertTrue(engine.nextDeliverable().isPresent(), "settling the cause must release the held message");
+        engine.markDelivered(C2, 0);
+        assertEquals(Causes.of(Map.of(C1, 3L, C2, 0L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+                "the re-expressed frontier — the grouped-carried cause plus the delivery itself — must"
+                        + " match what the flat spelling of the same receipt would have produced");
+    }
+
+    /**
+     * The per-message budget gate prices the decoded frontier in the engine's own flat
+     * arithmetic, not only the header's raw length. A grouped header spells a channel in
+     * roughly a third of the flat bytes, so without the priced check one in-budget message
+     * could inject a frontier the growth gate then refuses mid-merge, entries already
+     * persisted; the receipt refusal keeps the frontier untouched and names the message
+     * (D98). Regression caught: deleting the priced check in {@code extractCauses} lets
+     * this header merge until the growth gate throws with a non-empty frontier, failing the
+     * channel-count and frontier-untouched asserts.
+     */
+    @Test
+    void groupedHeaderBeyondTheFlatPricedBudgetIsRefusedAtReceiptWithTheFrontierUntouched() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store, 100);
+        java.util.TreeMap<ChannelId, Long> big = new java.util.TreeMap<>();
+        for (int partition = 0; partition < 4; partition++) {
+            big.put(new ChannelId(new UUID(20, 1), partition), 1L);
+        }
+        assertTrue(CausesCodec.encodeGrouped(Causes.of(big)).length <= 100,
+                "staging: the grouped header itself must fit the budget, or the raw-length gate fires instead");
+
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+                () -> engine.onReceive(groupedCaused(C1, 0, "M", big)),
+                "a frontier this process could never re-express must be refused at receipt");
+        assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
+        assertTrue(e.getMessage().contains("expresses 4 channels"),
+                () -> "the diagnosis must name the message's channel count: " + e.getMessage());
+        assertEquals(0, engine.frontierSize(), "the refused message must not advance the frontier");
     }
 
     /** Frontier growth beyond the budget fails closed. */

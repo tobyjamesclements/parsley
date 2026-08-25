@@ -155,8 +155,7 @@ public final class ProcessEngine {
             // substrate query can ever answer for it, so restoring it would re-express and
             // re-persist untrustworthy state forever. Stored state that cannot be trusted
             // is a reason to stop (D88).
-            if (channel.topicId().getMostSignificantBits() == 0
-                    && channel.topicId().getLeastSignificantBits() == 0) {
+            if (ChannelId.isZeroTopicId(channel.topicId())) {
                 throw new ParsleyFailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                         "process " + processName + ": restored frontier names the reserved zero topic id;"
                                 + " this state absorbed a forged causes header before receipt refused it"
@@ -339,11 +338,25 @@ public final class ProcessEngine {
                             + " carries " + headerValue.length + " bytes of causal metadata; the configured budget"
                             + " is " + metadataBudgetBytes + " bytes");
         }
+        Causes causes;
         try {
-            return CausesCodec.decode(headerValue);
+            causes = CausesCodec.decode(headerValue);
         } catch (CausesCodec.UndecodableMetadataException e) {
             return failUndecodable(message, e.getMessage());
         }
+        // The raw-length gate above bounded the frontier one message can inject only while
+        // every decodable header was flat: a grouped header (D98) spells the same channels
+        // in fewer bytes than the arithmetic the budget gates price in. Priced here, before
+        // any merge, so a message this process could never re-express is refused with the
+        // frontier untouched — exactly where its flat spelling would have been refused.
+        if (CausesCodec.encodedSize(causes.size()) > metadataBudgetBytes) {
+            throw new ParsleyFailClosedException(Reason.METADATA_BUDGET_EXCEEDED,
+                    "process " + processName + ": " + message.channel() + "@" + message.position()
+                            + " expresses " + causes.size() + " channels, which this process prices at "
+                            + CausesCodec.encodedSize(causes.size()) + " bytes of causal metadata; the"
+                            + " configured budget is " + metadataBudgetBytes + " bytes");
+        }
+        return causes;
     }
 
     private Causes failUndecodable(ReceivedMessage message, String detail) {

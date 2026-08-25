@@ -3537,8 +3537,8 @@ on uncompressed size (ASSESSMENT 2.4), so batch compression recovers the redunda
 network but never at either wall. AGENTS.md prefers no change to the wire format; the argument
 past that default is that the constant factor is 2.7–2.9× on topics with tens of named
 partitions, never worse than version 1 for any shape with partition ids below 2²¹ (past that a
-single-partition group's 4-byte partition varint costs one byte over version 1's 28), and it
-decides whether transports
+wider partition varint costs a single-partition group one byte over version 1's 28, and two
+bytes at ids of 2²⁸ and above), and it decides whether transports
 with hard uncompressed header limits (issue #96) are viable at all — while the semantic answers
 to the growth law itself are separate work this neither blocks nor substitutes for. Issue #97
 records the full proposal and its evaluation, including the size table and the alternatives
@@ -3613,7 +3613,14 @@ refuses retained messages. The flip itself carries known debts recorded in issue
 premise that the budget check costs no encode because size is affine in the entry count stops
 holding (superseded then, not here), and the byte-calibrated tests are shape-sensitive — two
 land exactly on their budgets under grouped sizes (80 and 64 bytes) and stop firing behind
-strict `>` gates until recalibrated.
+strict `>` gates until recalibrated. Until the flip, the budget stays priced in the flat
+arithmetic even for grouped receipts: a grouped header names roughly three channels per flat
+channel's bytes, so raw length alone no longer bounds what one message can inject, and the
+receipt gate prices the decoded frontier as well — a message this process could never
+re-express is refused at receipt with the frontier untouched, not mid-merge with entries
+already persisted. The headroom version 2 buys therefore arrives only at the flip, and
+mixed-phase writers must keep frontiers within the flat-priced budget of their slowest
+reader.
 
 **Specification gap**
 

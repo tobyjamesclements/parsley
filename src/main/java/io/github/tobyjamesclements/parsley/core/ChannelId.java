@@ -81,12 +81,26 @@ public record ChannelId(UUID topicId, int partition) implements Comparable<Chann
      */
     @Override
     public int compareTo(ChannelId other) {
-        int c = Long.compareUnsigned(topicId.getMostSignificantBits(), other.topicId.getMostSignificantBits());
-        if (c != 0) {
-            return c;
-        }
-        c = Long.compareUnsigned(topicId.getLeastSignificantBits(), other.topicId.getLeastSignificantBits());
+        int c = compareTopicIds(topicId, other.topicId);
         return c != 0 ? c : Integer.compare(partition, other.partition);
+    }
+
+    /**
+     * The topic half of the canonical channel order: unsigned over the 16 identity bytes.
+     * The one spelling of the rule, shared with the wire codec's group-order check.
+     */
+    static int compareTopicIds(UUID a, UUID b) {
+        int c = Long.compareUnsigned(a.getMostSignificantBits(), b.getMostSignificantBits());
+        return c != 0 ? c : Long.compareUnsigned(a.getLeastSignificantBits(), b.getLeastSignificantBits());
+    }
+
+    /**
+     * Whether this is the reserved all-zero topic identity, which the substrate never
+     * assigns to a channel (wire-format constraint 5, D83). The one spelling of the
+     * predicate, shared by both decode grammars and the ordering-state restore.
+     */
+    static boolean isZeroTopicId(UUID topicId) {
+        return topicId.getMostSignificantBits() == 0 && topicId.getLeastSignificantBits() == 0;
     }
 
     /**
