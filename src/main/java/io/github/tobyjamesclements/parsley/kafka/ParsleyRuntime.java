@@ -76,7 +76,10 @@ public final class ParsleyRuntime implements AutoCloseable {
                 return thread;
             });
 
-    private ParsleyRuntime(Admin admin) {
+    // Package-private for RecordFailureDiagnosticsTest, which drives recordFailure and
+    // reads the merge's outcome directly — the failure path never touches the admin
+    // client, so the test passes none. Production construction stays inside start().
+    ParsleyRuntime(Admin admin) {
         this.admin = admin;
     }
 
@@ -205,7 +208,10 @@ public final class ParsleyRuntime implements AutoCloseable {
                 && ParsleyFailClosedException.findIn(latest) != null ? latest : existing;
     }
 
-    private void recordFailure(String process, Throwable exception) {
+    // Package-private so RecordFailureDiagnosticsTest can pin the merge wiring and the
+    // per-diagnosis log lines directly; production reaches it only through the uncaught
+    // exception handler start() installs.
+    void recordFailure(String process, Throwable exception) {
         failuresByProcess.merge(process, exception, ParsleyRuntime::preferFailClosedDiagnosis);
 
         switch (classifyFailure(exception)) {
@@ -236,6 +242,16 @@ public final class ParsleyRuntime implements AutoCloseable {
             case UNRECOGNISED ->
                 LOG.error("process {} failed; shutting its application down (failing closed)", process, exception);
         }
+    }
+
+    /**
+     * The failure {@link #recordFailure}'s merge retained for {@code process} — the read
+     * side of the merge wiring, for tests: {@code status()} surfaces failures only for
+     * processes that also have a streams instance, which a direct recordFailure pin does
+     * not build.
+     */
+    Throwable recordedFailure(String process) {
+        return failuresByProcess.get(process);
     }
 
     /**
@@ -371,7 +387,8 @@ public final class ParsleyRuntime implements AutoCloseable {
     private java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelog(String applicationId) {
         String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
         return describeChangelogCorroborated(applicationId, () -> admin.describeTopics(List.of(changelog))
-                .allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(changelog));
+                .allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(changelog),
+                java.time.Duration.ofMillis(500));
     }
 
     /** One describe of the ordering changelog, as the substrate answers it — the seam the
@@ -387,9 +404,13 @@ public final class ParsleyRuntime implements AutoCloseable {
      * rather than concluding anything (D84). Letting a transient generic failure — a
      * timeout, a broker outage — fall through to "absent" would resume a process with
      * prior state as a first start, the exact single-answer trust D84 removed.
+     *
+     * <p>Production passes the half-second spacing between answers (D84's evidence
+     * standard); tests pass ~zero so the loop's decisions are pinned without paying the
+     * real backoffs.
      */
     static java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelogCorroborated(
-            String applicationId, ChangelogDescribe describe) {
+            String applicationId, ChangelogDescribe describe, java.time.Duration backoff) {
         for (int attempt = 0; ; attempt++) {
             try {
                 return java.util.Optional.of(describe.describe());
@@ -402,7 +423,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                     return java.util.Optional.empty();
                 }
                 try {
-                    Thread.sleep(500);
+                    Thread.sleep(backoff.toMillis());
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException(
@@ -496,11 +517,9 @@ public final class ParsleyRuntime implements AutoCloseable {
      * compacting to the latest value per key and tracking which partitions held records.
      *
      * <p>No progress for {@code stallTimeout} fails the read loudly rather than hanging
-     * the start; a partition that reached its snapshot end is paused so records past the
-     * snapshot cannot keep resetting the stall deadline forever while another partition
-     * sits pinned below its end, turning the promised loud stall into an indefinite hang
-     * (D79). Production passes the 30s deadline that outlasts the default producer
-     * transaction timeout.
+     * the start (D79); a partition at its snapshot end is paused — the pause loop's
+     * comment carries the rationale. Production passes the 30s deadline that outlasts
+     * the default producer transaction timeout.
      */
     static ChangelogView readToEnds(org.apache.kafka.clients.consumer.Consumer<byte[], byte[]> consumer,
                                     String changelog, List<TopicPartition> parts,
@@ -513,7 +532,7 @@ public final class ParsleyRuntime implements AutoCloseable {
             if (polled.isEmpty()) {
                 if (System.nanoTime() - stallDeadline > 0) {
                     throw new IllegalStateException("no progress reading " + changelog + " for "
-                            + stallTimeout.toSeconds() + "s while reading prior ordering state");
+                            + renderDeadline(stallTimeout) + " while reading prior ordering state");
                 }
             } else {
                 stallDeadline = System.nanoTime() + stallTimeout.toNanos();
@@ -533,6 +552,17 @@ public final class ParsleyRuntime implements AutoCloseable {
             }
         }
         return new ChangelogView(latest, java.util.Set.copyOf(partitionsWithRecords));
+    }
+
+    /**
+     * Renders a deadline for the stall diagnosis: whole seconds as "30s" (production's
+     * value, byte-for-byte as before), anything finer as "40ms" — {@code toSeconds()}
+     * alone printed a sub-second deadline as the meaningless "0s".
+     */
+    private static String renderDeadline(java.time.Duration deadline) {
+        return deadline.toMillis() % 1000 == 0
+                ? deadline.toSeconds() + "s"
+                : deadline.toMillis() + "ms";
     }
 
     /**
@@ -645,7 +675,8 @@ public final class ParsleyRuntime implements AutoCloseable {
                                         ChangelogView orderingView, Map<String, Object> clientProps) {
         java.util.Set<TopicPartition> received = receivedPartitions(definition, topics);
         Map<TopicPartition, OffsetAndMetadata> preCheck = awaitStablePreCheck(applicationId, received,
-                listStableOffsets(applicationId), () -> listStableOffsets(applicationId));
+                () -> listStableOffsets(applicationId),
+                java.time.Duration.ofMillis(200), java.time.Duration.ofSeconds(5));
         ChangelogRecheck recheck = () -> describeChangelog(applicationId)
                 .map(description -> readOrderingChangelog(applicationId, clientProps,
                         description.partitions().size()));
@@ -835,8 +866,9 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    /** One stable listing of the group's committed read positions — the seam the
-     * pre-check retry relists through, so tests can script what each retry sees. */
+    /** One stable listing of the group's committed read positions — the seam every
+     * pre-check listing goes through, first look and retries alike, so tests can
+     * script the whole answer sequence. */
     @FunctionalInterface
     interface StableOffsetListing {
         Map<TopicPartition, OffsetAndMetadata> list();
@@ -854,25 +886,30 @@ public final class ParsleyRuntime implements AutoCloseable {
      * the start into the group join, which can only grind against the sibling's
      * protocol until the join deadline and then refuse a legitimate scale-out.
      * Pending commits resolve within the transaction timeout, so a partial listing is
-     * retried briefly; one that stays partial falls through to the join, which remains
-     * authoritative (D86). A first start lists nothing for the received set and skips
-     * the wait entirely.
+     * retried briefly; one that stays partial past {@code retryBudget} falls through to
+     * the join, which remains authoritative (D86). A first start lists nothing for the
+     * received set and skips the wait entirely.
+     *
+     * <p>Every listing — the first included — goes through the one {@code listing} seam,
+     * so tests script the whole sequence a start sees. Production passes the 200ms
+     * backoff and 5s budget that wait out one EOS commit interval; tests pass ~zero.
      */
     static Map<TopicPartition, OffsetAndMetadata> awaitStablePreCheck(String applicationId,
                                                                       java.util.Set<TopicPartition> received,
-                                                                      Map<TopicPartition, OffsetAndMetadata> firstListing,
-                                                                      StableOffsetListing relist) {
-        Map<TopicPartition, OffsetAndMetadata> preCheck = firstListing;
-        long retryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+                                                                      StableOffsetListing listing,
+                                                                      java.time.Duration backoff,
+                                                                      java.time.Duration retryBudget) {
+        Map<TopicPartition, OffsetAndMetadata> preCheck = listing.list();
+        long retryDeadline = System.nanoTime() + retryBudget.toNanos();
         while (preCheckLooksUnstable(received, preCheck.keySet()) && System.nanoTime() - retryDeadline < 0) {
             try {
-                Thread.sleep(200);
+                Thread.sleep(backoff.toMillis());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException(
                         applicationId + ": interrupted while listing read positions; refusing to start", e);
             }
-            preCheck = relist.list();
+            preCheck = listing.list();
         }
         return preCheck;
     }

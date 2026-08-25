@@ -41,23 +41,28 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>Before the loop ever runs, the reader's own metadata answer is corroborated against
  * the describe the read was keyed on: with auto-create pinned off, a lagging broker
  * answers an empty partition list immediately, and trusting it would flip prior state off
- * one stale view (D88). That comparison is pinned here too.
+ * one stale view (D88). The decision logic of that comparison — not its production call
+ * site — is pinned here too; the same call-site caveat applies to the isolation choice
+ * (see the two tests' own notes).
  *
  * <p>Each test is bounded twice: a JUnit timeout, and a poll budget inside the consumer
  * double that turns an endless loop into an assertion failure rather than a hang.
  */
 @Timeout(value = 10)
 class ChangelogReadStallTest {
-    private static final String CHANGELOG = "app-shipper-__parsley.ordering-changelog";
+    private static final String CHANGELOG =
+            ProcessTopology.changelogName("app-shipper", ProcessTopology.ORDERING_STORE);
     private static final TopicPartition P0 = new TopicPartition(CHANGELOG, 0);
     private static final TopicPartition P1 = new TopicPartition(CHANGELOG, 1);
     private static final TopicPartition P2 = new TopicPartition(CHANGELOG, 2);
 
     /**
-     * Catches the stall deadline being dropped: a partition whose snapshot end never
-     * arrives — retention advanced, a broker stopped answering — must fail the read with
-     * the no-progress diagnosis within the deadline, not block the start forever
-     * (Operational 2, D79).
+     * Catches the stall deadline being dropped, and its rendering regressing: a partition
+     * whose snapshot end never arrives — retention advanced, a broker stopped answering —
+     * must fail the read with the no-progress diagnosis within the deadline, not block
+     * the start forever (Operational 2, D79), and the diagnosis must render the
+     * sub-second deadline as "40ms" — {@code toSeconds()} alone printed it as the
+     * meaningless "0s".
      */
     @Test
     void aPartitionThatNeverProgressesFailsTheReadLoudly() {
@@ -65,11 +70,14 @@ class ChangelogReadStallTest {
 
         IllegalStateException stall = assertThrows(IllegalStateException.class,
                 () -> ParsleyRuntime.readToEnds(consumer, CHANGELOG, List.of(P0),
-                        Map.of(P0, 5L), Duration.ofMillis(300)),
+                        Map.of(P0, 5L), Duration.ofMillis(40)),
                 "a partition pinned below its snapshot end with no records arriving must fail"
                         + " the read within the stall deadline, not block the start forever");
         assertTrue(stall.getMessage().contains("no progress reading " + CHANGELOG),
                 "the stall must name the changelog it could not finish reading: " + stall.getMessage());
+        assertTrue(stall.getMessage().contains("for 40ms while reading prior ordering state"),
+                "the stall must render its sub-second deadline meaningfully, not truncate it"
+                        + " to whole seconds: " + stall.getMessage());
     }
 
     /**
@@ -88,11 +96,14 @@ class ChangelogReadStallTest {
 
         IllegalStateException stall = assertThrows(IllegalStateException.class,
                 () -> ParsleyRuntime.readToEnds(consumer, CHANGELOG, List.of(P0, P1),
-                        Map.of(P0, 1L, P1, 5L), Duration.ofMillis(300)),
+                        Map.of(P0, 1L, P1, 5L), Duration.ofMillis(40)),
                 "with the finished partition paused, the pinned sibling must surface as the"
                         + " loud stall, not as an endless loop fed by post-snapshot records");
         assertTrue(stall.getMessage().contains("no progress reading"),
                 "the pinned sibling's starvation must carry the no-progress diagnosis: "
+                        + stall.getMessage());
+        assertTrue(stall.getMessage().contains("for 40ms while reading prior ordering state"),
+                "the starvation diagnosis must render the sub-second deadline it enforced: "
                         + stall.getMessage());
         assertEquals((Long) 1L, consumer.pausedAtPosition.get(P0),
                 "p0 must be paused exactly when it reached its snapshot end, so post-snapshot"
@@ -103,11 +114,18 @@ class ChangelogReadStallTest {
     }
 
     /**
-     * Catches the end-offset snapshot's isolation regressing to the read-committed
-     * default: the snapshot must bound the scan at the log's true end, because the last
+     * Pins the spelling of the isolation choice, not its call site: the option
+     * {@code changelogEndOffsetIsolation()} builds must carry READ_UNCOMMITTED, because
+     * the end-offset snapshot has to bound the scan at the log's true end — the last
      * stable offset would silently hide committed tail records sitting above a superseded
      * execution's open transaction (D79; the sibling listOffsets in commitInitialPositions
-     * deliberately asks for the committed view, so a shared default cannot pin this).
+     * deliberately asks for the committed view). Two residuals this test does not close:
+     * READ_UNCOMMITTED is also ListOffsetsOptions' constructor default, so the helper
+     * quietly falling back to the no-arg constructor stays green here; and nothing pins
+     * the listOffsets call in readOrderingChangelog actually passing the helper's option
+     * — that call site sits behind the real Admin, and closing it needs the admin-level
+     * seam D96's alternatives already weigh (D79/D82 record why an open-transaction
+     * integration staging was rejected).
      */
     @Test
     void theEndOffsetSnapshotAsksForTheUncommittedEnd() {
@@ -143,13 +161,17 @@ class ChangelogReadStallTest {
     }
 
     /**
-     * Catches the width-corroboration guard being deleted (SAFETY): a reader whose
+     * Catches the width-corroboration decision logic breaking (SAFETY): a reader whose
      * metadata answers fewer partitions than the changelog was described with is reading
      * a lagging broker's view — with auto-create pinned off, an empty answer arrives
      * immediately, no retry, no timeout — and scanning it vacuously would flip prior
      * state off one stale view, the exact single-answer trust D84 removed from the
      * describe path (D88). The refusal must be the retryable transient naming both
-     * counts, never a terminal diagnosis with a destructive remedy.
+     * counts, never a terminal diagnosis with a destructive remedy. This pins
+     * {@code requireCorroboratedWidth} only: its call in readOrderingChangelog, before
+     * assign, cannot be integration-staged (it needs a broker whose metadata lags its
+     * own changelog), so the guard being deleted at that call site is a residual no test
+     * here catches.
      */
     @Test
     void aLaggingReaderMetadataAnswerRefusesTheStartAsRetryable() {

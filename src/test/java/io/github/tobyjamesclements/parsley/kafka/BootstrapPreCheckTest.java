@@ -5,6 +5,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -22,8 +23,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * snapshot routinely misses a partition that is not missing at all. Concluding "missing"
  * from one snapshot sends the start into the group join, which can only grind against the
  * sibling's protocol until the join deadline and then refuse a legitimate scale-out (D86).
- * The retry loop itself — relisting through the scripted-listing seam, and its
- * interrupted-refusal arm — is pinned alongside the shape predicate it consults.
+ * Every listing — the first included — goes through the one scripted-listing seam, so
+ * these tests script the whole answer sequence a start sees: the retry loop's relist
+ * adoption, its fast paths, its give-up budget and its interrupted-refusal arm, alongside
+ * the shape predicate it consults.
  */
 @Timeout(value = 30)
 class BootstrapPreCheckTest {
@@ -31,6 +34,10 @@ class BootstrapPreCheckTest {
     private static final TopicPartition P1 = new TopicPartition("t", 1);
     private static final TopicPartition FORMER = new TopicPartition("former", 0);
     private static final String APP = "app-shipper";
+    /** Scripted listings carry no real broker latency, so the loop's backoff is ~zero. */
+    private static final Duration NO_BACKOFF = Duration.ZERO;
+    /** A budget the scripted scenarios never exhaust: their retries end by shape, not time. */
+    private static final Duration AMPLE_BUDGET = Duration.ofSeconds(5);
 
     /**
      * Partial coverage of the received set is the unstable-skip shape: a group with
@@ -73,19 +80,18 @@ class BootstrapPreCheckTest {
         Map<TopicPartition, OffsetAndMetadata> partial = Map.of(P0, new OffsetAndMetadata(3));
         Map<TopicPartition, OffsetAndMetadata> full =
                 Map.of(P0, new OffsetAndMetadata(3), P1, new OffsetAndMetadata(4));
-        AtomicInteger relists = new AtomicInteger();
+        AtomicInteger listings = new AtomicInteger();
 
         Map<TopicPartition, OffsetAndMetadata> adopted = ParsleyRuntime.awaitStablePreCheck(APP,
-                Set.of(P0, P1), partial, () -> {
-                    relists.incrementAndGet();
-                    return full;
-                });
+                Set.of(P0, P1), () -> listings.incrementAndGet() == 1 ? partial : full,
+                NO_BACKOFF, AMPLE_BUDGET);
 
         assertEquals(full, adopted,
                 "the covering relist, not the unstable first snapshot, must be what the start"
                         + " acts on");
-        assertEquals(1, relists.get(),
-                "a relist that covers the received set must end the retry immediately");
+        assertEquals(2, listings.get(),
+                "the first look plus one covering relist must be all the seam pays: a relist"
+                        + " that covers the received set must end the retry immediately");
     }
 
     /**
@@ -98,14 +104,59 @@ class BootstrapPreCheckTest {
     void aCoveringOrEmptyFirstListingIsAdoptedWithoutRelisting() {
         Map<TopicPartition, OffsetAndMetadata> full =
                 Map.of(P0, new OffsetAndMetadata(3), P1, new OffsetAndMetadata(4));
-        ParsleyRuntime.StableOffsetListing neverListed = () -> {
-            throw new AssertionError("a listing that is not the unstable-skip shape must not be relisted");
-        };
+        AtomicInteger coveringListings = new AtomicInteger();
+        AtomicInteger emptyListings = new AtomicInteger();
 
-        assertEquals(full, ParsleyRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), full, neverListed),
+        assertEquals(full, ParsleyRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), () -> {
+                    if (coveringListings.incrementAndGet() > 1) {
+                        throw new AssertionError(
+                                "a listing that is not the unstable-skip shape must not be relisted");
+                    }
+                    return full;
+                }, NO_BACKOFF, AMPLE_BUDGET),
                 "full first coverage is the fast path and must come back unchanged");
-        assertEquals(Map.of(), ParsleyRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), Map.of(), neverListed),
+        assertEquals(Map.of(), ParsleyRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), () -> {
+                    if (emptyListings.incrementAndGet() > 1) {
+                        throw new AssertionError("a first start's empty listing must not be relisted");
+                    }
+                    return Map.of();
+                }, NO_BACKOFF, AMPLE_BUDGET),
                 "an empty first listing is a first start and must not wait at all");
+        assertEquals(1, coveringListings.get(),
+                "the covering fast path must pay exactly the one first look");
+        assertEquals(1, emptyListings.get(),
+                "the first-start fast path must pay exactly the one first look");
+    }
+
+    /**
+     * Catches the give-up budget being dropped: a listing that stays partial past the
+     * retry budget is not a pending commit resolving — pending commits resolve within
+     * the transaction timeout the budget models — and the retry must stop and adopt the
+     * still-partial listing, falling through to the group join, which remains
+     * authoritative on whether the gap is real (D86). Deleting the budget check turns
+     * that fall-through into an unbounded relist loop, which the scripted listing's
+     * budget converts into a visible failure rather than a hang.
+     */
+    @Test
+    void aListingThatStaysPartialPastTheBudgetIsAdoptedForTheJoin() {
+        Map<TopicPartition, OffsetAndMetadata> partial = Map.of(P0, new OffsetAndMetadata(3));
+        AtomicInteger listings = new AtomicInteger();
+
+        Map<TopicPartition, OffsetAndMetadata> adopted = ParsleyRuntime.awaitStablePreCheck(APP,
+                Set.of(P0, P1), () -> {
+                    if (listings.incrementAndGet() > 1_000_000) {
+                        throw new AssertionError("the pre-check retry never gave up: the budget"
+                                + " must bound the relist loop, not the listing count");
+                    }
+                    return partial;
+                }, NO_BACKOFF, Duration.ofMillis(20));
+
+        assertEquals(partial, adopted,
+                "past the budget the still-partial listing is what the start acts on; the"
+                        + " join it falls through to is authoritative on the gap (D86)");
+        assertTrue(listings.get() >= 2,
+                "the partial shape must be relisted at least once before the budget gives up,"
+                        + " or the retry promised for pending commits never happened");
     }
 
     /**
@@ -118,12 +169,16 @@ class BootstrapPreCheckTest {
     @Test
     void interruptionDuringThePreCheckRetryRefusesAndPreservesTheInterrupt() {
         Map<TopicPartition, OffsetAndMetadata> partial = Map.of(P0, new OffsetAndMetadata(3));
+        AtomicInteger listings = new AtomicInteger();
         try {
             Thread.currentThread().interrupt();
             IllegalStateException refusal = assertThrows(IllegalStateException.class,
-                    () -> ParsleyRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), partial, () -> {
-                        throw new AssertionError("an interrupted wait must refuse before relisting");
-                    }),
+                    () -> ParsleyRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), () -> {
+                        if (listings.incrementAndGet() > 1) {
+                            throw new AssertionError("an interrupted wait must refuse before relisting");
+                        }
+                        return partial;
+                    }, NO_BACKOFF, AMPLE_BUDGET),
                     "an interrupted pre-check wait must refuse the start, not act on the"
                             + " unstable snapshot it was waiting to replace");
             assertTrue(refusal.getMessage().contains(
@@ -133,6 +188,9 @@ class BootstrapPreCheckTest {
             assertTrue(Thread.currentThread().isInterrupted(),
                     "the interrupt flag must be restored; swallowing it hides the shutdown"
                             + " signal from the caller");
+            assertEquals(1, listings.get(),
+                    "only the first look is paid; the interrupt fires in the wait before any"
+                            + " relist");
         } finally {
             // Clear the flag so it cannot leak into whatever test the runner schedules next.
             Thread.interrupted();

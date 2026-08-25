@@ -8,12 +8,16 @@ import org.apache.kafka.common.errors.RecordTooLargeException;
 import org.apache.kafka.streams.errors.StreamsException;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Establishes how a stream thread's uncaught failure is diagnosed and retained.
@@ -107,21 +111,22 @@ class RecordFailureDiagnosticsTest {
     /**
      * Catches the cause-chain bound shrinking or growing away from {@code findIn}'s: the
      * walk inspects depths 0 through 63 — a trigger at depth 63 is still named, one at
-     * depth 65 is not — so a cyclic chain cannot hang the uncaught-exception handler, and
-     * the classification reaches exactly as deep as the refusal search {@code status()}
-     * relies on.
+     * depth 64, the first excluded depth, is not — so a cyclic chain cannot hang the
+     * uncaught-exception handler, and the classification reaches exactly as deep as the
+     * refusal search {@code status()} relies on. Probing depth 65 instead let the bound
+     * grow to 65 unnoticed, desynchronised from {@code findIn}'s 64.
      */
     @Test
-    void depthSixtyThreeIsClassifiedAndDepthSixtyFiveIsNot() {
+    void depthSixtyThreeIsClassifiedAndDepthSixtyFourIsNot() {
         assertEquals(ParsleyRuntime.FailureDiagnosis.POSITIONS_DISCARDED_UNREAD,
                 ParsleyRuntime.classifyFailure(
                         buriedAtDepth(63, new OffsetOutOfRangeException(Map.of(TP, 5L)))),
                 "a trigger at depth 63 sits inside the 64-link bound and must still be named");
         assertEquals(ParsleyRuntime.FailureDiagnosis.UNRECOGNISED,
                 ParsleyRuntime.classifyFailure(
-                        buriedAtDepth(65, new OffsetOutOfRangeException(Map.of(TP, 5L)))),
-                "a trigger past the 64-link bound must fall to the generic diagnosis rather than"
-                        + " risk walking a cyclic chain forever");
+                        buriedAtDepth(64, new OffsetOutOfRangeException(Map.of(TP, 5L)))),
+                "a trigger at depth 64 — the first depth past the bound — must fall to the"
+                        + " generic diagnosis rather than risk walking a cyclic chain forever");
     }
 
     /**
@@ -186,5 +191,103 @@ class RecordFailureDiagnosticsTest {
                 "the first recorded refusal stands; a second refusal must not displace it");
         assertSame(transientA, ParsleyRuntime.preferFailClosedDiagnosis(transientA, transientB),
                 "the first recorded transient stands; a later transient must not displace it");
+    }
+
+    /**
+     * Catches {@code recordFailure} bypassing the precedence merge — regressing to a
+     * plain last-writer-wins put: the retained failure must be chosen by
+     * {@code preferFailClosedDiagnosis}, so the refusal {@code status()} unwraps (D55)
+     * survives a follow-on transient recorded after it. This is the wiring leg the
+     * merge-precedence pins above cannot see; the runtime is built without an Admin,
+     * which the failure path never touches.
+     */
+    @Test
+    void recordFailureRetainsTheRefusalThroughTheMergeWiring() {
+        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        Throwable transientFailure = streamsWrapped(new IllegalStateException("broker away"));
+        Throwable refusal = streamsWrapped(new ParsleyFailClosedException(
+                ParsleyFailClosedException.Reason.TASK_WIDTH_CHANGED, "width changed"));
+
+        // Captured and discarded: this test pins the merge, not the log lines, and the
+        // scripted failures should not shout through the suite's output.
+        PrintStream realErr = System.err;
+        try {
+            System.setErr(new PrintStream(new ByteArrayOutputStream(), true, StandardCharsets.UTF_8));
+            runtime.recordFailure("shipper", transientFailure);
+            runtime.recordFailure("shipper", refusal);
+            assertSame(refusal, runtime.recordedFailure("shipper"),
+                    "a refusal recorded after a transient must displace it, or status() would"
+                            + " show no refusalReason for a deliberate stop");
+            runtime.recordFailure("shipper", streamsWrapped(new IllegalStateException("follow-on")));
+            assertSame(refusal, runtime.recordedFailure("shipper"),
+                    "a follow-on transient must not bury the retained refusal: recordFailure has"
+                            + " to merge through preferFailClosedDiagnosis, not overwrite");
+        } finally {
+            System.setErr(realErr);
+        }
+    }
+
+    /**
+     * Catches a diagnosis being wired to another condition's log line — say two switch
+     * arms swapped in {@code recordFailure}: each classified failure must log its own
+     * condition and remedy against its own process. The lines are read off
+     * {@code System.err}, where slf4j-simple writes them (the BudgetWarningTest
+     * technique); a distinct process name per trigger keys each line to the failure
+     * that produced it.
+     */
+    @Test
+    void eachDiagnosisLogsItsOwnConditionAndRemedyAgainstItsOwnProcess() {
+        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        ByteArrayOutputStream captured = new ByteArrayOutputStream();
+        PrintStream realErr = System.err;
+        try {
+            System.setErr(new PrintStream(captured, true, StandardCharsets.UTF_8));
+            runtime.recordFailure("p-discarded",
+                    streamsWrapped(new OffsetOutOfRangeException(Map.of(TP, 5L))));
+            runtime.recordFailure("p-noposition", streamsWrapped(new NoOffsetForPartitionException(TP)));
+            runtime.recordFailure("p-toolarge", streamsWrapped(new RecordTooLargeException("2097152 bytes")));
+            runtime.recordFailure("p-shape", streamsWrapped(
+                    new IllegalStateException("assignment failed: invalid partitions for task 0_1")));
+            runtime.recordFailure("p-generic", streamsWrapped(new IllegalStateException("something else")));
+        } finally {
+            System.setErr(realErr);
+        }
+        String logged = captured.toString(StandardCharsets.UTF_8);
+
+        String discarded = lineNaming(logged, "process p-discarded");
+        assertTrue(discarded.contains("positions were discarded before they were read")
+                        && discarded.contains("Reset the process's state and group offsets"),
+                "the discarded-positions failure must log Safety 8's condition and its"
+                        + " deliberate-reset remedy on its own process's line: " + discarded);
+        String noPosition = lineNaming(logged, "process p-noposition");
+        assertTrue(noPosition.contains("a received partition has no committed read position")
+                        && noPosition.contains("Restart the application"),
+                "the missing-position failure must log D81's split condition and the restart"
+                        + " remedy on its own process's line: " + noPosition);
+        String tooLarge = lineNaming(logged, "process p-toolarge");
+        assertTrue(tooLarge.contains("a record exceeded a size limit")
+                        && tooLarge.contains("Raise max.message.bytes"),
+                "the oversized-record failure must log D87's condition and the"
+                        + " max.message.bytes remedy on its own process's line: " + tooLarge);
+        String shape = lineNaming(logged, "process p-shape");
+        assertTrue(shape.contains("the partition shape of its topics changed while it ran")
+                        && shape.contains("Restart the application"),
+                "the shape-change failure must log D59's condition and the restart remedy on"
+                        + " its own process's line: " + shape);
+        assertTrue(lineNaming(logged, "process p-generic")
+                        .contains("failed; shutting its application down (failing closed)"),
+                "an unrecognised failure must keep the generic shutting-down line, undressed"
+                        + " as any named condition (Operational 6)");
+    }
+
+    /** The first captured log line naming {@code marker}; fails the test if none does. */
+    private static String lineNaming(String logged, String marker) {
+        for (String line : logged.split("\\R")) {
+            if (line.contains(marker)) {
+                return line;
+            }
+        }
+        throw new AssertionError("no captured log line names '" + marker + "'; recordFailure"
+                + " logged nothing for that process. Captured: " + logged);
     }
 }

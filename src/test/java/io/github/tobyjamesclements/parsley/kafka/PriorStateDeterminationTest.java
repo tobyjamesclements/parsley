@@ -35,6 +35,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 @Timeout(value = 10)
 class PriorStateDeterminationTest {
     private static final String APP = "app-shipper";
+    /** Scripted answers carry no real broker latency, so the loop's backoff is ~zero. */
+    private static final java.time.Duration NO_BACKOFF = java.time.Duration.ZERO;
 
     private static TopicDescription description(int partitions) {
         Node node = new Node(1, "broker", 9092);
@@ -42,8 +44,8 @@ class PriorStateDeterminationTest {
         for (int partition = 0; partition < partitions; partition++) {
             infos.add(new TopicPartitionInfo(partition, node, List.of(node), List.of(node)));
         }
-        return new TopicDescription("app-shipper-__parsley.ordering-changelog", false, infos,
-                Set.of(), Uuid.randomUuid());
+        return new TopicDescription(ProcessTopology.changelogName(APP, ProcessTopology.ORDERING_STORE),
+                false, infos, Set.of(), Uuid.randomUuid());
     }
 
     /**
@@ -64,7 +66,7 @@ class PriorStateDeterminationTest {
                 () -> ParsleyRuntime.describeChangelogCorroborated(APP, () -> {
                     describes.incrementAndGet();
                     throw outage;
-                }),
+                }, NO_BACKOFF),
                 "a failure that is not an unknown-topic answer must refuse the start, never"
                         + " conclude the changelog is absent and resume as a first start");
         assertTrue(refusal.getMessage().contains(APP + ": could not determine prior state; refusing to start"),
@@ -92,7 +94,7 @@ class PriorStateDeterminationTest {
         var verdict = ParsleyRuntime.describeChangelogCorroborated(APP, () -> {
             describes.incrementAndGet();
             throw new ExecutionException(new UnknownTopicOrPartitionException("scripted unknown"));
-        });
+        }, NO_BACKOFF);
 
         assertTrue(verdict.isEmpty(),
                 "three consistent unknown answers are the corroborated evidence of absence (D84)");
@@ -117,7 +119,7 @@ class PriorStateDeterminationTest {
                 throw new ExecutionException(new UnknownTopicOrPartitionException("scripted lagging view"));
             }
             return real;
-        });
+        }, NO_BACKOFF);
 
         assertSame(real, verdict.orElseThrow(() -> new AssertionError(
                         "a describe that succeeded within the corroboration window must report the"
@@ -142,7 +144,7 @@ class PriorStateDeterminationTest {
             IllegalStateException refusal = assertThrows(IllegalStateException.class,
                     () -> ParsleyRuntime.describeChangelogCorroborated(APP, () -> {
                         throw new ExecutionException(new UnknownTopicOrPartitionException("scripted unknown"));
-                    }),
+                    }, NO_BACKOFF),
                     "an interrupted determination must refuse, not conclude absence from the"
                             + " answers it never finished corroborating");
             assertTrue(refusal.getMessage().contains(

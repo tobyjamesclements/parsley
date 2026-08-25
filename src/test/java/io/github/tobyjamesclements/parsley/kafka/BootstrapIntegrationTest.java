@@ -291,7 +291,9 @@ class BootstrapIntegrationTest {
      * changelog behind them, mean the state of the most recent committed step has been
      * lost: resuming would rebuild an empty engine and silently under-express every cause
      * delivered before the loss. The contradiction is locally detectable at start, so it
-     * must refuse (SPEC Host obligations preamble) rather than degrade.
+     * must refuse (SPEC Host obligations preamble) rather than degrade. The shape assert
+     * also pins the refusal's second look being a fresh describe: a recheck fed the stale
+     * first view would misname this deleted topic as an emptied partition.
      */
     @Test
     void lostOrderingChangelogWithSurvivingOffsetsRefusesToStart() throws Exception {
@@ -326,12 +328,17 @@ class BootstrapIntegrationTest {
                 () -> Parsley.start(config("lost"), p),
                 "surviving Streams-stamped offsets without their changelog mean committed state was lost");
         assertEquals(ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertTrue(e.getMessage().contains("this process's ordering-store changelog does not exist"),
+                "the diagnosis names the missing-topic shape the recheck's fresh describe"
+                        + " corroborated, not the emptied shape a stale first view would report: "
+                        + e.getMessage());
     }
 
     /**
      * The lost-state scan covers every group offset, not only the declared partitions: a
      * declaration change alongside the changelog loss must not hide a formerly-received
-     * partition's Streams-stamped evidence.
+     * partition's Streams-stamped evidence. The shape assert also pins the refusal's
+     * second look being a fresh describe, as in the test above.
      */
     @Test
     void lostChangelogWithOffsetsOnAFormerlyReceivedTopicRefusesToStart() throws Exception {
@@ -370,6 +377,10 @@ class BootstrapIntegrationTest {
                 () -> Parsley.start(config("lostb"), receivingB),
                 "the formerly-received partition's stamped offsets are the evidence of the loss");
         assertEquals(ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertTrue(e.getMessage().contains("this process's ordering-store changelog does not exist"),
+                "the diagnosis names the missing-topic shape the recheck's fresh describe"
+                        + " corroborated, not the emptied shape a stale first view would report: "
+                        + e.getMessage());
     }
 
     /**
