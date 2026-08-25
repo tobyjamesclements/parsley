@@ -11,6 +11,7 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.UUID;
 
 import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.Reason;
 
@@ -54,6 +55,16 @@ public final class ProcessEngine {
 
     private final Map<ChannelId, Long> fedUpTo = new HashMap<>();
     private final TreeMap<ChannelId, Long> frontier = new TreeMap<>();
+
+    // The frontier's encoded width, maintained incrementally so the budget check in
+    // mergeFrontier stays O(1) now that size is a function of the frontier's shape rather
+    // than its entry count (D98). frontierBodyBytes counts everything after the version
+    // byte and the topic-count varint; the per-topic partition counts supply the
+    // varint-width deltas as groups grow, shrink, appear and empty. Kept in step at the
+    // frontier's three mutation sites — restore, merge, prune; positions update in place
+    // without changing size — and pinned against CausesCodec.encode by ProcessEngineTest.
+    private final Map<UUID, Integer> frontierTopicPartitions = new HashMap<>();
+    private int frontierBodyBytes;
 
     private final Map<ChannelId, Long> deliveredPast = new HashMap<>();
     private final Map<ChannelId, ArrayDeque<Hold>> held = new HashMap<>();
@@ -155,8 +166,7 @@ public final class ProcessEngine {
             // substrate query can ever answer for it, so restoring it would re-express and
             // re-persist untrustworthy state forever. Stored state that cannot be trusted
             // is a reason to stop (D88).
-            if (channel.topicId().getMostSignificantBits() == 0
-                    && channel.topicId().getLeastSignificantBits() == 0) {
+            if (ChannelId.isZeroTopicId(channel.topicId())) {
                 throw new ParsleyFailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                         "process " + processName + ": restored frontier names the reserved zero topic id;"
                                 + " this state absorbed a forged causes header before receipt refused it"
@@ -164,6 +174,7 @@ public final class ProcessEngine {
                                 + " deliberately to proceed.");
             }
             frontier.put(channel, StoreCodec.decodeLong(value));
+            frontierSizeAdd(channel);
         });
         store.scanPrefix(StoreCodec.tagPrefix(StoreCodec.TAG_DELIVERED_PAST),
                 (key, value) -> deliveredPast.put(StoreCodec.channelOfEntryKey(key), StoreCodec.decodeLong(value)));
@@ -425,6 +436,7 @@ public final class ProcessEngine {
         if (prune != null) {
             for (ChannelId channel : prune) {
                 frontier.remove(channel);
+                frontierSizeRemove(channel);
                 store.delete(StoreCodec.channelKey(StoreCodec.TAG_FRONTIER, channel));
             }
         }
@@ -461,16 +473,38 @@ public final class ProcessEngine {
         Long current = frontier.get(channel);
         if (current == null || position > current) {
             frontier.put(channel, position);
+            if (current == null) {
+                frontierSizeAdd(channel);
+            }
             store.put(StoreCodec.channelKey(StoreCodec.TAG_FRONTIER, channel), StoreCodec.encodeLong(position));
         }
 
-        if (CausesCodec.encodedSize(frontier.size()) > metadataBudgetBytes) {
+        if (frontierBytes() > metadataBudgetBytes) {
             throw new ParsleyFailClosedException(Reason.METADATA_BUDGET_EXCEEDED,
-                    "process " + processName + ": the causal frontier reached " + CausesCodec.encodedSize(frontier.size())
+                    "process " + processName + ": the causal frontier reached " + frontierBytes()
                             + " bytes (" + frontier.size() + " channels); the configured budget is "
                             + metadataBudgetBytes + " bytes. The frontier's growth law is documented in"
                             + " docs/model.md.");
         }
+    }
+
+    private void frontierSizeAdd(ChannelId channel) {
+        int count = frontierTopicPartitions.merge(channel.topicId(), 1, Integer::sum);
+        frontierBodyBytes += (count == 1
+                ? 2 * Long.BYTES + CausesCodec.unsignedVarintSize(1)
+                : CausesCodec.unsignedVarintSize(count) - CausesCodec.unsignedVarintSize(count - 1))
+                + CausesCodec.unsignedVarintSize(channel.partition()) + Long.BYTES;
+    }
+
+    private void frontierSizeRemove(ChannelId channel) {
+        int count = frontierTopicPartitions.merge(channel.topicId(), -1, Integer::sum);
+        if (count == 0) {
+            frontierTopicPartitions.remove(channel.topicId());
+        }
+        frontierBodyBytes -= (count == 0
+                ? 2 * Long.BYTES + CausesCodec.unsignedVarintSize(1)
+                : CausesCodec.unsignedVarintSize(count + 1) - CausesCodec.unsignedVarintSize(count))
+                + CausesCodec.unsignedVarintSize(channel.partition()) + Long.BYTES;
     }
 
     /**
@@ -599,10 +633,13 @@ public final class ProcessEngine {
     /**
      * Returns the encoded width of the frontier, in bytes.
      *
+     * <p>Maintained incrementally at the frontier's mutation sites, so the per-merge budget
+     * check stays O(1) even though encoded size is a function of the frontier's shape.
+     *
      * @return the encoded width of the frontier, in bytes
      */
     public int frontierBytes() {
-        return CausesCodec.encodedSize(frontier.size());
+        return 1 + CausesCodec.unsignedVarintSize(frontierTopicPartitions.size()) + frontierBodyBytes;
     }
 
     /**

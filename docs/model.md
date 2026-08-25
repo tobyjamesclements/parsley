@@ -92,8 +92,12 @@ merges every pair a message carried, including channels the receiving process ne
 which is required for downstream re-expression. Steady-state size approaches the sum of
 partition counts over the transitive upstream closure.
 
-At 28 bytes per entry, the encoding reaches Kafka's default 1 MiB record ceiling near 37,000
-entries. Reaching it inside the producer would stop the process with no diagnosis from
-Parsley, so a metadata budget is applied first: `ParsleyConfig.metadataBudgetBytes`, 256 KiB
-by default. Exceeding it stops the process with an attributable reason. Frontier size and
-encoded width are logged each facts round, and again at 80% of budget.
+Encoded size depends on the frontier's shape: a topic's first partition costs 26 bytes and
+each further partition of the same topic 9 (a byte more per field once partition ids or
+counts pass 127), so the encoding reaches Kafka's default 1 MiB record ceiling between
+roughly 40,000 entries when every topic contributes one partition and 116,000 when few
+topics contribute many. Reaching it inside the producer would stop the process with no
+diagnosis from Parsley, so a metadata budget is applied first:
+`ParsleyConfig.metadataBudgetBytes`, 256 KiB by default. Exceeding it stops the process with
+an attributable reason. Frontier size and encoded width are logged each facts round, and
+again at 80% of budget.

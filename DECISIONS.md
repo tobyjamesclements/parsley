@@ -117,6 +117,11 @@ including when the cause set is empty. Application headers using the `parsley.` 
 
 25 bytes fixed plus 28 per cause on every message. A version bump requires a documented migration.
 
+*Superseded in part by D98: the value grammar this record froze (version byte `0x01`, flat
+entries) was replaced pre-release by the grouped grammar, before any released message carried
+it. The header key, the reserved prefix, strict fail-closed decoding and canonical bytes all
+stand.*
+
 ### D4 — Dependencies are summarized as one maximum position per channel
 
 **Context**
@@ -1573,6 +1578,11 @@ stops attributably before its persisted frontier balloons.
 
 A frontier legitimately larger than the budget stops the process; the operator raises the budget consciously,
 against the growth law now documented in docs/model.md (Operational 5).
+
+*Superseded in part by D98: the merge-site check's no-encode premise — size affine in the
+entry count — no longer holds under the grouped grammar; the engine maintains the encoded
+width incrementally instead. The budget itself, its three enforcement points, and the
+bytes-not-entries choice all stand.*
 
 ### D53 — Frontier size is logged every facts round and surfaced at 80% of budget
 
@@ -3521,3 +3531,113 @@ mutation afterwards.
 test constructs the runtime with a null Admin the failure path never touches. The streak-reset
 test's final confirmation exercises `observeWindow`'s `>=` boundary at equality; a deliberate move
 to a strict bound would need that assertion revisited alongside the decision.
+
+### D98 — Causes wire format: entries grouped by topic id, varint structural fields, fixed-width positions (supersedes D3's value grammar and D52's affine-size check)
+
+**Context**
+
+The causal frontier rides on every message, and its steady-state size approaches the sum of
+partition counts over the transitive upstream closure (docs/model.md). D3's flat grammar spent
+the dominant term of that law twice over: the 16-byte topic ID was repeated once per partition,
+and the structural fields held fixed 4-byte widths for values almost always under 128 — a
+frontier naming 32 partitions of one topic wrote that topic's UUID 32 times, 901 bytes where
+307 carry the same information. The bytes bite exactly where compression cannot reach: the
+growth gate in `mergeFrontier` runs before anything compresses, and the producer-side record
+ceiling is judged on uncompressed size (ASSESSMENT 2.4), so batch compression recovers the
+redundancy on disk and network but never at either wall. AGENTS.md prefers no change to the
+wire format; the argument past that default is that the constant factor is 2.7–2.9× on topics
+with tens of named partitions, never worse than the flat grammar for any shape with partition
+ids below 2²¹ (past that a wider partition varint costs a single-partition group one byte over
+the flat 28, and two bytes at ids of 2²⁸ and above), and it decides whether transports with
+hard uncompressed header limits (issue #96) are viable at all. Decisive for the shape of the
+change: Parsley is pre-release, and no message carrying the flat grammar exists in any log —
+so this lands as a replacement, not a migration. Issue #97 records the full proposal, its
+evaluation, and the size table.
+
+**Decision**
+
+The grouped grammar is the wire format, version byte `0x02`, defined normatively in
+docs/wire-format.md: topic IDs ascend once each in unsigned order carrying a partition count,
+partitions ascend within their group, and the three structural fields — topic count, partition
+count, partition id — are minimal unsigned base-128 varints spelling exactly 0 to 2³¹ − 1.
+Version byte `0x01` is retired, not reused: readers refuse it as unknown, and no byte ever
+names two grammars. Positions stay fixed eight bytes, deliberately: a varint position's width
+grows with the log, so encoded size would drift with wall-clock throughput toward a budget
+refusal no topology diff explains; fixed positions keep size a stable function of the
+topology, which is what belongs behind a budget. Canonical strictness is preserved: the
+grouped order equals the channel order (`ChannelId`'s comparison is topic-major unsigned with
+a numeric partition tie-break, coinciding with the 20-byte unsigned order for the non-negative
+partitions the grammar admits), and the decoder refuses padded varints, over-long varints, and
+a fifth byte carrying anything beyond the low three bits — Java's shift discards or misplaces
+the surplus, so `85 80 80 80 10` would otherwise silently decode to the same value as `05`,
+an aliasing the padding rule alone cannot see.
+
+Size ceases to be affine in the entry count, so D52's merge-site premise — "the codec's size
+is affine in the entry count, so the check costs no encode" — is superseded: the engine
+maintains the encoded width incrementally at the frontier's three mutation sites (merge,
+prune, restore; positions update in place without changing size), with per-topic partition
+counts supplying the varint-width deltas, and `frontierBytes()` reads the counter in O(1).
+The counter's agreement with `CausesCodec.encode`'s actual bytes is pinned. The receipt
+gate's raw-length check is exact again by construction: a canonical header's length *is* its
+frontier's encoded size, and size is monotone under subsetting, so one in-budget message can
+never inject a beyond-budget frontier.
+
+**Alternatives**
+
+* Keeping the flat grammar — rejected: the repetition sits on the growth law's dominant term,
+  and the walls it presses against are the ones compression cannot move.
+* Grouping without varints — rejected: single-partition-topic estates regress ~14% (20 bytes
+  of group framing to save 16 of repetition); with varints the per-topic cost is 17 + 9p
+  against the flat 28p for partition ids and counts below 128, smaller for every p ≥ 1, so
+  the varints are what remove the regression.
+* Varints on positions too — rejected: a partition at 1,000 msg/s crosses into five varint
+  bytes within days, so encoded size would grow with elapsed time and a deployment could hit
+  the fail-closed budget with no topology change and nothing to point at in a diff. Checking
+  the budget against a fixed-width worst case while the wire shrinks was considered and
+  rejected with it: the real bytes still drift where hard external limits live (#96's
+  headers), and the 80% warning would fire at different calendar times for identical
+  topologies.
+* Truncated topic ids (8 bytes) — rejected: the frontier's undeclared topics are resolvable
+  only because it carries full UUIDs (`AdminFactsSource` describes by id to prune entries
+  below logStart and on dead or recreated topics); truncation makes the bulk of a real
+  frontier permanently unprunable against a budget that fail-closes. A reverse-index registry
+  restoring the mapping is sound only under the single-cluster assumption (issue #98) and
+  lands within 8% of varints at best — not worth a new internal topic, bootstrap path, and
+  refusal class.
+* Delta-encoding partitions within a group — rejected: it only narrows ids at or above 128
+  (about a byte per partition there) and adds another canonical-form rule to specify and pin.
+* A dual-read migration — readers accepting both grammars ahead of a staged writer flip —
+  built first in this change's history, then removed as vestigial: it exists for a deployed
+  fleet whose logs retain old-grammar messages, and none exists. Pre-release, carrying a dead
+  grammar's decoder, golden vector and malformation battery forever is cost without a payer.
+  The branch history preserves the dual-read implementation should a released format ever
+  need the pattern; the reader-first ordering it encoded (every reader accepts the new
+  grammar before any writer emits it, external writers included) remains the rule for any
+  post-release format change.
+* Renumbering the grouped grammar to version byte `0x01` — rejected: version bytes are not
+  scarce, and reusing a byte that once named a different grammar makes the record ambiguous
+  for no gain.
+
+**Cost**
+
+Byte-calibrated tests are shape-sensitive and were re-derived, not scaled: the growth-gate
+pin's budget moved from 80 to 70 (three single-partition topics encode to exactly 80 bytes,
+which a strict `>` gate admits), the status-surface refusal's header grew from five
+partitions to six (five encode to exactly the 64-byte budget), and the 80%-warning wiring
+now rides at 54 of 64 bytes — 84%, with 2.8 bytes of margin above the warning floor where
+the flat grammar had 9.8. The flat grammar's negative-count refusal class is gone — a
+canonical varint cannot spell a negative — its D81 message-level pin replaced by the varint
+refusals. D93's recorded discrimination argument leaned on the affine half of "affine and
+monotone in the entry count"; it survives on monotonicity alone, restated in its test's
+javadoc. `encodedSize(entries)` left the public surface (pre-release; nothing external can
+have adopted it), and any doc-driven implementation of the never-released flat grammar is
+orphaned. The maintained counter is state the old arithmetic did not need: three mutation
+sites must stay in step, the price of an O(1) budget check over a shape-dependent size, with
+the counter-versus-encoder agreement pinned so drift cannot stay green.
+
+**Specification gap**
+
+None. Structural 5 requires a documented, stable, distinguishable representation and
+Operational 4 and 5 a bound and observability — all version-neutral, and the spec is right
+not to fix an encoding. Structural 11 is satisfied: a group header is factoring, not a new
+dependency form, and the grammar has no field a process identity could hide in.

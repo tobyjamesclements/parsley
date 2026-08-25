@@ -161,22 +161,88 @@ class ProcessEngineTest {
         assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
     }
 
+    /**
+     * The maintained frontier size agrees with the encoded header, byte for byte, across
+     * the shapes that exercise every term of the arithmetic. The agreement is load-bearing:
+     * the merge-site budget gate reads the counter where the emission gate measures real
+     * bytes, and drift between them would let one refuse what the other allows (D98). Each
+     * leg exists because a mutation trial showed its absence stays green: growth, a
+     * mid-group prune and restore catch a counter update deleted at any of the three
+     * mutation sites; the position-raising re-merge catches an unconditional add
+     * double-counting; the 130-partition group catches a dropped partition-count
+     * varint-width delta at the 127→128 boundary; the climb to 128 distinct topics catches
+     * a hardcoded topic-count width; and the topic-emptying prune at that boundary catches
+     * an emptied topic lingering in the per-topic counts.
+     */
+    @Test
+    void frontierBytesAgreesWithTheEncodedHeader() throws Exception {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(), "empty frontier");
+
+        java.util.TreeMap<ChannelId, Long> causes = new java.util.TreeMap<>();
+        for (int partition = 0; partition < 3; partition++) {
+            causes.put(new ChannelId(new UUID(40, 1), partition), 5L);
+        }
+        causes.put(new ChannelId(new UUID(40, 2), 300), 9L);
+        engine.onReceive(caused(C1, 0, "A", causes));
+        engine.markDelivered(C1, 0);
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "after growth through receipt and delivery");
+
+        engine.onReceive(caused(C1, 1, "B", Map.of(new ChannelId(new UUID(40, 1), 0), 50L)));
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "after a position-raising re-merge of a tracked channel, which must not re-count it");
+
+        engine.onFacts(new PositionFacts(Map.of(), Map.of(),
+                Set.of(new ChannelId(new UUID(40, 1), 1)), Set.of()));
+        assertEquals(4, engine.frontierSize(), "staging: the dead channel must actually leave the frontier");
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "after pruning a mid-group partition");
+
+        // One topic wide enough to push its partition count from one varint byte to two,
+        // and enough distinct topics to do the same to the topic count: 3 in the frontier
+        // already, plus this group and 124 singles makes exactly 128.
+        java.util.TreeMap<ChannelId, Long> wide = new java.util.TreeMap<>();
+        for (int partition = 0; partition < 130; partition++) {
+            wide.put(new ChannelId(new UUID(41, 1), partition), 1L);
+        }
+        for (int topic = 1; topic <= 124; topic++) {
+            wide.put(new ChannelId(new UUID(42, topic), 0), 1L);
+        }
+        engine.onReceive(caused(C2, 0, "C", wide));
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "with a 130-partition group and 128 distinct topics, both count varints two bytes wide");
+
+        engine.onFacts(new PositionFacts(Map.of(), Map.of(),
+                Set.of(new ChannelId(new UUID(40, 2), 300)), Set.of()));
+        assertEquals(257, engine.frontierSize(),
+                "staging: the emptied topic's only channel must actually leave the frontier");
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "after a topic-emptying prune back across the topic-count width boundary");
+
+        engine.flushHolds();
+        store.commit();
+        ProcessEngine restored = new ProcessEngine("p", BOTH, store);
+        assertEquals(restored.causesHeaderForEmission().length, restored.frontierBytes(), "after restore");
+    }
+
     /** Frontier growth beyond the budget fails closed. */
     @Test
     void frontierGrowthBeyondTheBudgetFailsClosed() {
         MemoryOrderingStore store = new MemoryOrderingStore();
-        ProcessEngine engine = new ProcessEngine("p", BOTH, store, 80);
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store, 70);
 
         engine.onReceive(caused(C1, 0, "A", Map.of(new ChannelId(new UUID(21, 1), 0), 1L)));
         engine.markDelivered(C1, 0);
-        assertTrue(engine.causesHeaderForEmission().length <= 80, "still within budget");
+        assertTrue(engine.causesHeaderForEmission().length <= 70, "still within budget");
 
         ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
                 () -> engine.onReceive(caused(C1, 1, "B", Map.of(new ChannelId(new UUID(21, 2), 0), 1L))),
                 "a frontier grown past the budget must fail closed before the substrate's wall");
         assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
         assertTrue(engine.frontierSize() >= 3, "the frontier size is observable (SPEC Operational 5)");
-        assertTrue(engine.frontierBytes() > 80, "the encoded size is observable (SPEC Operational 5)");
+        assertTrue(engine.frontierBytes() > 70, "the encoded size is observable (SPEC Operational 5)");
     }
 
     /** Unknown store format version fails closed. */
@@ -575,9 +641,11 @@ class ProcessEngineTest {
      * {@code #metadataBeyondTheBudgetFailsClosedOnReceipt} uses fresh channels, so deleting
      * the per-message gate lets the growth gate fire with the same reason and that test stays
      * green. A canonically-encoded header whose channels already sit in a within-budget
-     * frontier can never itself exceed the budget — the encoded size is affine in the entry
-     * count — so this test's oversized header is the canonical encoding of exactly the
-     * frontier's channels at exactly their frontier positions, padded past the budget: the
+     * frontier can never itself exceed the budget — encoded size is monotone under
+     * subsetting: dropping a pair drops its bytes, and dropping a group's last pair drops
+     * its topic header too — so this test's oversized header is the canonical encoding of
+     * exactly the frontier's channels at exactly their frontier positions, padded past the
+     * budget: the
      * growth gate cannot fire (nothing merges, and even a merge would leave the frontier's
      * size unchanged and within budget), and only the per-message gate, which judges raw
      * length before any decode, can produce the budget diagnosis (D52's receipt enforcement
