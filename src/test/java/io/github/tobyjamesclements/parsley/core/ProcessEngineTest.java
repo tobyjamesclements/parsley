@@ -163,11 +163,16 @@ class ProcessEngineTest {
 
     /**
      * The maintained frontier size agrees with the encoded header, byte for byte, across
-     * the shapes that exercise every term of the arithmetic — multi-partition groups, a
-     * partition id wide enough for a two-byte varint, growth, pruning, and restore. The
-     * agreement is load-bearing: the merge-site budget gate reads the counter where the
-     * emission gate measures real bytes, and drift between them would let one refuse what
-     * the other allows (D98).
+     * the shapes that exercise every term of the arithmetic. The agreement is load-bearing:
+     * the merge-site budget gate reads the counter where the emission gate measures real
+     * bytes, and drift between them would let one refuse what the other allows (D98). Each
+     * leg exists because a mutation trial showed its absence stays green: growth, a
+     * mid-group prune and restore catch a counter update deleted at any of the three
+     * mutation sites; the position-raising re-merge catches an unconditional add
+     * double-counting; the 130-partition group catches a dropped partition-count
+     * varint-width delta at the 127→128 boundary; the climb to 128 distinct topics catches
+     * a hardcoded topic-count width; and the topic-emptying prune at that boundary catches
+     * an emptied topic lingering in the per-topic counts.
      */
     @Test
     void frontierBytesAgreesWithTheEncodedHeader() throws Exception {
@@ -185,11 +190,36 @@ class ProcessEngineTest {
         assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
                 "after growth through receipt and delivery");
 
+        engine.onReceive(caused(C1, 1, "B", Map.of(new ChannelId(new UUID(40, 1), 0), 50L)));
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "after a position-raising re-merge of a tracked channel, which must not re-count it");
+
         engine.onFacts(new PositionFacts(Map.of(), Map.of(),
                 Set.of(new ChannelId(new UUID(40, 1), 1)), Set.of()));
         assertEquals(4, engine.frontierSize(), "staging: the dead channel must actually leave the frontier");
         assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
                 "after pruning a mid-group partition");
+
+        // One topic wide enough to push its partition count from one varint byte to two,
+        // and enough distinct topics to do the same to the topic count: 3 in the frontier
+        // already, plus this group and 124 singles makes exactly 128.
+        java.util.TreeMap<ChannelId, Long> wide = new java.util.TreeMap<>();
+        for (int partition = 0; partition < 130; partition++) {
+            wide.put(new ChannelId(new UUID(41, 1), partition), 1L);
+        }
+        for (int topic = 1; topic <= 124; topic++) {
+            wide.put(new ChannelId(new UUID(42, topic), 0), 1L);
+        }
+        engine.onReceive(caused(C2, 0, "C", wide));
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "with a 130-partition group and 128 distinct topics, both count varints two bytes wide");
+
+        engine.onFacts(new PositionFacts(Map.of(), Map.of(),
+                Set.of(new ChannelId(new UUID(40, 2), 300)), Set.of()));
+        assertEquals(257, engine.frontierSize(),
+                "staging: the emptied topic's only channel must actually leave the frontier");
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "after a topic-emptying prune back across the topic-count width boundary");
 
         engine.flushHolds();
         store.commit();
