@@ -32,13 +32,6 @@ class ProcessEngineTest {
                 List.of(new HeaderKV(CausesCodec.HEADER_KEY, header)));
     }
 
-    private static ReceivedMessage groupedCaused(
-            ChannelId channel, long position, String uid, Map<ChannelId, Long> causes) {
-        byte[] header = CausesCodec.encodeGrouped(Causes.of(causes));
-        return new ReceivedMessage(channel, position, position, uid.getBytes(), uid.getBytes(),
-                List.of(new HeaderKV(CausesCodec.HEADER_KEY, header)));
-    }
-
     /** Holds until facts settle the cause. */
     @Test
     void holdsUntilFactsSettleTheCause() {
@@ -169,72 +162,57 @@ class ProcessEngineTest {
     }
 
     /**
-     * A grouped (version-2) header flows through receipt, holding and delivery exactly as
-     * its flat spelling does — engine behaviour depends on the decoded frontier, not the
-     * grammar that carried it (D98 phase 1: readers accept version 2 before any writer
-     * emits it).
+     * The maintained frontier size agrees with the encoded header, byte for byte, across
+     * the shapes that exercise every term of the arithmetic — multi-partition groups, a
+     * partition id wide enough for a two-byte varint, growth, pruning, and restore. The
+     * agreement is load-bearing: the merge-site budget gate reads the counter where the
+     * emission gate measures real bytes, and drift between them would let one refuse what
+     * the other allows (D98).
      */
     @Test
-    void groupedHeaderIsReceivedExactlyAsItsFlatSpelling() throws Exception {
+    void frontierBytesAgreesWithTheEncodedHeader() throws Exception {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
-        engine.onReceive(groupedCaused(C2, 0, "B", Map.of(C1, 3L)));
-        assertTrue(engine.nextDeliverable().isEmpty(), "the grouped-carried cause must hold the message");
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(), "empty frontier");
 
-        engine.onFacts(new PositionFacts(Map.of(C1, 4L), Map.of(), Set.of()));
-        assertTrue(engine.nextDeliverable().isPresent(), "settling the cause must release the held message");
-        engine.markDelivered(C2, 0);
-        assertEquals(Causes.of(Map.of(C1, 3L, C2, 0L)), CausesCodec.decode(engine.causesHeaderForEmission()),
-                "the re-expressed frontier — the grouped-carried cause plus the delivery itself — must"
-                        + " match what the flat spelling of the same receipt would have produced");
-    }
-
-    /**
-     * The per-message budget gate prices the decoded frontier in the engine's own flat
-     * arithmetic, not only the header's raw length. A grouped header spells a channel in
-     * roughly a third of the flat bytes, so without the priced check one in-budget message
-     * could inject a frontier the growth gate then refuses mid-merge, entries already
-     * persisted; the receipt refusal keeps the frontier untouched and names the message
-     * (D98). Regression caught: deleting the priced check in {@code extractCauses} lets
-     * this header merge until the growth gate throws with a non-empty frontier, failing the
-     * channel-count and frontier-untouched asserts.
-     */
-    @Test
-    void groupedHeaderBeyondTheFlatPricedBudgetIsRefusedAtReceiptWithTheFrontierUntouched() {
-        MemoryOrderingStore store = new MemoryOrderingStore();
-        ProcessEngine engine = new ProcessEngine("p", BOTH, store, 100);
-        java.util.TreeMap<ChannelId, Long> big = new java.util.TreeMap<>();
-        for (int partition = 0; partition < 4; partition++) {
-            big.put(new ChannelId(new UUID(20, 1), partition), 1L);
+        java.util.TreeMap<ChannelId, Long> causes = new java.util.TreeMap<>();
+        for (int partition = 0; partition < 3; partition++) {
+            causes.put(new ChannelId(new UUID(40, 1), partition), 5L);
         }
-        assertTrue(CausesCodec.encodeGrouped(Causes.of(big)).length <= 100,
-                "staging: the grouped header itself must fit the budget, or the raw-length gate fires instead");
+        causes.put(new ChannelId(new UUID(40, 2), 300), 9L);
+        engine.onReceive(caused(C1, 0, "A", causes));
+        engine.markDelivered(C1, 0);
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "after growth through receipt and delivery");
 
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
-                () -> engine.onReceive(groupedCaused(C1, 0, "M", big)),
-                "a frontier this process could never re-express must be refused at receipt");
-        assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
-        assertTrue(e.getMessage().contains("expresses 4 channels"),
-                () -> "the diagnosis must name the message's channel count: " + e.getMessage());
-        assertEquals(0, engine.frontierSize(), "the refused message must not advance the frontier");
+        engine.onFacts(new PositionFacts(Map.of(), Map.of(),
+                Set.of(new ChannelId(new UUID(40, 1), 1)), Set.of()));
+        assertEquals(4, engine.frontierSize(), "staging: the dead channel must actually leave the frontier");
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "after pruning a mid-group partition");
+
+        engine.flushHolds();
+        store.commit();
+        ProcessEngine restored = new ProcessEngine("p", BOTH, store);
+        assertEquals(restored.causesHeaderForEmission().length, restored.frontierBytes(), "after restore");
     }
 
     /** Frontier growth beyond the budget fails closed. */
     @Test
     void frontierGrowthBeyondTheBudgetFailsClosed() {
         MemoryOrderingStore store = new MemoryOrderingStore();
-        ProcessEngine engine = new ProcessEngine("p", BOTH, store, 80);
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store, 70);
 
         engine.onReceive(caused(C1, 0, "A", Map.of(new ChannelId(new UUID(21, 1), 0), 1L)));
         engine.markDelivered(C1, 0);
-        assertTrue(engine.causesHeaderForEmission().length <= 80, "still within budget");
+        assertTrue(engine.causesHeaderForEmission().length <= 70, "still within budget");
 
         ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
                 () -> engine.onReceive(caused(C1, 1, "B", Map.of(new ChannelId(new UUID(21, 2), 0), 1L))),
                 "a frontier grown past the budget must fail closed before the substrate's wall");
         assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
         assertTrue(engine.frontierSize() >= 3, "the frontier size is observable (SPEC Operational 5)");
-        assertTrue(engine.frontierBytes() > 80, "the encoded size is observable (SPEC Operational 5)");
+        assertTrue(engine.frontierBytes() > 70, "the encoded size is observable (SPEC Operational 5)");
     }
 
     /** Unknown store format version fails closed. */
@@ -633,9 +611,11 @@ class ProcessEngineTest {
      * {@code #metadataBeyondTheBudgetFailsClosedOnReceipt} uses fresh channels, so deleting
      * the per-message gate lets the growth gate fire with the same reason and that test stays
      * green. A canonically-encoded header whose channels already sit in a within-budget
-     * frontier can never itself exceed the budget — the encoded size is affine in the entry
-     * count — so this test's oversized header is the canonical encoding of exactly the
-     * frontier's channels at exactly their frontier positions, padded past the budget: the
+     * frontier can never itself exceed the budget — encoded size is monotone under
+     * subsetting: dropping a pair drops its bytes, and dropping a group's last pair drops
+     * its topic header too — so this test's oversized header is the canonical encoding of
+     * exactly the frontier's channels at exactly their frontier positions, padded past the
+     * budget: the
      * growth gate cannot fire (nothing merges, and even a merge would leave the frontier's
      * size unchanged and within budget), and only the per-message gate, which judges raw
      * length before any decode, can produce the budget diagnosis (D52's receipt enforcement

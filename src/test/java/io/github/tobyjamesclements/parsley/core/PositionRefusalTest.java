@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>{@code Causes.of}'s check is also the backstop behind {@code CausesCodec}'s per-entry
  * negative-position refusal: a codec that lost its own guard still refuses through this one,
  * wrapped as "malformed causes header" — which is why
- * {@code CausesCodecTest#negativePositionIsDiagnosedPerEntryNamingItsChannel} pins the
+ * {@code CausesCodecTest#rejectsNegativePosition} pins the
  * codec's message and this class pins the backstop itself.
  */
 class PositionRefusalTest {

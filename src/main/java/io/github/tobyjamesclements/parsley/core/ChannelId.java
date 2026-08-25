@@ -97,7 +97,7 @@ public record ChannelId(UUID topicId, int partition) implements Comparable<Chann
     /**
      * Whether this is the reserved all-zero topic identity, which the substrate never
      * assigns to a channel (wire-format constraint 5, D83). The one spelling of the
-     * predicate, shared by both decode grammars and the ordering-state restore.
+     * predicate, shared by the wire decode and the ordering-state restore.
      */
     static boolean isZeroTopicId(UUID topicId) {
         return topicId.getMostSignificantBits() == 0 && topicId.getLeastSignificantBits() == 0;

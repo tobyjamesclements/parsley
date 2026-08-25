@@ -99,7 +99,7 @@ class BudgetWarningTest {
      * observation consults the alarm and emits the warning. A regression deleting the
      * consultation from {@code observeFrontier} leaves this red with zero warnings; one
      * dropping the latch leaves it red with one warning per punctuation. Two delivered
-     * channels put the frontier at 61 encoded bytes, inside the 64-byte budget's
+     * channels put the frontier at 54 encoded bytes, inside the 64-byte budget's
      * [80%, 100%) band, so the warning fires without the budget's fail-closed refusal.
      *
      * <p>Two environmental hazards this capture leans on: JUnit parallel execution would
@@ -141,7 +141,7 @@ class BudgetWarningTest {
             driver.advanceWallClockTime(Duration.ofMillis(150));
             assertEquals(1, warningCount(captured),
                     "the punctuator's frontier observation must emit the 80% warning when the"
-                            + " frontier (61 bytes) stands at or above 80% of the 64-byte budget");
+                            + " frontier (54 bytes) stands at or above 80% of the 64-byte budget");
             driver.advanceWallClockTime(Duration.ofMillis(150));
             driver.advanceWallClockTime(Duration.ofMillis(150));
             driver.advanceWallClockTime(Duration.ofMillis(150));
