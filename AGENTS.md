@@ -57,6 +57,12 @@ by reordering, skipping, or adding a timeout. Where the guarantee cannot be uphe
   `ParsleyProcessor`), position facts from the admin client (`AdminFactsSource`), the
   store over a Streams state store (`StreamsOrderingStore`), and the EOS lifecycle
   (`ParsleyRuntime`).
+- `…/parsley/session`, the companion surface for session consistency at the pipeline's
+  edge (issue #96, D99): `CausalPast`, a causal frontier carried as a client token or
+  recorded beside projected data, with a coverage check that fails closed over channels
+  the past cannot verify. It rides the core's public surface, nothing in the other three
+  packages reads it, and `SessionPurityTest` keeps it host-free. It must not accrete into
+  `core`, and the engine's private delivered past stays private.
 
 `Sabotage` lives in `core` but is package-private on purpose: the public API offers no way
 to construct an engine with a mode enabled (SPEC Structural 9). It exists so the suite can
@@ -64,7 +70,7 @@ prove it catches each violation class.
 
 ## Verifying anything
 
-- `./mvnw verify` is the full gate: **635 tests, green, roughly four minutes**. It must be
+- `./mvnw verify` is the full gate: **663 tests, green, roughly four minutes**. It must be
   green at every commit, and it grows. It never shrinks.
 - Three layers. Unit tests over the pure core. A **simulation harness** driving real engines
   under a simulated host that honours the spec's Host obligations, over randomised topologies,

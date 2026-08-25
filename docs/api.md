@@ -16,6 +16,11 @@ no host type and touches nothing outside its `OrderingStore`. The safety rule is
 
 `io.github.tobyjamesclements.parsley.kafka` is the Kafka Streams adapter.
 
+`io.github.tobyjamesclements.parsley.session` is the companion surface for
+[session consistency](session.md) at the pipeline's edge: `CausalPast`, a causal frontier
+carried as a client token or recorded beside projected data. It rides the core's public
+surface and is read by nothing in the other three packages.
+
 ## Automatic module name
 
 `io.github.tobyjamesclements.parsley`

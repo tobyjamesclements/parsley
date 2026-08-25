@@ -3641,3 +3641,84 @@ None. Structural 5 requires a documented, stable, distinguishable representation
 Operational 4 and 5 a bound and observability — all version-neutral, and the spec is right
 not to fix an encoding. Structural 11 is satisfied: a group header is factoring, not a new
 dependency form, and the grammar has no field a process identity could hide in.
+
+### D99 — Issue #96's session companion lands as its own package, `session`, over the public surface
+
+**Context**
+
+Issue #96 proposes extending the causal frontier past the last consumer: a client carries
+its frontier as a server-minted token, writes stamp the validated token as causes, and a
+read tier refuses to serve data whose recorded past does not cover the token — session
+consistency for a participant outside the protocol. Its build list asks for a companion
+token class over the existing public surface plus malformation tests mirroring
+`CausesCodecTest`, and it insists the companion must not accrete into `core`. The
+specification says nothing about edges beyond the last process, so both the shape of the
+companion and where it lives were open. Evaluation against this tree confirmed the issue's
+claims with two corrections: `CausesCodec.encodedSize` left the public surface with D98
+(sizing outside `core` is `encode(...).length`), and D98's grouped grammar retires the
+issue's 28-bytes-per-entry arithmetic — its cookie-budget pessimism, that three
+32-partition upstream topics already overflow a 4 KB cookie, is now false by about a
+factor of three.
+
+**Decision**
+
+A fourth package, `…/parsley/session`, holding one type: `CausalPast` — parse
+(`decode`, delegating to the frozen codec and exactly as strict), merge (pointwise maxima,
+immutable values), encode (byte-identical to `CausesCodec.encode`, so a token is a valid
+`parsley.causes` header value), and the coverage check. Coverage reuses
+`Deliverability.decide` with the token's own channel set as the received set, which
+inverts the delivery gate's disposition on purpose: the gate skips a cause on a channel
+the process never receives (Liveness 4 requires it), while a read tier must fail closed
+over a channel its recorded past cannot verify, because the wrong answer there is a silent
+read-your-writes violation that every test of the gate's disposition would call correct.
+`CausalPastTest` pins the inversion by asserting both dispositions against the same
+inputs; `CausalPastMalformationTest` re-pins every malformation class `CausesCodecTest`
+holds, through `CausalPast.decode`, so the parser cannot later be rewritten around the
+codec into a salvaging one; `SessionPurityTest` scans the package for host and adapter
+references the way `CorePurityTest` scans `core`. Nothing in `core`, `api` or `kafka`
+changes, and the engine's private `deliveredPast` stays private: the seam's own-coordinate
+substitute under-reports only in the conservative direction, and issue #96 defers any
+`Delivery.causalPast()` accessor until measured false blocks justify it.
+
+**Alternatives**
+
+* In `api` — rejected: D64's split is load-bearing because each package has one charter,
+  and `api` declares processes. A session participant declares no process; wedging the
+  companion in dilutes the surface AGENTS.md tells applications to start from.
+* In `core` — rejected: the issue's own scope note, and `core` is the protocol. A type the
+  engine never reads does not belong beside the one the engine is.
+* A separate Maven module or repository — rejected for now: this repo is deliberately one
+  module, and a second artifact means release machinery for a class of a few hundred
+  lines. Residency in its own package keeps later extraction mechanical.
+* Exposing the engine's delivered past (the issue's first draft) — rejected by the issue
+  itself: `frontierSnapshot()` over-approximates (receipt precedes delivery, so it names
+  effects still held back), and a `deliveredPast` accessor widens the engine's surface for
+  a companion that has a correct, narrower substitute at the seam.
+* Returning core's `Deliverability.Verdict` from the coverage check — rejected:
+  `isDeliverable()` is the gate's vocabulary, and a read tier asking "may I serve" while
+  reading "may I deliver" invites exactly the disposition confusion Boundary 2 warns
+  about. `Coverage` carries the same `Blocker` diagnostics under the right question.
+* A lenient token parser (accept and re-canonicalise what the codec refuses) — rejected: a
+  token decoded from damaged bytes into a weaker frontier weakens the session guarantee
+  silently, the same hazard Safety 7 exists to stop on the wire.
+
+**Cost**
+
+The artifact now ships a type the engine never reads, and a fourth package charter to keep
+honest — `SessionPurityTest` and this record are the fence. Coverage's fail-closed
+disposition makes the availability cost real and permanent where topology is transitive: a
+read model recording only own coordinates can never cover a token naming a channel it does
+not receive, so the pattern binds read models to receiving written channels, or to
+application-level coordinate propagation, until measurement justifies a seam change
+(issue #96's step 4). The seam names channels by topic name while `ChannelId` needs the
+topic id, so edge participants owe a one-time name-to-id resolution the library does not
+provide. And the companion's presence will read as endorsement of the whole issue-#96
+programme; Q1 (per-row versus per-model pasts), Q3 (behaviour when behind) and the token
+protection work (AEAD, bounding, TTL) remain the application's, undecided and unshipped.
+
+**Specification gap**
+
+None. The specification ends at the process seam and is right to: session guarantees for
+non-participants are an application concern, and the spec's own criteria (Liveness 4,
+Safety 7) are what force the companion's two deliberate departures — the inverted skip and
+the inherited strictness — to be recorded rather than improvised.

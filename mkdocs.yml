@@ -73,6 +73,8 @@ nav:
   - Operation:
     - Failing closed: failing-closed.md
     - Runtime: runtime.md
+  - Patterns:
+    - Session consistency: session.md
   - Reference:
     - Verification: verification.md
     - API: api.md
