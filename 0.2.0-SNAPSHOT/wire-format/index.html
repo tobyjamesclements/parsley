@@ -924,39 +924,53 @@ applications or by other systems.</p>
 causes.</p>
 <p>A message with no <code>parsley.causes</code> header has no causes and is immediately deliverable. A
 message with more than one such header, or one failing the grammar below, is undecodable: the
-receiver fails closed, and must not treat the metadata as absent.</p>
+receiver fails closed, and must not treat the metadata as absent. A header present with a
+null or empty value counts as present and fails the grammar.</p>
 <h2 id="grammar">Grammar</h2>
-<p>All integers are big-endian. Version 1 is the only version.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>value      := version entryCount entry*
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>version    := uint8      -- 0x01
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>entryCount := int32      -- number of entries, &gt;= 0
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>entry      := topicId partition position
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>topicId    := 16 bytes   -- Kafka topic ID: 8 most significant bytes, then 8 least
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>partition  := int32      -- &gt;= 0
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>position   := int64      -- &gt;= 0, a Kafka offset on that topic-partition
+<p>All fixed-width integers are big-endian. Version 2 is the only version: entries grouped by
+topic, structural fields as minimal varints, positions fixed-width.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>value          := version topicCount group*
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>version        := uint8    -- 0x02
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>topicCount     := varint   -- number of groups, &gt;= 0
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>group          := topicId partitionCount pair*
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>topicId        := 16 bytes -- Kafka topic ID: 8 most significant bytes, then 8 least
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>partitionCount := varint   -- number of pairs in the group, &gt;= 1
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>pair           := partition position
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>partition      := varint   -- &gt;= 0
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>position       := int64    -- &gt;= 0, a Kafka offset on that topic-partition
 </code></pre></div>
+<p><code>varint</code> is unsigned base-128: seven payload bits per byte, lowest bits first, the high bit
+set on every byte except the last. Only the minimal spelling is valid, and the values a
+varint may spell are exactly 0 to 2³¹ − 1: a terminal byte of zero after the first byte, a
+varint longer than five bytes, and a fifth byte carrying anything beyond the low three bits
+are each undecodable. The last of these matters even though it looks like more padding — a
+32-bit reader that shifts the surplus away would decode <code>85 80 80 80 10</code> to the same value
+as <code>05</code>, two spellings for one value that the padding rule alone cannot see.</p>
 <p>Every constraint below is mandatory. Violating any one makes the value undecodable.</p>
 <ol>
-<li>The version byte is <code>0x01</code>. Any other value is undecodable, and readers must not guess
+<li>The version byte is <code>0x02</code>. Any other value is undecodable, and readers must not guess
    forward compatibility.</li>
-<li><code>entryCount</code> is non-negative, and the value contains exactly <code>entryCount</code> entries with no
-   trailing bytes.</li>
-<li>Entries ascend strictly in the unsigned lexicographic order of their 20-byte channel
-   encoding, being the 16 topic-ID bytes followed by the 4 partition bytes, compared left to
-   right as unsigned bytes. At most one entry per channel, so the encoding of a given cause
-   set is unique byte for byte.</li>
-<li><code>partition</code> and <code>position</code> are non-negative.</li>
+<li>The value contains exactly <code>topicCount</code> groups with no trailing bytes, and each group
+   exactly <code>partitionCount</code> pairs.</li>
+<li>Topic IDs ascend strictly across groups in the unsigned lexicographic order of their 16
+   bytes, so each topic appears at most once.</li>
+<li><code>partitionCount</code> is at least one, and partitions ascend strictly within their group.
+   This lists channels in the unsigned lexicographic order of their 20-byte encoding — the
+   16 topic-ID bytes followed by 4 big-endian partition bytes — and with minimal varints
+   the encoding of a given cause set is unique byte for byte.</li>
 <li><code>topicId</code> is not all-zero bytes. The substrate reserves the zero topic ID and never
-   assigns it to a channel, so no genuine cause can name it; an entry carrying it is
+   assigns it to a channel, so no genuine cause can name it; a group carrying it is
    undecodable. (A reader-side tightening, not a grammar change: no conforming writer has
-   ever produced such an entry, because writers only express channels the substrate named —
+   ever produced such a group, because writers only express channels the substrate named —
    D83 records the reasoning.)</li>
+<li><code>position</code> is non-negative.</li>
 </ol>
 <h2 id="meaning">Meaning</h2>
-<p>Each entry <code>(topicId, partition, position)</code> expresses causes on one channel. The channel is
-the topic-partition identified by topic ID, so a topic deleted and recreated under the same
-name is a different channel. The entry stands for every cause of this message on that channel
-whose position is at or below <code>position</code>.</p>
+<p>Each pair, with its group's topic ID, expresses causes on one channel as the entry
+<code>(topicId, partition, position)</code>. The channel is the topic-partition identified by topic ID,
+so a topic deleted and recreated under the same name is a different channel. The entry
+stands for every cause of this message on that channel whose position is at or below
+<code>position</code>.</p>
 <p>A message's metadata expresses every cause of the message whose position is at or above its
 channel's earliest retained position at send time. This includes causes known to the sender
 only from the metadata of messages it had received and not yet delivered.</p>
@@ -970,8 +984,10 @@ naming channels outside that set impose no constraint there, which includes dead
 of recreated topics. The receiver still re-expresses them on its own sends while they can
 still matter.</p>
 <h2 id="stability">Stability</h2>
-<p>The header key, the reserved prefix and the version-1 grammar are frozen. Any change to the
-grammar requires a new version byte. Readers encountering an unknown version fail closed.</p>
+<p>The header key, the reserved prefix and the version-2 grammar are frozen. Any change to the
+grammar requires a new version byte. Readers encountering an unknown version fail closed.
+Version byte <code>0x01</code> named a pre-release flat grammar that no released message ever carried
+(D98); it is retired rather than reserved, and readers refuse it as unknown.</p>
 
 
 
