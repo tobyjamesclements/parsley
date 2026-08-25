@@ -619,14 +619,24 @@ class AdminFactsSource implements FactsSource {
         }
     }
 
+    /**
+     * Sends the by-id describe, one future per id. Its own seam, mirroring
+     * {@link #earliestOffsetFutures}, so a scripted describe can fail a future and still
+     * run the real tolerate-or-abort classification below — the branch that decides
+     * whether one broker failure aborts the whole round — while a completed future runs
+     * the real name learning, the one write path for non-declared bindings.
+     */
+    Map<Uuid, KafkaFuture<TopicDescription>> describeByIdFutures(Set<UUID> topicIds) {
+        var uuids = topicIds.stream().map(TopicInfo::toKafkaUuid).toList();
+        return admin.describeTopics(TopicCollection.ofTopicIds(uuids)).topicIdValues();
+    }
+
     Map<UUID, String> describeByIds(Set<UUID> topicIds) throws Exception {
         Map<UUID, String> names = new HashMap<>();
         if (topicIds.isEmpty()) {
             return names;
         }
-        var uuids = topicIds.stream().map(TopicInfo::toKafkaUuid).toList();
-        Map<Uuid, KafkaFuture<TopicDescription>> futures =
-                admin.describeTopics(TopicCollection.ofTopicIds(uuids)).topicIdValues();
+        Map<Uuid, KafkaFuture<TopicDescription>> futures = describeByIdFutures(topicIds);
         for (var entry : futures.entrySet()) {
             UUID id = TopicInfo.toJavaUuid(entry.getKey());
             try {

@@ -676,6 +676,109 @@ class TopologyWiringTest {
                         + " step with its reason, latched past any application catch; got " + thrown);
     }
 
+    /**
+     * The write-side twin of the null-returning read key above: the Serializer contract
+     * permits signalling failure by returning null, and a null store key cannot address an
+     * entry, so {@code planWrite} must fail the plan with its own reason (D81's taxonomy)
+     * before any write applies — not surface as the store's bare NPE during apply, after a
+     * sibling write already landed. The null-KEY-at-Effects-construction refusal is a
+     * different site: this key is non-null and the declared serde encodes it to null.
+     */
+    @Test
+    void nullReturningKeySerializerOnAStateWriteFailsThePlanBeforeAnyWriteApplies() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        org.apache.kafka.common.serialization.Serde<String> nullOnPoison =
+                Serdes.serdeFrom((topic, data) -> "poison".equals(data) ? null
+                        : data.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                        Serdes.String().deserializer());
+        Store<String, String> store = Store.of("app-store", nullOnPoison, Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> Effects.builder()
+                        .put(store, "good", "v")
+                        .put(store, "poison", "v")
+                        .build())
+                .stores(store)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
+                () -> "a write key serialized to null cannot address a store entry and must fail"
+                        + " the plan with its reason, not as the store's bare NPE; got " + thrown);
+        ParsleyFailClosedException refusal = ParsleyFailClosedException.findIn(thrown);
+        assertTrue(refusal.getMessage().contains("state write key serialized to null"),
+                () -> "the refusal names the write-key shape, not a generic payload failure: "
+                        + refusal.getMessage());
+        try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
+            assertFalse(all.hasNext(),
+                    "writes are planned before any is applied, so the declared write ahead of"
+                            + " the refused one must not reach the store");
+        }
+    }
+
+    /**
+     * The read-key serializer that throws, as opposed to returning null (pinned two tests
+     * up): the reader must wrap the failure with its own reason and latch it before
+     * throwing, so a handler that catches and swallows its read's failure cannot commit
+     * the step (D87's latch-past-catch promise, D81's taxonomy). Without the wrap the bare
+     * RuntimeException lands in the application catch, unlatched, and the step commits
+     * with its refused read swallowed.
+     */
+    @Test
+    void throwingKeySerializerOnAStateReadFailsClosedEvenWhenSwallowed() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        org.apache.kafka.common.serialization.Serde<String> throwingKeySerde =
+                Serdes.serdeFrom((topic, data) -> {
+                    throw new RuntimeException("key schema mismatch");
+                }, Serdes.String().deserializer());
+        Store<String, String> store = Store.of("app-store", throwingKeySerde, Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    try {
+                        state.get(store, "k");
+                    } catch (RuntimeException swallowed) {
+                        // an application fallback path: the refusal must not be swallowable
+                    }
+                    return Effects.none();
+                })
+                .stores(store)
+                .build();
+        newDriver(definition, new FakeFacts());
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
+                () -> "a read key the declared serde cannot serialize must fail the step with its"
+                        + " reason, latched past any application catch; got " + thrown);
+        ParsleyFailClosedException refusal = ParsleyFailClosedException.findIn(thrown);
+        assertTrue(refusal.getMessage().contains("state read key could not be serialized"),
+                () -> "the refusal names the throwing-read-key site: " + refusal.getMessage());
+    }
+
+    /**
+     * A record arriving from a topic this task holds no channel for must be refused
+     * naming the process and topic, not feed the engine a null channel whose NPE
+     * diagnoses nothing. Staged through the width arm of init's channel map: channels
+     * exist only for task partitions below the resolved width, so the driver's task 0
+     * against a zero-width TopicInfo exercises the same predicate as a task numbered at
+     * or above a received topic's real width.
+     */
+    @Test
+    void recordFromATopicWithoutAChannelForThisTaskIsRefusedWithTheDiagnosis() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> Effects.none())
+                .build();
+        newDriver(definition, new FakeFacts(), Map.of("in1", new TopicInfo(IN1_ID, 0)));
+
+        Throwable thrown = assertThrows(Throwable.class, () ->
+                input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
+        assertTrue(TestChains.chainContains(thrown, IllegalStateException.class, "p fed from undeclared topic in1"),
+                () -> "a record with no channel for this task must be refused naming the"
+                        + " process and the topic; got " + thrown);
+    }
+
     /** A null store on a state read is refused with a message. */
     @Test
     void nullStoreOnAStateReadIsRefusedWithAMessage() {
@@ -690,7 +793,7 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(chainContainsIllegalArgument(thrown, "store must be non-null"),
+        assertTrue(TestChains.chainContains(thrown, IllegalArgumentException.class, "store must be non-null"),
                 () -> "a null store must be refused per the taxonomy, not surface as a bare NPE"
                         + " from store.name(); got " + thrown);
     }
@@ -711,19 +814,9 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(chainContainsIllegalArgument(thrown, "state read key must be non-null"),
+        assertTrue(TestChains.chainContains(thrown, IllegalArgumentException.class, "state read key must be non-null"),
                 () -> "a null read key must be refused like a null write key, not reach the"
                         + " state backend as null bytes; got " + thrown);
-    }
-
-    private static boolean chainContainsIllegalArgument(Throwable thrown, String messagePart) {
-        for (Throwable cause = thrown; cause != null; cause = cause.getCause()) {
-            if (cause instanceof IllegalArgumentException
-                    && cause.getMessage() != null && cause.getMessage().contains(messagePart)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     /** A state write ahead of a refused emission is not applied. */

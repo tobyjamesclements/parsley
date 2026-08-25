@@ -76,7 +76,10 @@ public final class ParsleyRuntime implements AutoCloseable {
                 return thread;
             });
 
-    private ParsleyRuntime(Admin admin) {
+    // Package-private for RecordFailureDiagnosticsTest, which drives recordFailure and
+    // reads the merge's outcome directly — the failure path never touches the admin
+    // client, so the test passes none. Production construction stays inside start().
+    ParsleyRuntime(Admin admin) {
         this.admin = admin;
     }
 
@@ -149,46 +152,106 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    private void recordFailure(String process, Throwable exception) {
-        failuresByProcess.merge(process, exception, (existing, latest) ->
-                ParsleyFailClosedException.findIn(existing) == null && ParsleyFailClosedException.findIn(latest) != null ? latest : existing);
+    /**
+     * The named condition a stream thread's uncaught failure evidences, driving the
+     * diagnosis {@link #recordFailure} logs (D59/D81/D87).
+     */
+    enum FailureDiagnosis {
+        /** Retention discarded committed read positions before they were read (SPEC Safety 8). */
+        POSITIONS_DISCARDED_UNREAD,
+        /** A received partition has no committed read position (D81 splits the causes). */
+        NO_COMMITTED_POSITION,
+        /** A record exceeded a size limit, typically the changelog's max.message.bytes (D87). */
+        RECORD_TOO_LARGE,
+        /** The partition shape of the process's topics changed while it ran (D59). */
+        PARTITION_SHAPE_CHANGED,
+        /** No named condition; the failure is logged as-is. */
+        UNRECOGNISED
+    }
 
+    /**
+     * Walks a failure's cause chain outward-in and names the first recognised condition.
+     *
+     * <p>The walk is bounded exactly as {@link ParsleyFailClosedException#findIn}, to guard
+     * against a cyclic chain. Within each link the instanceof checks precede the message
+     * probe, and the first match anywhere wins: an outer link's condition is named even
+     * when a deeper link would match a different branch.
+     */
+    static FailureDiagnosis classifyFailure(Throwable exception) {
         Throwable cause = exception;
         for (int depth = 0; cause != null && depth < 64; depth++, cause = cause.getCause()) {
             if (cause instanceof org.apache.kafka.clients.consumer.OffsetOutOfRangeException) {
+                return FailureDiagnosis.POSITIONS_DISCARDED_UNREAD;
+            }
+            if (cause instanceof org.apache.kafka.clients.consumer.NoOffsetForPartitionException) {
+                return FailureDiagnosis.NO_COMMITTED_POSITION;
+            }
+            if (cause instanceof org.apache.kafka.common.errors.RecordTooLargeException) {
+                return FailureDiagnosis.RECORD_TOO_LARGE;
+            }
+            if (String.valueOf(cause.getMessage()).contains("invalid partitions")) {
+                return FailureDiagnosis.PARTITION_SHAPE_CHANGED;
+            }
+        }
+        return FailureDiagnosis.UNRECOGNISED;
+    }
+
+    /**
+     * The failure {@code status()} keeps when a process fails more than once: the first
+     * recorded failure stands, unless it lacks a fail-closed diagnosis a later failure
+     * carries — the refusal is what {@code status()} unwraps for the operator (D55), so a
+     * follow-on transient must never bury it, and the first refusal is never displaced by
+     * a second.
+     */
+    static Throwable preferFailClosedDiagnosis(Throwable existing, Throwable latest) {
+        return ParsleyFailClosedException.findIn(existing) == null
+                && ParsleyFailClosedException.findIn(latest) != null ? latest : existing;
+    }
+
+    // Package-private so RecordFailureDiagnosticsTest can pin the merge wiring and the
+    // per-diagnosis log lines directly; production reaches it only through the uncaught
+    // exception handler start() installs.
+    void recordFailure(String process, Throwable exception) {
+        failuresByProcess.merge(process, exception, ParsleyRuntime::preferFailClosedDiagnosis);
+
+        switch (classifyFailure(exception)) {
+            case POSITIONS_DISCARDED_UNREAD ->
                 LOG.error("process {}: the broker no longer retains this process's committed read position;"
                         + " positions were discarded before they were read, and auto.offset.reset=none stops"
                         + " the process rather than skipping the gap (SPEC Safety 8, the"
                         + " POSITIONS_DISCARDED_UNREAD condition). Reset the process's state and group offsets"
                         + " deliberately to proceed (failing closed)", process, exception);
-                return;
-            }
-            if (cause instanceof org.apache.kafka.clients.consumer.NoOffsetForPartitionException) {
+            case NO_COMMITTED_POSITION ->
                 LOG.error("process {}: a received partition has no committed read position; either a partition"
                         + " was added while the process ran, or the group's committed offsets were removed"
                         + " mid-run. Restart the application: a width-preserving expansion is re-resolved and"
                         + " pre-committed; a width change refuses with TASK_WIDTH_CHANGED and its remedy"
                         + " (failing closed)", process, exception);
-                return;
-            }
-            if (cause instanceof org.apache.kafka.common.errors.RecordTooLargeException) {
+            case RECORD_TOO_LARGE ->
                 LOG.error("process {}: a record exceeded a size limit. When the failing topic is this"
                         + " process's ordering changelog, a held message's persisted form — payload, headers"
                         + " and causal metadata together — outgrew the changelog topic's max.message.bytes,"
                         + " which the metadata budget alone does not bound. Raise max.message.bytes on the"
                         + " changelog topic and, if needed, producer.max.request.size via streamsProperty,"
                         + " then restart to deliver the held message (failing closed)", process, exception);
-                return;
-            }
-            if (String.valueOf(cause.getMessage()).contains("invalid partitions")) {
+            case PARTITION_SHAPE_CHANGED ->
                 LOG.error("process {}: the partition shape of its topics changed while it ran; parsley resolves"
                         + " partitions at start(). Restart the application: a width-preserving expansion is"
                         + " re-resolved and pre-committed; a width change refuses with TASK_WIDTH_CHANGED and its"
                         + " remedy (failing closed)", process, exception);
-                return;
-            }
+            case UNRECOGNISED ->
+                LOG.error("process {} failed; shutting its application down (failing closed)", process, exception);
         }
-        LOG.error("process {} failed; shutting its application down (failing closed)", process, exception);
+    }
+
+    /**
+     * The failure {@link #recordFailure}'s merge retained for {@code process} — the read
+     * side of the merge wiring, for tests: {@code status()} surfaces failures only for
+     * processes that also have a streams instance, which a direct recordFailure pin does
+     * not build.
+     */
+    Throwable recordedFailure(String process) {
+        return failuresByProcess.get(process);
     }
 
     /**
@@ -275,21 +338,33 @@ public final class ParsleyRuntime implements AutoCloseable {
         return topics;
     }
 
+    /**
+     * Maps one resolved description to its {@link TopicInfo}, refusing a substrate that
+     * cannot provide channel identity.
+     *
+     * <p>The substrate reserves {@link org.apache.kafka.common.Uuid#ZERO_UUID} and never
+     * assigns it, so a description carrying it means the broker predates topic IDs — below
+     * the supported 3.7.0 floor, channel identity does not exist (SPEC Substrate 1,
+     * Assumption 2), and D83's whole identity machinery relies on this refusal keeping the
+     * zero id out of every resolved view.
+     */
+    static TopicInfo requireTopicId(String name, TopicDescription description) {
+        if (org.apache.kafka.common.Uuid.ZERO_UUID.equals(description.topicId())) {
+            throw new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
+                    "topic '" + name + "' has no topic ID; brokers below the supported 3.7.0 floor cannot"
+                            + " provide channel identity (SPEC Substrate 1, Assumption 2); refusing to start");
+        }
+        return new TopicInfo(
+                TopicInfo.toJavaUuid(description.topicId()), description.partitions().size());
+    }
+
     private Map<String, TopicInfo> resolveTopics(Set<String> names) {
         try {
             Map<String, TopicDescription> descriptions =
                     admin.describeTopics(names).allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
             Map<String, TopicInfo> topics = new LinkedHashMap<>();
-            descriptions.forEach((name, description) -> {
-                if (org.apache.kafka.common.Uuid.ZERO_UUID.equals(description.topicId())) {
-                    throw new ParsleyFailClosedException(
-                            ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
-                            "topic '" + name + "' has no topic ID; brokers below the supported 3.7.0 floor cannot"
-                                    + " provide channel identity (SPEC Substrate 1, Assumption 2); refusing to start");
-                }
-                topics.put(name, new TopicInfo(
-                        TopicInfo.toJavaUuid(description.topicId()), description.partitions().size()));
-            });
+            descriptions.forEach((name, description) -> topics.put(name, requireTopicId(name, description)));
             return topics;
         } catch (ParsleyFailClosedException e) {
             throw e;
@@ -311,10 +386,34 @@ public final class ParsleyRuntime implements AutoCloseable {
      */
     private java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelog(String applicationId) {
         String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
+        return describeChangelogCorroborated(applicationId, () -> admin.describeTopics(List.of(changelog))
+                .allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(changelog),
+                java.time.Duration.ofMillis(500));
+    }
+
+    /** One describe of the ordering changelog, as the substrate answers it — the seam the
+     * corroboration loop retries through, so tests can script the answer sequence. */
+    @FunctionalInterface
+    interface ChangelogDescribe {
+        TopicDescription describe() throws Exception;
+    }
+
+    /**
+     * The corroboration loop behind {@link #describeChangelog}: absence is concluded only
+     * from three consistent unknown-topic answers; any other failure refuses the start
+     * rather than concluding anything (D84). Letting a transient generic failure — a
+     * timeout, a broker outage — fall through to "absent" would resume a process with
+     * prior state as a first start, the exact single-answer trust D84 removed.
+     *
+     * <p>Production passes the half-second spacing between answers (D84's evidence
+     * standard); tests pass ~zero so the loop's decisions are pinned without paying the
+     * real backoffs.
+     */
+    static java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelogCorroborated(
+            String applicationId, ChangelogDescribe describe, java.time.Duration backoff) {
         for (int attempt = 0; ; attempt++) {
             try {
-                return java.util.Optional.of(admin.describeTopics(List.of(changelog)).allTopicNames()
-                        .get(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(changelog));
+                return java.util.Optional.of(describe.describe());
             } catch (Exception e) {
                 if (!(e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException)) {
                     throw new IllegalStateException(
@@ -324,7 +423,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                     return java.util.Optional.empty();
                 }
                 try {
-                    Thread.sleep(500);
+                    Thread.sleep(backoff.toMillis());
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException(
@@ -401,6 +500,72 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     /**
+     * The isolation the changelog read's end-offset snapshot asks for.
+     *
+     * <p>READ_UNCOMMITTED is the load-bearing choice, not a default left to chance: this
+     * bound must be the log's true end, where the sibling listOffsets in
+     * commitInitialPositions deliberately asks for the read-committed view. Stopping at
+     * the last stable offset would silently hide committed tail records sitting above a
+     * superseded execution's open transaction (D79).
+     */
+    static ListOffsetsOptions changelogEndOffsetIsolation() {
+        return new ListOffsetsOptions(IsolationLevel.READ_UNCOMMITTED);
+    }
+
+    /**
+     * Drains an assigned, rewound consumer up to the end-offset snapshot in {@code ends},
+     * compacting to the latest value per key and tracking which partitions held records.
+     *
+     * <p>No progress for {@code stallTimeout} fails the read loudly rather than hanging
+     * the start (D79); a partition at its snapshot end is paused — the pause loop's
+     * comment carries the rationale. Production passes the 30s deadline that outlasts
+     * the default producer transaction timeout.
+     */
+    static ChangelogView readToEnds(org.apache.kafka.clients.consumer.Consumer<byte[], byte[]> consumer,
+                                    String changelog, List<TopicPartition> parts,
+                                    Map<TopicPartition, Long> ends, java.time.Duration stallTimeout) {
+        Map<byte[], byte[]> latest = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
+        java.util.Set<Integer> partitionsWithRecords = new HashSet<>();
+        long stallDeadline = System.nanoTime() + stallTimeout.toNanos();
+        while (parts.stream().anyMatch(tp -> consumer.position(tp) < ends.get(tp))) {
+            var polled = consumer.poll(java.time.Duration.ofMillis(500));
+            if (polled.isEmpty()) {
+                if (System.nanoTime() - stallDeadline > 0) {
+                    throw new IllegalStateException("no progress reading " + changelog + " for "
+                            + renderDeadline(stallTimeout) + " while reading prior ordering state");
+                }
+            } else {
+                stallDeadline = System.nanoTime() + stallTimeout.toNanos();
+                polled.forEach(record -> {
+                    latest.put(record.key(), record.value());
+                    partitionsWithRecords.add(record.partition());
+                });
+            }
+            // A partition that reached its snapshot end stops feeding the loop:
+            // records past the snapshot would otherwise keep resetting the stall
+            // deadline forever while another partition sits pinned below its end,
+            // turning the promised loud stall into an indefinite hang.
+            for (TopicPartition tp : parts) {
+                if (consumer.position(tp) >= ends.get(tp) && !consumer.paused().contains(tp)) {
+                    consumer.pause(List.of(tp));
+                }
+            }
+        }
+        return new ChangelogView(latest, java.util.Set.copyOf(partitionsWithRecords));
+    }
+
+    /**
+     * Renders a deadline for the stall diagnosis: whole seconds as "30s" (production's
+     * value, byte-for-byte as before), anything finer as "40ms" — {@code toSeconds()}
+     * alone printed a sub-second deadline as the meaningless "0s".
+     */
+    private static String renderDeadline(java.time.Duration deadline) {
+        return deadline.toMillis() % 1000 == 0
+                ? deadline.toSeconds() + "s"
+                : deadline.toMillis() + "ms";
+    }
+
+    /**
      * Reads the process's ordering-store changelog end to end, compacted in memory to the
      * latest value per key, tracking which partitions held records.
      *
@@ -423,18 +588,12 @@ public final class ParsleyRuntime implements AutoCloseable {
                                                 int expectedPartitions) {
         String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
         Map<String, Object> props = changelogReaderProperties(clientProps);
-        Map<byte[], byte[]> latest = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
-        java.util.Set<Integer> partitionsWithRecords = new HashSet<>();
         try (var consumer = new org.apache.kafka.clients.consumer.KafkaConsumer<>(props,
                 new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
                 new org.apache.kafka.common.serialization.ByteArrayDeserializer())) {
             List<TopicPartition> parts = consumer.partitionsFor(changelog).stream()
                     .map(pi -> new TopicPartition(pi.topic(), pi.partition())).toList();
-            if (parts.size() != expectedPartitions) {
-                throw new RetryableStartException(applicationId + ": the ordering changelog is described"
-                        + " with " + expectedPartitions + " partition(s) but the reader's metadata answered "
-                        + parts.size() + "; a broker's metadata view is lagging. Retry this start.");
-            }
+            requireCorroboratedWidth(applicationId, expectedPartitions, parts.size());
             consumer.assign(parts);
             consumer.seekToBeginning(parts);
             Map<TopicPartition, OffsetSpec> latestSpecs = new HashMap<>();
@@ -442,45 +601,37 @@ public final class ParsleyRuntime implements AutoCloseable {
                 latestSpecs.put(tp, OffsetSpec.latest());
             }
             Map<TopicPartition, Long> ends = new HashMap<>();
-            // READ_UNCOMMITTED is the load-bearing choice, not a default left to chance:
-            // this bound must be the log's true end, where the sibling listOffsets in
-            // commitInitialPositions deliberately asks for the read-committed view.
-            admin.listOffsets(latestSpecs, new ListOffsetsOptions(IsolationLevel.READ_UNCOMMITTED)).all()
+            admin.listOffsets(latestSpecs, changelogEndOffsetIsolation()).all()
                     .get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
                     .forEach((tp, info) -> ends.put(tp, info.offset()));
 
-            long stallDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
-            while (parts.stream().anyMatch(tp -> consumer.position(tp) < ends.get(tp))) {
-                var polled = consumer.poll(java.time.Duration.ofMillis(500));
-                if (polled.isEmpty()) {
-                    if (System.nanoTime() - stallDeadline > 0) {
-                        throw new IllegalStateException("no progress reading " + changelog + " for "
-                                + TIMEOUT_SECONDS + "s while reading prior ordering state");
-                    }
-                } else {
-                    stallDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
-                    polled.forEach(record -> {
-                        latest.put(record.key(), record.value());
-                        partitionsWithRecords.add(record.partition());
-                    });
-                }
-                // A partition that reached its snapshot end stops feeding the loop:
-                // records past the snapshot would otherwise keep resetting the stall
-                // deadline forever while another partition sits pinned below its end,
-                // turning the promised loud stall into an indefinite hang.
-                for (TopicPartition tp : parts) {
-                    if (consumer.position(tp) >= ends.get(tp) && !consumer.paused().contains(tp)) {
-                        consumer.pause(List.of(tp));
-                    }
-                }
-            }
+            return readToEnds(consumer, changelog, parts, ends,
+                    java.time.Duration.ofSeconds(TIMEOUT_SECONDS));
         } catch (RetryableStartException e) {
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException(
                     applicationId + ": prior ordering state could not be read; refusing to start", e);
         }
-        return new ChangelogView(latest, java.util.Set.copyOf(partitionsWithRecords));
+    }
+
+    /**
+     * Corroborates the changelog reader's own metadata answer against the describe the
+     * read was keyed on, refusing a disagreement as a retryable transient.
+     *
+     * <p>With auto-create pinned off, a broker whose metadata lags the changelog's
+     * creation answers an empty partition list immediately — no retry, no timeout — and
+     * trusting it would flip prior state off one stale view, the exact single-answer
+     * trust D84 removed from the describe path (D88). The refusal must stay retryable:
+     * dressing it as a terminal diagnosis would hand the operator a destructive remedy
+     * for a broker that merely needs a moment.
+     */
+    static void requireCorroboratedWidth(String applicationId, int describedPartitions, int readerAnswered) {
+        if (readerAnswered != describedPartitions) {
+            throw new RetryableStartException(applicationId + ": the ordering changelog is described"
+                    + " with " + describedPartitions + " partition(s) but the reader's metadata answered "
+                    + readerAnswered + "; a broker's metadata view is lagging. Retry this start.");
+        }
     }
 
     private void refuseStrandedHeldMessages(String applicationId, ProcessDefinition definition,
@@ -523,31 +674,13 @@ public final class ParsleyRuntime implements AutoCloseable {
                                         Map<String, TopicInfo> topics, boolean priorState,
                                         ChangelogView orderingView, Map<String, Object> clientProps) {
         java.util.Set<TopicPartition> received = receivedPartitions(definition, topics);
-        Map<TopicPartition, OffsetAndMetadata> preCheck = listStableOffsets(applicationId);
-        // A listing that covers some received partitions but not all is, over a healthy
-        // group, usually not missing offsets at all: the stable listing silently omits any
-        // partition whose offset has a pending transactional commit (partition-level
-        // UNSTABLE_OFFSET_COMMIT is skipped, not failed, by the admin client), and a live
-        // sibling under EOS commits every commit interval, so some partition is routinely
-        // mid-commit at the listing instant. Concluding "missing" from that snapshot sends
-        // the start into the group join, which can only grind against the sibling's
-        // protocol until the join deadline and then refuse a legitimate scale-out.
-        // Pending commits resolve within the transaction timeout, so a partial listing is
-        // retried briefly; one that stays partial falls through to the join, which remains
-        // authoritative (D86). A first start lists nothing for the received set and skips
-        // the wait entirely.
-        long retryDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (preCheckLooksUnstable(received, preCheck.keySet()) && System.nanoTime() - retryDeadline < 0) {
-            try {
-                Thread.sleep(200);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException(
-                        applicationId + ": interrupted while listing read positions; refusing to start", e);
-            }
-            preCheck = listStableOffsets(applicationId);
-        }
-        refuseLostOrderingState(applicationId, orderingView, preCheck, clientProps);
+        Map<TopicPartition, OffsetAndMetadata> preCheck = awaitStablePreCheck(applicationId, received,
+                () -> listStableOffsets(applicationId),
+                java.time.Duration.ofMillis(200), java.time.Duration.ofSeconds(5));
+        ChangelogRecheck recheck = () -> describeChangelog(applicationId)
+                .map(description -> readOrderingChangelog(applicationId, clientProps,
+                        description.partitions().size()));
+        refuseLostOrderingState(applicationId, orderingView, preCheck, recheck);
         if (preCheck.keySet().containsAll(received)) {
             return;
         }
@@ -561,7 +694,7 @@ public final class ParsleyRuntime implements AutoCloseable {
             // admin client), so a lost-state stamp could hide from the pre-check. The
             // member's committed() is a stable fetch that retries until the transaction
             // resolves, so what it returns is authoritative.
-            refuseLostOrderingState(applicationId, orderingView, committed, clientProps);
+            refuseLostOrderingState(applicationId, orderingView, committed, recheck);
             Map<TopicPartition, OffsetSpec> wanted = new HashMap<>();
             for (TopicPartition tp : received) {
                 if (committed.get(tp) == null) {
@@ -595,6 +728,16 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     /**
+     * The second look {@link #refuseLostOrderingState} takes at the ordering changelog
+     * immediately before refusing: empty when the changelog does not exist, the re-read
+     * view when it does. A seam, so tests can script what the second look finds.
+     */
+    @FunctionalInterface
+    interface ChangelogRecheck {
+        java.util.Optional<ChangelogView> reread();
+    }
+
+    /**
      * Refuses a start whose group carries committed read positions the bootstrap did not
      * write, while the ordering-changelog partition behind them holds no records.
      *
@@ -619,11 +762,12 @@ public final class ParsleyRuntime implements AutoCloseable {
      * statements (SPEC Fault model 2), so a concurrent lifetime of this process can have
      * created records — and committed — in the window. That shape refuses as a retryable
      * transient, not as state loss: a state-loss diagnosis here would tell the operator
-     * to delete offsets a healthy sibling just wrote.
+     * to delete offsets a healthy sibling just wrote. The recheck is a seam so the
+     * decision — which answer shapes refuse, and as what — is testable without a broker.
      */
-    private void refuseLostOrderingState(String applicationId, ChangelogView view,
-                                         Map<TopicPartition, OffsetAndMetadata> committed,
-                                         Map<String, Object> clientProps) {
+    static void refuseLostOrderingState(String applicationId, ChangelogView view,
+                                        Map<TopicPartition, OffsetAndMetadata> committed,
+                                        ChangelogRecheck recheck) {
         for (var entry : committed.entrySet()) {
             OffsetAndMetadata offset = entry.getValue();
             if (offset == null || BOOTSTRAP_OFFSET_STAMP.equals(offset.metadata())) {
@@ -633,15 +777,11 @@ public final class ParsleyRuntime implements AutoCloseable {
             if (view.partitionsWithRecords().contains(partition)) {
                 continue;
             }
-            java.util.Optional<TopicDescription> now = describeChangelog(applicationId);
-            if (now.isPresent()) {
-                ChangelogView recheck = readOrderingChangelog(applicationId, clientProps,
-                        now.get().partitions().size());
-                if (recheck.partitionsWithRecords().contains(partition)) {
-                    throw new RetryableStartException(applicationId + ": ordering records appeared while"
-                            + " this start was determining prior state; a concurrent lifetime of this process"
-                            + " is starting or running. Retry this start.");
-                }
+            java.util.Optional<ChangelogView> now = recheck.reread();
+            if (now.isPresent() && now.get().partitionsWithRecords().contains(partition)) {
+                throw new RetryableStartException(applicationId + ": ordering records appeared while"
+                        + " this start was determining prior state; a concurrent lifetime of this process"
+                        + " is starting or running. Retry this start.");
             }
             String shape = now.isPresent()
                     ? "partition " + partition + " of this process's ordering-store changelog holds no"
@@ -724,6 +864,54 @@ public final class ParsleyRuntime implements AutoCloseable {
             throw new IllegalStateException(
                     applicationId + ": committed read positions could not be listed; refusing to start", e);
         }
+    }
+
+    /** One stable listing of the group's committed read positions — the seam every
+     * pre-check listing goes through, first look and retries alike, so tests can
+     * script the whole answer sequence. */
+    @FunctionalInterface
+    interface StableOffsetListing {
+        Map<TopicPartition, OffsetAndMetadata> list();
+    }
+
+    /**
+     * Retries a partially-covering stable listing briefly before adopting it.
+     *
+     * <p>A listing that covers some received partitions but not all is, over a healthy
+     * group, usually not missing offsets at all: the stable listing silently omits any
+     * partition whose offset has a pending transactional commit (partition-level
+     * UNSTABLE_OFFSET_COMMIT is skipped, not failed, by the admin client), and a live
+     * sibling under EOS commits every commit interval, so some partition is routinely
+     * mid-commit at the listing instant. Concluding "missing" from that snapshot sends
+     * the start into the group join, which can only grind against the sibling's
+     * protocol until the join deadline and then refuse a legitimate scale-out.
+     * Pending commits resolve within the transaction timeout, so a partial listing is
+     * retried briefly; one that stays partial past {@code retryBudget} falls through to
+     * the join, which remains authoritative (D86). A first start lists nothing for the
+     * received set and skips the wait entirely.
+     *
+     * <p>Every listing — the first included — goes through the one {@code listing} seam,
+     * so tests script the whole sequence a start sees. Production passes the 200ms
+     * backoff and 5s budget that wait out one EOS commit interval; tests pass ~zero.
+     */
+    static Map<TopicPartition, OffsetAndMetadata> awaitStablePreCheck(String applicationId,
+                                                                      java.util.Set<TopicPartition> received,
+                                                                      StableOffsetListing listing,
+                                                                      java.time.Duration backoff,
+                                                                      java.time.Duration retryBudget) {
+        Map<TopicPartition, OffsetAndMetadata> preCheck = listing.list();
+        long retryDeadline = System.nanoTime() + retryBudget.toNanos();
+        while (preCheckLooksUnstable(received, preCheck.keySet()) && System.nanoTime() - retryDeadline < 0) {
+            try {
+                Thread.sleep(backoff.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(
+                        applicationId + ": interrupted while listing read positions; refusing to start", e);
+            }
+            preCheck = listing.list();
+        }
+        return preCheck;
     }
 
     /**

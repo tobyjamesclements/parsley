@@ -109,6 +109,52 @@ class ApiValidationTest {
                         + " mention: " + e.getMessage());
     }
 
+    /**
+     * Two processes sharing one name would compose the same application id and therefore
+     * the same consumer group and changelog topics, each restoring the other's records —
+     * the identical-name degenerate of the composition collision
+     * {@link #composedChangelogNameCollisionAcrossProcessesIsRefused} pins (D73). The
+     * duplicate is refused by name as the first statement of start, before any broker
+     * contact, which is why the unreachable bootstrap never matters here.
+     */
+    @Test
+    void duplicateProcessNamesAreRefusedBeforeAnyBrokerContact() {
+        ProcessDefinition p1 = ProcessDefinition.named("orders")
+                .receives(channel("in1"), (d, s) -> Effects.none())
+                .build();
+        ProcessDefinition p2 = ProcessDefinition.named("orders")
+                .receives(channel("in2"), (d, s) -> Effects.none())
+                .build();
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> Parsley.start(ParsleyConfig.builder("unreachable:1", "app").build(), p1, p2),
+                "two processes named \"orders\" would run two Streams applications under one"
+                        + " application id, sharing a consumer group and changelog topics");
+        assertTrue(e.getMessage().contains("duplicate process name"),
+                "the refusal names its condition, distinct from the composed-collision"
+                        + " message: " + e.getMessage());
+        assertTrue(e.getMessage().contains("orders"),
+                "the refusal names the duplicated process so the operator knows which"
+                        + " declaration to fix: " + e.getMessage());
+    }
+
+    /**
+     * The varargs signature makes {@code Parsley.start(config)} compile with zero
+     * processes; it must refuse at the entry point rather than return a handle owning
+     * nothing, whose {@code healthy()} would be vacuously true forever and whose
+     * {@code status()} would break its own never-empty promise. Null array and null
+     * elements are pinned separately ({@link #nullProcessArrayIsRefusedByStart}); this is
+     * the empty case, refused before any broker contact.
+     */
+    @Test
+    void startWithZeroProcessesIsRefused() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> Parsley.start(ParsleyConfig.builder("unreachable:1", "app").build()),
+                "an empty start would otherwise return a runtime that reports healthy while"
+                        + " running nothing");
+        assertTrue(e.getMessage().contains("at least one process"),
+                "the refusal says what is missing: " + e.getMessage());
+    }
+
     /** Guarantee bearing configuration is unoverridable. */
     @Test
     void guaranteeBearingConfigurationIsUnoverridable() {
@@ -347,6 +393,24 @@ class ApiValidationTest {
                 "delete passes a null value deliberately, but its key must still address an entry");
     }
 
+    /**
+     * A null value on put is refused pointing at delete(): {@code Effects.StateWrite}
+     * accepts a null value deliberately, because null <em>is</em> delete()'s
+     * representation and tombstones pass through the seam unencoded (D29), so without
+     * this guard {@code put(store, key, null)} constructs a StateWrite byte-identical
+     * to {@code delete(store, key)} — silently removing the entry the caller meant to
+     * write instead of refusing the mistake (D73's declaration-site rule).
+     */
+    @Test
+    void nullPutValueIsRefusedPointingAtDelete() {
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> Effects.builder().put(store("s"), "k", null),
+                "put with a null value would otherwise be indistinguishable from delete():"
+                        + " a silent tombstone in place of the intended write");
+        assertTrue(e.getMessage().contains("use delete() to remove a key"),
+                "the refusal points at the API the caller meant: " + e.getMessage());
+    }
+
     /** A null received channel is refused at declaration. */
     @Test
     void nullReceivedChannelIsRefusedAtDeclaration() {
@@ -362,6 +426,47 @@ class ApiValidationTest {
                 () -> ProcessDefinition.named("p").receives(channel("t"), null),
                 "a null handler would otherwise surface as an NPE on the stream thread at first"
                         + " delivery — the exact failure mode D73 eliminated for serdes");
+    }
+
+    /**
+     * A second {@code receives} for one topic is refused naming the process and the
+     * topic: the builder registers inputs with {@code putIfAbsent}, so without this
+     * refusal the second declaration's handler would be dropped on the floor while the
+     * first kept handling the topic — application logic silently never invoked, the
+     * exact late-or-silent failure D73's declaration-site rule exists to prevent.
+     */
+    @Test
+    void secondReceivesForOneTopicIsRefused() {
+        ProcessDefinition.Builder builder = ProcessDefinition.named("shipper")
+                .receives(channel("orders"), (d, s) -> Effects.none());
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> builder.receives(channel("orders"), (d, s) -> Effects.none()),
+                "a second receives() for one topic would otherwise silently keep the first"
+                        + " handler and discard the second");
+        assertTrue(e.getMessage().contains("shipper already receives orders"),
+                "the refusal names the process and the topic so the operator knows which"
+                        + " declaration to remove: " + e.getMessage());
+    }
+
+    /**
+     * A duplicate store name is refused naming the process and the store: without this
+     * refusal {@code putIfAbsent} keeps the first {@code Store} instance, so both
+     * declarations would silently alias one state store and one changelog topic while
+     * the second declaration's serdes were never consulted (D73's declaration-site
+     * rule; the cross-instance ambiguity mirrors the sends() case
+     * {@link #sendTopicDeclaredThroughTwoInstancesIsRefused} pins).
+     */
+    @Test
+    void duplicateStoreDeclarationIsRefused() {
+        ProcessDefinition.Builder builder = ProcessDefinition.named("shipper")
+                .receives(channel("orders"), (d, s) -> Effects.none())
+                .stores(store("inventory"));
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> builder.stores(store("inventory")),
+                "a duplicate store name would otherwise alias one state store and one"
+                        + " changelog topic under two declarations");
+        assertTrue(e.getMessage().contains("shipper already declares store inventory"),
+                "the refusal names the process and the store: " + e.getMessage());
     }
 
     /** A null element among sends varargs is refused. */
@@ -384,6 +489,42 @@ class ApiValidationTest {
                 "a null element must be refused per the taxonomy, not surface as a bare NPE");
     }
 
+    /**
+     * A null sends varargs array — reachable through an explicit cast or a propagated
+     * null array variable — is refused with the taxonomy's exception and a message
+     * naming the process, where the loop over the array would otherwise throw a bare
+     * unattributed NPE (D73's one-rule taxonomy; the null-element case is pinned
+     * separately by {@link #nullElementAmongSendsVarargsIsRefused}).
+     */
+    @Test
+    void nullSendsChannelArrayIsRefused() {
+        ProcessDefinition.Builder builder = ProcessDefinition.named("p")
+                .receives(channel("in"), (d, s) -> Effects.none());
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> builder.sends((Channel<?, ?>[]) null),
+                "a null channel array must be refused per the taxonomy, not surface as the"
+                        + " builder's bare NPE iterating it");
+        assertTrue(e.getMessage().contains("p: sends requires a non-null channel array"),
+                "the refusal names the process and the mistake: " + e.getMessage());
+    }
+
+    /**
+     * A null stores varargs array is refused with the taxonomy's exception and a
+     * message naming the process, mirroring {@link #nullSendsChannelArrayIsRefused}:
+     * one rule for null components across the whole declaration surface (D73).
+     */
+    @Test
+    void nullStoresArrayIsRefused() {
+        ProcessDefinition.Builder builder = ProcessDefinition.named("p")
+                .receives(channel("in"), (d, s) -> Effects.none());
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> builder.stores((Store<?, ?>[]) null),
+                "a null store array must be refused per the taxonomy, not surface as the"
+                        + " builder's bare NPE iterating it");
+        assertTrue(e.getMessage().contains("p: stores requires a non-null store array"),
+                "the refusal names the process and the mistake: " + e.getMessage());
+    }
+
     /** A null streams property key is refused. */
     @Test
     void nullStreamsPropertyKeyIsRefused() {
@@ -402,6 +543,43 @@ class ApiValidationTest {
         assertTrue(e.getMessage().contains("client.id"), "the refusal names the property: " + e.getMessage());
     }
 
+    /**
+     * Null and blank bootstrap servers are refused at the builder with one message
+     * naming the parameter: a blank string would otherwise ride into every Streams
+     * configuration and fail much later as a Kafka client ConfigException naming no
+     * parsley declaration site (D73: declaration mistakes fail where they are written).
+     */
+    @Test
+    void blankBootstrapServersAreRefused() {
+        for (String bad : new String[] {null, "", "   "}) {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> ParsleyConfig.builder(bad, "app"),
+                    "bootstrapServers " + (bad == null ? "null" : "\"" + bad + "\"")
+                            + " must fail at the builder, not later inside the Kafka client");
+            assertTrue(e.getMessage().contains("bootstrapServers must be non-blank"),
+                    "the refusal names the parameter and the rule: " + e.getMessage());
+        }
+    }
+
+    /**
+     * A zero or negative metadata budget is refused naming the parameter: the budget
+     * bounds the causal metadata every message may carry (D52, enforced on receipt and
+     * on emission), so a non-positive bound would pass build() only to refuse the very
+     * first emission's metadata with a growth diagnosis when the actual mistake is a
+     * declaration typo.
+     */
+    @Test
+    void nonPositiveMetadataBudgetIsRefused() {
+        for (int bad : new int[] {0, -1}) {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> ParsleyConfig.builder("broker:9092", "p").metadataBudgetBytes(bad),
+                    "metadataBudgetBytes(" + bad + ") admits no metadata at all and must fail"
+                            + " at the declaration, not at the first step");
+            assertTrue(e.getMessage().contains("metadataBudgetBytes must be positive"),
+                    "the refusal names the parameter and the rule: " + e.getMessage());
+        }
+    }
+
     /** A null facts interval is refused. */
     @Test
     void nullFactsIntervalIsRefused() {
@@ -410,12 +588,26 @@ class ApiValidationTest {
                 "factsInterval(null) would otherwise NPE on isNegative() inside the builder");
     }
 
-    /** A zero or negative facts interval is refused. */
+    /**
+     * A zero or negative facts interval takes the positivity refusal, not the sibling
+     * sub-millisecond diagnosis: {@code factsInterval} runs two checks in sequence
+     * (non-positive, then sub-millisecond — D87), and zero and negative durations both
+     * satisfy {@code toMillis() < 1}, so deleting the positivity check would silently
+     * reroute them to "cannot be scheduled" — a diagnosis suggesting a coarser unit
+     * when the actual mistake is a direction-of-time error (a zero interval would spin
+     * the facts executor; the cadence is D20's).
+     */
     @Test
     void nonPositiveFactsIntervalIsRefused() {
-        assertThrows(IllegalArgumentException.class,
-                () -> ParsleyConfig.builder("broker:9092", "p").factsInterval(Duration.ZERO),
-                "a zero interval would spin the facts executor");
+        for (Duration bad : new Duration[] {Duration.ZERO, Duration.ofSeconds(-1)}) {
+            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                    () -> ParsleyConfig.builder("broker:9092", "p").factsInterval(bad),
+                    "factsInterval " + bad + " would spin or never run the facts round");
+            assertTrue(e.getMessage().contains("factsInterval must be positive"),
+                    "zero and negative take the positivity refusal, not the sub-millisecond"
+                            + " \"cannot be scheduled\" diagnosis their toMillis() also"
+                            + " satisfies: " + e.getMessage());
+        }
     }
 
     /**

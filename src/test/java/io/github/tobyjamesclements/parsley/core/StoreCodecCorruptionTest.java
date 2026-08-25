@@ -158,6 +158,49 @@ class StoreCodecCorruptionTest {
         refusal(blob);
     }
 
+    /**
+     * The header-value length refusal must name the bad length and the bytes actually
+     * present — `docs/failing-closed.md` promises a diagnosed stop, and D81 makes naming the
+     * condition the rule. The refusal's signature is shared with decodeHeld's catch-all wrap
+     * at the bottom, so this pin is message-level: deleting the header-value length guard
+     * still refuses — the oversized read underflows and the negative one throws
+     * NegativeArraySizeException, both caught and wrapped as a bare "corrupt held blob" —
+     * and only these diagnosis assertions go red. Remaining counts follow the validBlob()
+     * layout above: the length int at 29 is read at position 33 of the 66-byte blob.
+     */
+    @Test
+    void headerValueLengthDiagnosisNamesTheLengthAndTheBytesRemaining() {
+        ParsleyFailClosedException oversized = refusal(patched(29, 1000));
+        assertTrue(oversized.getMessage().contains("header value length 1000 with 33 bytes remaining"),
+                () -> "the refusal must weigh the declared length against the bytes present: "
+                        + oversized.getMessage());
+        ParsleyFailClosedException negative = refusal(patched(29, -2));
+        assertTrue(negative.getMessage().contains("header value length -2 with 33 bytes remaining"),
+                () -> "the refusal must name the non-sentinel negative length: " + negative.getMessage());
+    }
+
+    /**
+     * The sized-bytes refusal must say which field's length was bad — key, value or header
+     * key — and against how many bytes were present (D81). Signature shared with the
+     * catch-all wrap, so this pin is message-level: deleting the guard inside readSizedBytes
+     * still refuses every probe — negative lengths as NegativeArraySizeException and
+     * oversized ones as underflow, wrapped without the diagnosis — and only these assertions
+     * go red. Remaining counts follow the validBlob() layout: each length int is read at the
+     * offset the layout comment gives plus four, of the 66-byte blob.
+     */
+    @Test
+    void sizedBytesLengthDiagnosisNamesTheFieldAndTheBytesRemaining() {
+        ParsleyFailClosedException key = refusal(patched(10, -2));
+        assertTrue(key.getMessage().contains("key length -2 with 52 bytes remaining"),
+                () -> "the refusal must name the key field's bad length: " + key.getMessage());
+        ParsleyFailClosedException value = refusal(patched(15, 1000));
+        assertTrue(value.getMessage().contains("value length 1000 with 47 bytes remaining"),
+                () -> "the refusal must name the value field's bad length: " + value.getMessage());
+        ParsleyFailClosedException headerKey = refusal(patched(24, -7));
+        assertTrue(headerKey.getMessage().contains("header key length -7 with 38 bytes remaining"),
+                () -> "the refusal must name the header-key field's bad length: " + headerKey.getMessage());
+    }
+
     @Test
     void miscountedCausesRaiseTheRefusal() {
         byte[] blob = validBlob();

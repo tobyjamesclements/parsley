@@ -3095,3 +3095,429 @@ under prior state ignored them; that direction is fail-closed and named. Pinned 
 per-partition rule), `ProcessEngineTest#restoredFrontierNamingTheZeroTopicIdFailsClosed`,
 `TopologyWiringTest#unswallowedReaderRefusalInADeserializerKeepsItsReason`, and
 `SessionTimeoutInheritanceTest#longTypedValueIsRefusedLikeKafkasOwnParser`.
+
+### D89 — The eviction horizon is pinned by scripted-round evidence; name learning extracted as a seam
+
+**Context**
+
+Issue #95 (gap B): D44's eviction horizon — tracking state evicted only when no task has asked about an
+id for eight confirmation windows, floored at five minutes, with declared ids pinned — was implemented
+but unpinned: no test failed if the sweep never ran, if it evicted pinned ids, if it dropped the ask
+timestamp without the verdict, or if the floor was lost. The scripted-round harness also could not build
+a dead verdict on a non-pinned id at all: the name learning that corroboration requires (D75) lives
+inside `describeByIds`, the very seam a scripted double overrides.
+
+**Decision**
+
+`AdminFactsSourceEvictionTest` pins the four regression directions through `gather()` results alone —
+verdict and learned-name amnesia past the horizon with death re-earned through a fresh window, pinned
+survival, re-evaluation of a reappearing topic (whose verdict is sticky by construction inside the
+horizon, eviction being its only exit), and retention one second inside the horizon, pinning the
+five-minute floor. Because the sweep stamps the current round's ask set before it runs, an id asked in
+the current round can never evict; the tests drive later rounds through an unrelated sweeper channel.
+The one production change is a pure extraction: package-private `recordLearnedName` pulls the
+`topicNamesById` write out of `describeByIds` so a scripted describe honours the same learning contract
+as the real one. Each test was verified red under the exact mutation it exists to catch — sweep deleted;
+pinned guard dropped; `confirmedDead` retained through the sweep; floor weakened to 8 × window — and
+green on the revert.
+
+**Alternatives**
+
+* Reflection over the private tracking maps — rejected: the suite observes behaviour through the seams,
+  never fields, and reflective pins survive refactors they should fail.
+* Pinning the ids under test via the constructor's known-names map — rejected: pinning is exactly the
+  property under test; the non-pinned learning path must be exercised as itself, which is what forced
+  the extraction seam.
+
+**Cost**
+
+The sweep's `confirmedRecreated.remove` line is not separately pinned — a mutation dropping only that
+removal would survive these tests; a recreated-verdict eviction test needs the same scaffolding again
+and can join this class when it earns its keep. The horizon boundary is pinned at one second either
+side, not at the exact boundary millisecond.
+
+### D90 — The 80%-of-budget warning is pinned through a latch seam plus one stderr-capture wiring test
+
+**Context**
+
+Issue #95 (gap A): D53 promised a single warning at 80% of the metadata budget, but nothing pinned it:
+the threshold could drift and the once-per-process latch could vanish with the suite green — the shape
+EVIDENCE.md's standard calls worse than no test. The suite has no log-capture infrastructure,
+slf4j-simple exposes no appender API, and mock frameworks are banned.
+
+**Decision**
+
+The threshold and the latch move into `ParsleyProcessor.BudgetAlarm`, a package-private seam
+`observeFrontier` delegates to — pure extraction, no behaviour change; the latch deliberately survives
+task revival, since D53's "once" is per process, not per incarnation. `BudgetWarningTest` pins the
+boundary at exactly 80% in both directions and the latch across repeated consultations through the
+seam, and pins the wiring the seam cannot see — that the wall-clock punctuator still consults the
+alarm — by driving `TopologyTestDriver` punctuations over a 61-byte frontier inside a 64-byte budget's
+[80%, 100%) band and counting the warn line on a swapped `System.err`, where slf4j-simple writes:
+exactly one warning across repeated punctuations. All three regression directions were
+mutation-verified red before landing.
+
+**Alternatives**
+
+* Log-capture/appender infrastructure — rejected: slf4j-simple has none, and inventing a logging seam
+  for one warning outweighs one contained stderr swap behind a specific marker string.
+* Seam-only pinning — rejected: it leaves `observeFrontier` free to stop consulting the alarm with the
+  suite green.
+
+**Cost**
+
+The wiring test depends on the test logging backend writing warn lines to `System.err` (slf4j-simple's
+default under the surefire configuration); a backend swap moves that one test, not the seam tests.
+EVIDENCE.md carries no Operational section today, so this entry is the record of what catches the
+warning breaking.
+
+### D91 — Mid-run supersession is pinned structurally over ProcessEngine, not through the sim harness
+
+**Context**
+
+Issue #95 (gap C): D77's most reachable COVERED_POSITION_FED case — a superseded execution's facts
+round observing its successor's committed progress — was pinned only by a hand-written PositionFacts
+(`ProcessEngineTest#feedAtAReportCoveredPositionFailsClosedAsCoveredPositionFed`), which cannot catch
+the facts round failing to adopt committed coverage, and pinned nothing about the refusal message's
+recovery promise. The sim harness cannot stage the condition: SimProcess holds one engine per lifetime,
+MemoryOrderingStore has no fork, ingestFacts derives committed positions from the process's own
+progress so a successor-ahead report is structurally unreachable, and Scenario's RefusalLedger would
+flag a COVERED_POSITION_FED refusal as a violation.
+
+**Decision**
+
+`SupersessionTest` stages two lifetimes of one logical process directly over ProcessEngine: lifetime
+one commits positions 0..2; a successor engine restored from that committed image over an independent
+store (forked purely through the OrderingStore surface — an empty-prefix scan copies the just-committed
+image, mirroring a second instance restoring from the shared changelog) commits 3..5; the superseded
+engine's facts round is built from the successor engine's actual `fedUpTo`, the way
+`ParsleyProcessor#probeHints` derives read positions. One test pins the refusal (reason, supersession
+named in the message, drop and delivery both loud); the second pins the promise that a restart restored
+from the successor's committed state drops the covered replay silently (D10) and delivers the next
+position, so the refusal does not recur.
+
+**Alternatives**
+
+* Extending the sim harness with engine forking, successor-ahead facts and a justifiable-refusal ledger
+  entry — rejected: three orthogonal harness changes to reach one branch that two direct-engine tests
+  reach exactly, and the harness's own-progress facts derivation is a deliberate Host-obligation model,
+  not a gap to widen.
+* Leaving the fabricated-report pin as sole coverage — rejected: it invents the successor's numbers, so
+  a regression in onFacts adopting committed coverage is invisible to it.
+
+**Cost**
+
+The staging duplicates a small restore-and-fork idiom inside one test class; no production or harness
+surface changed. The sabotage sweep still has no mode for the silent-drop direction of this refusal
+(REDELIVER_REFEEDS bypasses the whole covered-position block, the delivery direction only); a
+TREAT_COVERED_FEED_AS_REPLAY mode would be warranted if the sweep is to cover this class, and its
+meta-test would have to run directly over ProcessEngine as SupersessionTest does — recorded here, not
+taken now.
+
+### D92 — ParsleyRuntime's diagnosis, changelog-read and identity-floor behaviours get unit seams; pins issue #95's gaps E–G
+
+**Context**
+
+Three load-bearing runtime behaviours ran with no unit evidence. `recordFailure`'s diagnosis taxonomy
+(D81) and its refusal-retaining merge (D55's supervisor contract) executed only inside the
+uncaught-exception handler, so a reordered branch, a shrunk cause-chain bound, or a last-writer-wins
+merge would have reached operators unnoticed. `readOrderingChangelog`'s stall deadline,
+finished-partition pause and READ_UNCOMMITTED end-offset snapshot (D79) executed only against a live
+broker, and D79/D82 already record why the hang shape cannot be held open deterministically from
+outside. The zero-topic-ID refusal (SPEC Substrate 1, Assumption 2; relied on by D83) was the one hard
+broker-floor tripwire, and EVIDENCE.md honestly recorded it had no executable check.
+
+**Decision**
+
+Three behaviour-preserving package-private extractions, following the D82/D86 precedent
+(`changelogReaderProperties`, `preCheckLooksUnstable`): `classifyFailure` — an enum-returning
+cause-chain walk with the same 64-link bound and branch order — plus `preferFailClosedDiagnosis`, the
+merge remapping; `readToEnds` — the polling loop, taking the consumer, the end-offset snapshot and the
+stall deadline, production still passing the 30s constant — plus `changelogEndOffsetIsolation`; and
+`requireTopicId`, the per-description refusal `resolveTopics` runs. Pinned by
+`RecordFailureDiagnosticsTest`, `ChangelogReadStallTest` (over a hand-rolled `Consumer` double; empty
+polls nap, a poll budget turns an endless loop into an assertion failure) and `TopicIdentityFloorTest`;
+each test was verified red under the exact regression it catches (eleven recorded trials: every
+classification branch deleted, the depth bound shrunk, the merge flipped to last-writer-wins, the stall
+throw removed, the pause removed, the isolation flipped, the zero-id check deleted, the reason
+renamed). The classification's outward-in precedence — an outer link named before a deeper one is
+reached, type checks before the message probe within a link — is now pinned as observed behaviour
+rather than left implicit.
+
+**Alternatives**
+
+* Integration tests through `start()` against the embedded broker — rejected: the pause/stall interplay
+  needs a partition held below its end while a sibling is live-written, un-holdable deterministically
+  from outside, and a healthy 4.3.1 broker can produce neither a zero topic ID nor a 66-link cause
+  chain.
+* Reflection over the private methods — rejected: the suite's convention is narrow package-private
+  seams the production caller actually uses.
+
+**Cost**
+
+None of substance. Five package-private names join `ParsleyRuntime`'s surface; each is a direct
+factoring of code that existed, called from the same sites with the same values.
+
+### D93 — The engine's error sites are pinned at reason-and-message level; the per-message budget gate is discriminated by raw length
+
+**Context**
+
+The error-reachability sweep found five ProcessEngine error sites with weak or no pinning. The
+undeclared-channel refusal and both shapes of the markDelivered head guard had no test at all: deleting
+either guard left the suite green while a message from outside the declared received set was absorbed
+silently (causes merged, body held) or a non-head markDelivered removed a mid-buffer hold with no
+exception. The emission budget check in `causesHeaderForEmission` was unreachable through any growth
+path — receipt and merge both police the budget as the frontier grows — so deleting it was invisible;
+its one route is a frontier restored by the constructor, which deliberately carries no budget check,
+under a budget smaller than the one the state was committed with. The per-message header-length gate
+shares `METADATA_BUDGET_EXCEEDED` with the merged-frontier growth gate, and the existing fresh-channel
+test stayed green when the gate alone was deleted. And the dead-channel re-feed's reason and diagnosis
+(the `OUT_OF_ORDER_FEED` half D77 left behind; D21's sentinel) were asserted nowhere.
+
+**Decision**
+
+All five pinned in `ProcessEngineTest`, no production change. The undeclared-channel and markDelivered
+pins assert exception type, message fragment, and that nothing was absorbed or removed (frontier,
+holds, coverage, true head). The emission check is reached the only way it can be: an eleven-channel
+frontier committed under the default budget, restored under a 64-byte one — construction and an empty
+facts round pass, and `causesHeaderForEmission` stops with the "expressing the causal frontier"
+diagnosis. The per-message gate is discriminated by construction: a canonically-encoded header whose
+channels already sit in a within-budget frontier can never itself exceed the budget (the encoded size
+is affine and monotone in the entry count), so the discriminating message carries the canonical
+encoding of exactly the frontier's channels at their frontier positions, padded past the budget — the
+growth gate provably cannot fire, and the gate's judgement of raw length *before* any decode is what
+produces the budget diagnosis. Deleting the gate alone degrades that refusal to `UNDECODABLE_METADATA`
+and turns only the new test red while `#metadataBeyondTheBudgetFailsClosedOnReceipt` stays green — the
+recorded differential. The dead-channel re-feed now pins `OUT_OF_ORDER_FEED` and "recorded as no longer
+existing" in the existing restart test. Eight mutation trials recorded: both guards deleted, both
+budget throws deleted, the reason swapped, three messages garbled — each red, each revert green.
+
+**Alternatives**
+
+* A budget check on the constructor's frontier restore, stopping at restore instead of emission —
+  rejected here: a behaviour change beyond a pinning pass. An operator who lowers the budget below an
+  already-committed frontier today gets the emission-time stop with its own diagnosis, which is D52's
+  documented third enforcement point; restore-time enforcement would need its own decision.
+* Pinning the per-message gate with an over-budget *valid* header over fresh channels — rejected: that
+  is exactly the existing test's shape, which the growth gate masks with the same Reason.
+
+**Cost**
+
+The discriminating header is not decodable (padding), so the test leans on the gate's
+judge-length-before-decode order; a deliberate reversal of that order would need to rewrite the test
+alongside the decision that reversed it.
+
+### D94 — Codec refusal diagnoses are pinned message-level; the position floor is pinned at the value objects
+
+**Context**
+
+The codec cluster's refusals were pinned only at the exception-type level. `CausesCodec.decode`'s two
+catch clauses — the BufferUnderflowException wrap ("truncated causes header") and the
+IllegalArgumentException wrap ("malformed causes header: ...") — had no test at all: deleting either
+let a raw runtime exception escape into the receive path with the suite green, unwinding D8's
+classified stop for exactly the inputs D3 calls hostile. The negative-count and per-entry
+negative-position guards share their signature with sibling checks (the count/length mismatch below;
+`Causes.of`'s backstop through the IAE wrapper), so a deleted guard still refused — with the wrong
+diagnosis — and every type-level test stayed green, the shape EVIDENCE.md's standard calls worse than
+an empty cell. `StoreCodec.decodeHeld`'s length diagnoses had the same shape against its catch-all
+wrap, degrading a named stop (`docs/failing-closed.md`; D81) to a bare "corrupt held blob". And the
+value-object floor — `ReceivedMessage`'s negative-position refusal and `Causes.of`'s negative/null
+refusal, the very backstop the codec leans on — was itself unpinned.
+
+**Decision**
+
+Pure test additions; no production change, every site being reachable through crafted bytes or direct
+construction. `CausesCodecTest` gains two classification pins (a sub-5-byte header, and an entry whose
+negative partition only ChannelId's constructor refuses, must both come back as
+UndecodableMetadataException, never raw) and two message-level pins ("negative cause count -1";
+"negative position -5 on <channel>" from the per-entry check, not the backstop's wrapped text).
+`StoreCodecCorruptionTest` gains message-level pins for the header-value-length and readSizedBytes
+diagnoses, exact against validBlob()'s documented layout. `PositionRefusalTest` pins the value-object
+floor and records `Causes.of` as the backstop behind the codec's per-entry check. Eight mutations
+verified red and reverted green; in the shared-signature trials the type-level siblings stayed green
+under the deleted guard, which is precisely the gap the message pins close.
+
+**Alternatives**
+
+* Type-level assertions only — rejected: every deleted-guard mutation survives them through the sibling
+  or backstop refusal.
+* Full message equality on the store-blob diagnoses — rejected: the discriminating fragment (field
+  name, length, bytes remaining) is the load-bearing part; wholesale equality couples tests to
+  incidental prefix wording without catching more.
+
+**Cost**
+
+The truncation pin depends on a decode-order fact its Javadoc records: the count/length check refuses
+longer truncations arithmetically before an entry read can underflow, so the underflow catch's only
+live entrances are the version byte and the count int. Adjacent non-assigned diagnoses remain
+type-pinned only: CausesCodec's count/length mismatch text, and StoreCodec's header-count and
+cause-count texts — each would need its own message pin to catch a garbled diagnosis.
+
+### D95 — The processor's refusal sites, the bootstrap join wait and the facts round's abort paths get direct pins
+
+**Context**
+
+The error-reachability sweep found eight error sites in this cluster with no unit evidence. In
+`ParsleyProcessor`, the write-key serializer returning null (`planWrite`'s D81 refusal), the read-key
+serializer that throws (the D87 latch site — its returns-null sibling was pinned, the throwing shape
+was not) and the undeclared-topic guard in `process` were each deletable with the suite green. In
+`GroupMembershipCommitter`, nothing pinned the sub-millisecond session-timeout refusal, the join
+deadline — the site whose deletion turns a diagnosed bootstrap failure into an infinite hang
+(Operational 2) — its protocol-conflict diagnosis and cause, or the interrupted-backoff refusal. In
+`AdminFactsSource`, the rethrow that aborts a round on a describe failure outside D83's
+unknown/invalid tolerance was unreachable by the scripted-round tests, which override `describeByIds`
+wholesale and replace the very classification under test; the interrupt rethrow out of the
+earliest-offset wait was equally unpinned.
+
+**Decision**
+
+Two behaviour-preserving extractions, following the D89/D92 precedent. `GroupMembershipCommitter.join`'s
+wait loop becomes the package-private static `awaitAssignment(Consumer, Duration)` — the identical
+statement sequence, the consumer arriving as its interface — so `BootstrapMemberJoinTest` pins the
+deadline, its protocol-conflict explanation and cause, and the interrupt refusal over a hand-rolled
+never-assigned consumer double (empty polls nap; a poll budget turns an endless loop into an assertion
+failure; the interrupt is staged by self-interrupting ahead of the backoff's sleep).
+`AdminFactsSource.describeByIds`' admin call becomes `describeByIdFutures`, mirroring
+`earliestOffsetFutures`, so `AdminFactsSourceRoundAbortTest` fails a `KafkaFutureImpl` through the real
+tolerate-or-abort classification: the abort resets the confirmation streak — a name-gone run
+interrupted by the outage reopens rather than matures, an unbroken post-outage run still confirms —
+and a second test interrupts a gather thread blocked on an incomplete offset future and asserts the
+round aborts interrupted instead of completing under the per-partition warning. `ParsleyProcessor`
+needed no seam: `TopologyWiringTest` stages all three sites through the driver, the undeclared-topic
+guard via the width arm (a zero-width `TopicInfo` against the driver's task 0 exercises the same
+`partition < width` predicate as a task numbered at or above a real topic's width — the only reachable
+spelling, since the driver refuses records on unconnected topics). Every test was verified red under
+the exact mutation it exists to catch — nine recorded trials — and green on the revert.
+
+**Alternatives**
+
+* A MockAdminClient or mock-framework describe — rejected: the suite's convention is hand-rolled
+  doubles behind narrow package-private seams, and the future-level seam keeps the classification
+  itself real where a scripted `describeByIds` replaces it.
+* Pinning the join deadline against the embedded broker with a held group — rejected: the
+  contested-group shape needs a live Streams member ground against for the full deadline; the consumer
+  double stages the same loop deterministically in milliseconds, and `BootstrapIntegrationTest` keeps
+  the real-broker join covered.
+* Reflection over the private wait loop instead of the extraction — rejected: the suite's convention is
+  seams the production caller actually uses.
+
+**Cost**
+
+Two package-private names join the surface, each a direct factoring of code that existed, called from
+the same sites with the same values. The width-arm staging leans on `TopicInfo` not validating a
+positive width; if it ever does, that test needs a task numbered above zero instead. The conflict-path
+join tests spend real time in the loop's genuine 500ms backoff. EVIDENCE.md still carries no
+Operational section, so this entry is the record of what catches the join deadline and its diagnoses
+breaking.
+
+### D96 — Start-path refusal decisions are pinned through scripted functional seams; extends D92 into the determination and recheck loops
+
+**Context**
+
+Four start-path decisions ran with no unit evidence, three of them safety-bearing. describeChangelog's
+corroboration loop (D84) could regress to concluding absence from a generic transient — a timeout
+resuming a stateful process as a first start — with nothing red. The changelog reader's width
+corroboration (D88) could be deleted and a lagging broker's empty metadata answer scanned vacuously.
+refuseLostOrderingState's pre-refusal second look (D84) could be deleted or inverted, misdiagnosing a
+healthy concurrent sibling as ORDERING_STATE_LOST, whose printed remedy deletes the offsets that
+sibling just committed. And the D86 pre-check retry was pinned only through its shape predicate, not
+its relist wiring or interrupted arm.
+
+**Decision**
+
+Four behaviour-preserving package-private extractions, following D92's precedent, each a direct
+factoring called from the same site with the same values: describeChangelogCorroborated over a
+hand-rolled ChangelogDescribe (the retry loop verbatim); requireCorroboratedWidth (the comparison and
+retryable refusal verbatim); refuseLostOrderingState made static over a ChangelogRecheck returning
+Optional<ChangelogView> — production supplies describeChangelog(...).map(readOrderingChangelog(...)),
+preserving the lazy per-entry re-read and the presence-to-shape mapping; and awaitStablePreCheck over a
+StableOffsetListing. Pinned by PriorStateDeterminationTest, LostOrderingStateRecheckTest, and additions
+to ChangelogReadStallTest and BootstrapPreCheckTest, plus one embedded-broker case for the
+declared-topics resolution refusal
+(BootstrapIntegrationTest#aDeclaredTopicThatDoesNotExistRefusesToStartNamingTheResolutionFailure).
+Fourteen recorded mutation trials, each red under its exact regression and green on revert: the
+generic-failure arm falling through to absent, single-answer absence, both swallowed interrupts, the
+width guard deleted and inverted, the recheck throw deleted and inverted, the shape and provenance
+strings garbled, the bootstrap-stamp and records-present skips deleted, the relist loop inverted, and
+the resolution wrap swapped for a bare rethrow.
+
+**Alternatives**
+
+* Driving the concurrent-lifetime recheck through the embedded broker — rejected: it needs a sibling's
+  commit to land in the window between the first changelog read and the offset listing, an interleaving
+  no external test can hold open deterministically.
+* Pinning the three remaining catch-wrap diagnosis shells ("prior ordering state could not be read",
+  "initial read positions could not be established", "committed read positions could not be listed") —
+  declined for now: each needs a consumer-factory, committer-factory or Admin seam solely to reach a
+  wrap whose interior refusals are already pinned, and a wrap-helper unit test that feeds an exception
+  to a rethrow proves nothing. The Admin-injection seam through listStableOffsets is the refactor to
+  take if the third is ever judged worth a test.
+
+**Cost**
+
+Four package-private names and three one-method functional interfaces join ParsleyRuntime's surface.
+The corroborated-absence test sleeps through the loop's real half-second backoffs (~1s once per suite
+run). The seams pin the decisions, not their call sites: deleting a seam's invocation in production is
+caught only by the integration paths that reach it, the same residual D92 carries.
+
+### D97 — Review corrections to the D89–D96 pins: two trials that did not discriminate, seam waits parameterized, wiring gaps closed, two claims narrowed (corrects D89, D92, D95, D96)
+
+**Context**
+
+An adversarial nine-angle review of the D89–D96 pinning work found three pins whose recorded
+mutation trials did not hold at the commit they were recorded for, plus wiring the extractions had
+left uncovered. (1) `classifyFailure`'s depth pin probed depth 65 where the first excluded depth is
+64, so D92's trial covered only the shrink direction — growing the bound to 65 passed, silently
+desynchronising it from `ParsleyFailClosedException.findIn`'s 64 (confirmed empirically before
+fixing). (2) `AdminFactsSourceRoundAbortTest`'s streak-reset leg landed its post-outage sighting at
+exactly one confirmation window, where `observeWindow`'s blind-gap rule restarts the window
+regardless of the abort's clears — deleting `deadWindows.clear()`/`recreatedWindows.clear()` left
+the suite green, so D95's recorded red trial for that mutation did not hold (confirmed empirically).
+(3) The production `ChangelogRecheck` lambda in `commitInitialPositions` was unpinned: replacing it
+with the stale first view passed the entire suite, the deleted-topic integration tests asserting
+`reason()` only (confirmed empirically). Additionally: `readToEnds` rendered sub-second stall
+deadlines as "0s"; `describeChangelogCorroborated`, `awaitStablePreCheck` and `awaitAssignment`
+hardcoded their sleeps so their scripted tests paid ~3s of real waits and the pre-check's give-up
+arm was untestable; `awaitStablePreCheck` took both an eager first listing and the relist seam, so
+production spelled `listStableOffsets` twice with the first listing's wiring uncovered; and
+`recordFailure`'s enum-to-remedy switch and merge wiring were unpinned behind the D92 extraction.
+
+**Decision**
+
+The depth probe moved to depth 64 (`depthSixtyThreeIsClassifiedAndDepthSixtyFourIsNot`); both bound
+directions now red. The streak-reset test lands its first post-outage sighting strictly inside the
+window and asserts no confirmation where an un-reset anchor would mature; the clears-deleted
+mutation is now red. The two deleted-topic integration tests assert the missing-topic loss shape,
+which the stale-view recheck mutation flips — red now, green before. Sub-second stall deadlines
+render in milliseconds (the production 30s message is byte-identical). All three loop seams take
+their waits as parameters — production passes the exact prior constants — and the pre-check's
+give-up arm is pinned (a listing partial past the budget is adopted for the join, per D86) through
+the now-single `StableOffsetListing` seam. `recordFailure` and the runtime's Admin-bearing
+constructor were relaxed to package-private so the merge wiring (a refusal survives surrounding
+transients) and the per-diagnosis remedy lines (stderr capture, D90's technique) are pinned
+directly. The `recordLearnedName` seam is retired (corrects D89): the eviction double now scripts
+`describeByIdFutures` — the D95 seam — so the real `describeByIds` performs both classification and
+learning; all four eviction trials were re-run red/green after the rework. Two claims were narrowed
+rather than forced: the isolation pin covers the spelling of `changelogEndOffsetIsolation` only
+(READ_UNCOMMITTED is also the `ListOffsetsOptions` default, and nothing pins the `listOffsets` call
+site), and the width-corroboration pin covers the decision, not its call site — both residuals
+recorded here, both closable by the Admin-level seam D96 already names. Shared test scaffolding was
+consolidated (`RefusingConsumer`, `ScriptedAdminFacts`, `TestChains` with findIn's 64-link bound,
+`StartPathFixtures`, `EngineTestFactory.plain`), with the four riskiest pins re-verified by
+mutation afterwards.
+
+**Alternatives**
+
+* Treating the two non-discriminating trials as harmless because the behaviours still hold —
+  rejected: EVIDENCE.md's standard calls a test that stays green when the behaviour breaks worse
+  than no test, and both entries claimed trials that were not discriminating at the recorded commit.
+* Pinning the isolation and width-corroboration call sites now — rejected as disproportionate for
+  this pass: each needs an Admin/consumer-level injection seam; D96's Alternatives already name that
+  refactor as the one to take.
+
+**Cost**
+
+`ParsleyRuntime`'s constructor and `recordFailure` are package-private for the wiring pins — the
+test constructs the runtime with a null Admin the failure path never touches. The streak-reset
+test's final confirmation exercises `observeWindow`'s `>=` boundary at equality; a deliberate move
+to a strict bound would need that assertion revisited alongside the decision.

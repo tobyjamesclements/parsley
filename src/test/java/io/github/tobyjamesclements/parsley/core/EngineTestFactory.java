@@ -1,5 +1,6 @@
 package io.github.tobyjamesclements.parsley.core;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -32,5 +33,13 @@ public final class EngineTestFactory {
                 ? Sabotage.NONE
                 : new Sabotage(Set.of(Sabotage.Mode.valueOf(mode.name())));
         return new ProcessEngine(processName, receivedChannels, store, sabotage);
+    }
+
+    /**
+     * A received message with no causal stamp: the uid doubles as key and value, and the
+     * position doubles as the offset.
+     */
+    public static ReceivedMessage plain(ChannelId channel, long position, String uid) {
+        return new ReceivedMessage(channel, position, position, uid.getBytes(), uid.getBytes(), List.of());
     }
 }

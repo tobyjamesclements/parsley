@@ -9,6 +9,7 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Establishes the frozen wire format of the causal frontier.
@@ -148,5 +149,98 @@ class CausesCodecTest {
         ByteBuffer buffer = ByteBuffer.allocate(5);
         buffer.put(CausesCodec.FORMAT_VERSION).putInt(-1);
         assertThrows(CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()));
+    }
+
+    /**
+     * A header too short for the read the grammar promises next must surface as the
+     * classified {@code UndecodableMetadataException} with the "truncated causes header"
+     * diagnosis — never as a raw {@code BufferUnderflowException} escaping decode into the
+     * receive path unnamed (Safety 7; D3's strict decode; D8's fail-closed stop). The
+     * count/entry length check refuses any longer truncation arithmetically before an entry
+     * read can underflow, so the underflow catch's only live entrances are the version byte
+     * and the count int — the sub-5-byte headers both probes exercise. Regression caught:
+     * deleting the {@code BufferUnderflowException} catch clause lets both probes throw the
+     * raw underflow and fails both {@code assertThrows}.
+     */
+    @Test
+    void truncationBelowTheCountIsClassifiedNotARawUnderflow() {
+        byte[] midCount = {CausesCodec.FORMAT_VERSION, 0, 0};
+        CausesCodec.UndecodableMetadataException insideCount = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(midCount),
+                "a header ending inside its count int must classify as undecodable, not underflow raw");
+        assertEquals("truncated causes header", insideCount.getMessage(),
+                "the diagnosis must name the truncation");
+
+        CausesCodec.UndecodableMetadataException empty = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(new byte[0]),
+                "a zero-byte header must classify as undecodable, not underflow raw");
+        assertEquals("truncated causes header", empty.getMessage(),
+                "the diagnosis must name the truncation");
+    }
+
+    /**
+     * An entry malformed below the codec's own checks — a negative partition, which only
+     * {@link ChannelId}'s constructor refuses — must come back classified as
+     * "malformed causes header" carrying the constructor's own refusal text, never as the
+     * raw {@code IllegalArgumentException} escaping decode (Safety 7; D3; D81's principle
+     * that a stop names its condition). Regression caught: deleting the
+     * {@code IllegalArgumentException} catch clause lets the constructor's IAE escape raw
+     * and fails the {@code assertThrows}.
+     */
+    @Test
+    void malformedEntryBelowTheCodecsOwnChecksIsClassified() {
+        ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 28);
+        buffer.put(CausesCodec.FORMAT_VERSION).putInt(1);
+        buffer.putLong(1).putLong(1).putInt(-3);
+        buffer.putLong(7);
+        CausesCodec.UndecodableMetadataException thrown = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()),
+                "a negative partition must classify as undecodable, not escape as the constructor's IAE");
+        assertTrue(thrown.getMessage().startsWith("malformed causes header: "),
+                () -> "the diagnosis must carry the malformed-header classification: " + thrown.getMessage());
+        assertTrue(thrown.getMessage().contains("partition must be non-negative: -3"),
+                () -> "the diagnosis must carry the constructor's own refusal: " + thrown.getMessage());
+    }
+
+    /**
+     * A negative declared count must be diagnosed as exactly that. The refusal signature is
+     * shared with the count/length mismatch check immediately below it (both throw
+     * {@code UndecodableMetadataException}), so this pin is message-level (D81): deleting
+     * the negative-count guard still refuses — as "cause count -1 does not match remaining
+     * length 0" — and only this diagnosis assertion goes red.
+     */
+    @Test
+    void negativeCountIsDiagnosedAsNegativeCauseCount() {
+        ByteBuffer buffer = ByteBuffer.allocate(5);
+        buffer.put(CausesCodec.FORMAT_VERSION).putInt(-1);
+        CausesCodec.UndecodableMetadataException thrown = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()),
+                "a negative count must be undecodable");
+        assertTrue(thrown.getMessage().contains("negative cause count -1"),
+                () -> "the diagnosis must name the negative count itself, not a length mismatch: "
+                        + thrown.getMessage());
+    }
+
+    /**
+     * A negative position must be diagnosed by the codec's own per-entry check, naming the
+     * position and its channel. The signature is shared with every other refusal in decode,
+     * and the entry is backstopped by {@code Causes.of}'s validation through the
+     * malformed-header wrapper (see {@code PositionRefusalTest}), so this pin is
+     * message-level (D81): deleting the per-entry guard still refuses — wrapped as
+     * "malformed causes header: position must be non-negative on ..." — and only this
+     * diagnosis assertion goes red.
+     */
+    @Test
+    void negativePositionIsDiagnosedPerEntryNamingItsChannel() {
+        ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 28);
+        buffer.put(CausesCodec.FORMAT_VERSION).putInt(1);
+        CH_A.writeTo(buffer);
+        buffer.putLong(-5);
+        CausesCodec.UndecodableMetadataException thrown = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()),
+                "a negative position must be undecodable");
+        assertTrue(thrown.getMessage().contains("negative position -5 on " + CH_A),
+                () -> "the diagnosis must be the per-entry check's own, not the Causes.of backstop's: "
+                        + thrown.getMessage());
     }
 }

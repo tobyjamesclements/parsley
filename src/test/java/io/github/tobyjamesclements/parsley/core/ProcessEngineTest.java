@@ -10,6 +10,7 @@ import java.util.UUID;
 
 import io.github.tobyjamesclements.parsley.sim.MemoryOrderingStore;
 
+import static io.github.tobyjamesclements.parsley.core.EngineTestFactory.plain;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,10 +25,6 @@ class ProcessEngineTest {
     private static final ChannelId C1 = new ChannelId(new UUID(9, 1), 0);
     private static final ChannelId C2 = new ChannelId(new UUID(9, 2), 0);
     private static final Map<ChannelId, String> BOTH = Map.of(C1, "c1", C2, "c2");
-
-    private static ReceivedMessage plain(ChannelId channel, long position, String uid) {
-        return new ReceivedMessage(channel, position, position, uid.getBytes(), uid.getBytes(), List.of());
-    }
 
     private static ReceivedMessage caused(ChannelId channel, long position, String uid, Map<ChannelId, Long> causes) {
         byte[] header = CausesCodec.encode(Causes.of(causes));
@@ -313,7 +310,15 @@ class ProcessEngineTest {
                 "causes learned from a dropped-but-received message must be expressed on sends");
     }
 
-    /** Feed on a dead channel fails closed even after restart. */
+    /**
+     * Feed on a dead channel fails closed even after restart — and with the diagnosis D77
+     * assigned it: the dead-channel re-feed keeps {@code OUT_OF_ORDER_FEED} (D77 carved
+     * {@code COVERED_POSITION_FED} out for report/feed contradictions and left feed-order
+     * breaches, this one included, behind), and the message names the channel as recorded no
+     * longer existing (D21's end-of-channel sentinel) rather than accusing a generic order
+     * breach. Catches the reason being swapped or the dead-channel diagnosis being garbled,
+     * which the previous type-only assertThrows stayed green through.
+     */
     @Test
     void feedOnADeadChannelFailsClosedEvenAfterRestart() {
         MemoryOrderingStore store = new MemoryOrderingStore();
@@ -325,8 +330,13 @@ class ProcessEngineTest {
         store.commit();
 
         ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
-        assertThrows(ParsleyFailClosedException.class, () -> restarted.onReceive(plain(C1, 1, "ghost")),
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+                () -> restarted.onReceive(plain(C1, 1, "ghost")),
                 "a channel recorded as dead can never legitimately feed again; this must not be silently dropped");
+        assertEquals(ParsleyFailClosedException.Reason.OUT_OF_ORDER_FEED, e.reason(),
+                "the dead-channel re-feed is a feed-order breach, the half D77 left with OUT_OF_ORDER_FEED");
+        assertTrue(e.getMessage().contains("recorded as no longer existing"),
+                "the diagnosis names the dead-channel condition, not a generic order breach, got: " + e.getMessage());
     }
 
     /** Unknown store format fails closed. */
@@ -427,5 +437,177 @@ class ProcessEngineTest {
                 "state carrying the reserved zero id must refuse, not resume and re-express it");
         assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason(),
                 "the refusal names the untrusted-state condition");
+    }
+
+    /**
+     * Catches the undeclared-channel guard vanishing from {@code onReceive}: without it a
+     * message from a channel outside the declared received set is absorbed silently — its
+     * causes merge into the frontier and its body enters the hold-back buffer — instead of
+     * being refused before anything is taken. The refusal is a breach of how the host drives
+     * the engine (SPEC Host obligation 1: the feed is the declared channels, in order), not a
+     * protocol fail-closed stop, so what is pinned is its {@code IllegalArgumentException}
+     * type, its naming of the condition, and that the refused message left no residue in
+     * frontier, holds or coverage.
+     */
+    @Test
+    void receiptOnAnUndeclaredChannelIsRefusedAndAbsorbsNothing() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", Map.of(C1, "c1"), store);
+
+        IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
+                () -> engine.onReceive(caused(C2, 0, "M", Map.of(C1, 7L))),
+                "a message on a channel this process never declared must refuse loudly, not be absorbed");
+        assertTrue(e.getMessage().contains("received on undeclared channel"),
+                "the refusal names the undeclared-channel condition, got: " + e.getMessage());
+        assertEquals(0, engine.heldCountTotal(),
+                "a refused undeclared-channel message must not enter the hold-back buffer");
+        assertEquals(Causes.none(), engine.frontierSnapshot(),
+                "the refused message's causes must not leak into the frontier");
+        assertTrue(engine.fedUpTo(C2).isEmpty(),
+                "a refused undeclared-channel message must not advance coverage for its channel");
+    }
+
+    /**
+     * Catches the head guard vanishing from {@code markDelivered} in its empty shape: a
+     * channel holding nothing — never fed, or already drained by the delivery just recorded —
+     * has no head, and without the guard the equality probe dereferences a null head (an
+     * undiagnosed NullPointerException) instead of the {@code IllegalStateException} naming
+     * the hold-back-buffer head contract (the buffer and its head rule: D5). The
+     * double-delivery of one position is the classic host regression the second leg refuses.
+     */
+    @Test
+    void markDeliveredWithNothingHeldOnTheChannelRefusesAsNotTheHead() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        engine.onReceive(plain(C1, 0, "A"));
+
+        IllegalStateException neverFed = assertThrows(IllegalStateException.class,
+                () -> engine.markDelivered(C2, 0),
+                "markDelivered on a channel holding nothing has no head to match and must refuse");
+        assertTrue(neverFed.getMessage().contains("is not the head of the hold-back buffer"),
+                "the refusal names the hold-back head contract, got: " + neverFed.getMessage());
+
+        engine.onReceive(plain(C2, 0, "B"));
+        engine.markDelivered(C2, 0);
+        IllegalStateException redelivered = assertThrows(IllegalStateException.class,
+                () -> engine.markDelivered(C2, 0),
+                "a second markDelivered of the same position finds the buffer empty and must refuse, not repeat");
+        assertTrue(redelivered.getMessage().contains("is not the head of the hold-back buffer"),
+                "the double-delivery refusal names the same contract, got: " + redelivered.getMessage());
+
+        assertEquals(1, engine.heldCount(C1), "the refusals must not disturb another channel's holds");
+    }
+
+    /**
+     * Catches the head guard vanishing from {@code markDelivered} in its silent shape: with
+     * the buffer non-empty, a non-head position falls through to the {@code removeIf}
+     * mid-buffer removal — delivery recorded for a message that never passed the head rule,
+     * the frontier advanced past its unblocked predecessors, per-channel order (SPEC Safety 3)
+     * broken with no exception anywhere. D67 recorded the adjacent equivalent-mutant shape at
+     * the old L482; this pins the non-equivalent one: the guard must refuse and leave the
+     * buffered holds and the frontier exactly as they were.
+     */
+    @Test
+    void markDeliveredAtANonHeadPositionRefusesAndLeavesHoldsAndFrontierUntouched() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        engine.onReceive(plain(C1, 0, "A0"));
+        engine.onReceive(plain(C1, 1, "A1"));
+        engine.onReceive(plain(C1, 2, "A2"));
+
+        IllegalStateException e = assertThrows(IllegalStateException.class,
+                () -> engine.markDelivered(C1, 1),
+                "markDelivered at a held but non-head position must refuse, never remove mid-buffer");
+        assertTrue(e.getMessage().contains("is not the head of the hold-back buffer"),
+                "the refusal names the hold-back head contract, got: " + e.getMessage());
+        assertEquals(3, engine.heldCount(C1),
+                "a refused non-head delivery must leave every buffered hold in place");
+        assertEquals(Causes.none(), engine.frontierSnapshot(),
+                "a refused non-head delivery must not advance the frontier");
+        DeliverableMessage head = engine.nextDeliverable().orElseThrow(
+                () -> new AssertionError("the untouched buffer must still offer its true head"));
+        assertEquals(0, head.position(), "the head of the hold-back buffer is still position 0");
+    }
+
+    /**
+     * Catches the emission budget check in {@code causesHeaderForEmission} being deleted. The
+     * only route to it is a frontier restored by the constructor, which deliberately carries
+     * no budget check of its own: receipt (the per-message gate) and merge (the growth gate)
+     * both police the budget as the frontier grows, so a frontier can stand beyond the budget
+     * only by being restored from state committed under a larger one. Without the emission
+     * check that restored frontier is encoded and handed back oversized, riding toward the
+     * broker's record-size wall with no parsley diagnosis — exactly what D52's third
+     * enforcement point exists to stop.
+     */
+    @Test
+    void aFrontierRestoredPastAShrunkenBudgetFailsClosedAtEmissionNotAtRestore() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine generous = new ProcessEngine("p", BOTH, store);
+        java.util.TreeMap<ChannelId, Long> wide = new java.util.TreeMap<>();
+        for (int i = 0; i < 10; i++) {
+            wide.put(new ChannelId(new UUID(30, i + 1), 0), 1L);
+        }
+        generous.onReceive(caused(C1, 0, "M", wide));
+        generous.markDelivered(C1, 0);
+        generous.flushHolds();
+        store.commit();
+
+        // Neither the restore path nor the facts round checks the budget, so both must pass
+        // here and the stop below is attributable to the emission check alone.
+        ProcessEngine constricted = new ProcessEngine("p", BOTH, store, 64);
+        constricted.onFacts(PositionFacts.EMPTY);
+        assertEquals(11, constricted.frontierSize(), "staging: the wide frontier was restored intact");
+        assertTrue(constricted.frontierBytes() > 64,
+                "staging: the restored frontier already exceeds the shrunken budget");
+
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+                constricted::causesHeaderForEmission,
+                "expressing a frontier beyond the budget must fail closed, not hand back an oversized header");
+        assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason(),
+                "the stop carries the budget diagnosis (D52)");
+        assertTrue(e.getMessage().contains("expressing the causal frontier"),
+                "the diagnosis names the emission site, not the receipt or merge gates, got: " + e.getMessage());
+    }
+
+    /**
+     * Discriminates the per-message header-length gate from the merged-frontier growth gate,
+     * which share {@code METADATA_BUDGET_EXCEEDED}:
+     * {@code #metadataBeyondTheBudgetFailsClosedOnReceipt} uses fresh channels, so deleting
+     * the per-message gate lets the growth gate fire with the same reason and that test stays
+     * green. A canonically-encoded header whose channels already sit in a within-budget
+     * frontier can never itself exceed the budget — the encoded size is affine in the entry
+     * count — so this test's oversized header is the canonical encoding of exactly the
+     * frontier's channels at exactly their frontier positions, padded past the budget: the
+     * growth gate cannot fire (nothing merges, and even a merge would leave the frontier's
+     * size unchanged and within budget), and only the per-message gate, which judges raw
+     * length before any decode, can produce the budget diagnosis (D52's receipt enforcement
+     * point). Deleting that gate alone turns this refusal into UNDECODABLE_METADATA and this
+     * test red while the fresh-channel test stays green.
+     */
+    @Test
+    void anOversizedHeaderNamingOnlyFrontierChannelsIsRefusedByThePerMessageGate() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store, 100);
+        ChannelId f1 = new ChannelId(new UUID(31, 1), 0);
+        ChannelId f2 = new ChannelId(new UUID(31, 2), 0);
+        engine.onReceive(caused(C1, 0, "A", Map.of(f1, 5L, f2, 9L)));
+        assertEquals(Causes.of(Map.of(f1, 5L, f2, 9L)), engine.frontierSnapshot(),
+                "staging: both channels sit in the frontier, and the frontier is within budget");
+
+        byte[] oversized = java.util.Arrays.copyOf(
+                CausesCodec.encode(Causes.of(Map.of(f1, 5L, f2, 9L))), 101);
+        ReceivedMessage message = new ReceivedMessage(C1, 1, 1, "B".getBytes(), "B".getBytes(),
+                List.of(new HeaderKV(CausesCodec.HEADER_KEY, oversized)));
+
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+                () -> engine.onReceive(message),
+                "a header beyond the budget must be refused on raw length before any decode");
+        assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason(),
+                "an oversized header's diagnosis is the budget, not undecodability (D52)");
+        assertTrue(e.getMessage().contains("carries 101 bytes of causal metadata"),
+                "the diagnosis states the per-message gate's own measurement, got: " + e.getMessage());
+        assertEquals(1, engine.heldCountTotal(), "only the staging message may be held");
+        assertEquals(Causes.of(Map.of(f1, 5L, f2, 9L)), engine.frontierSnapshot(),
+                "the refused message must not have advanced the frontier");
     }
 }
