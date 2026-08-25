@@ -23,7 +23,13 @@ receiver fails closed, and must not treat the metadata as absent.
 
 ## Grammar
 
-All integers are big-endian. Version 1 is the only version.
+All fixed-width integers are big-endian. Two versions are defined. Version 1 is the flat
+grammar every writer emits today; version 2 is the grouped grammar readers also accept, and
+writers adopt at the flip D98 schedules. Both express exactly the same cause sets: the same
+channels, the same positions, in the same channel order. A version byte other than `0x01` or
+`0x02` is undecodable, and readers must not guess forward compatibility.
+
+### Version 1 — flat
 
 ```
 value      := version entryCount entry*
@@ -37,8 +43,7 @@ position   := int64      -- >= 0, a Kafka offset on that topic-partition
 
 Every constraint below is mandatory. Violating any one makes the value undecodable.
 
-1. The version byte is `0x01`. Any other value is undecodable, and readers must not guess
-   forward compatibility.
+1. The version byte is `0x01`.
 2. `entryCount` is non-negative, and the value contains exactly `entryCount` entries with no
    trailing bytes.
 3. Entries ascend strictly in the unsigned lexicographic order of their 20-byte channel
@@ -52,12 +57,51 @@ Every constraint below is mandatory. Violating any one makes the value undecodab
    ever produced such an entry, because writers only express channels the substrate named —
    D83 records the reasoning.)
 
+### Version 2 — grouped
+
+The same entries, with each topic ID written once over its partitions and the structural
+fields carried as varints. An entry here is one `pair` under its group's `topicId`.
+
+```
+value          := version topicCount group*
+version        := uint8    -- 0x02
+topicCount     := varint   -- number of groups, >= 0
+group          := topicId partitionCount pair*
+topicId        := 16 bytes -- as in version 1
+partitionCount := varint   -- number of pairs in the group, >= 1
+pair           := partition position
+partition      := varint   -- >= 0
+position       := int64    -- >= 0, a Kafka offset on that topic-partition
+```
+
+`varint` is unsigned base-128: seven payload bits per byte, lowest bits first, the high bit
+set on every byte except the last. Only the minimal spelling is valid, and the values a
+varint may spell are exactly 0 to 2³¹ − 1: a terminal byte of zero after the first byte, a
+varint longer than five bytes, and a fifth byte carrying anything beyond the low three bits
+are each undecodable. The last of these matters even though it looks like more padding — a
+32-bit reader that shifts the surplus away would decode `85 80 80 80 10` to the same value
+as `05`, two spellings for one value that the padding rule alone cannot see.
+
+Every constraint below is mandatory. Violating any one makes the value undecodable.
+
+1. The version byte is `0x02`.
+2. The value contains exactly `topicCount` groups with no trailing bytes, and each group
+   exactly `partitionCount` pairs.
+3. Topic IDs ascend strictly across groups in the unsigned lexicographic order of their 16
+   bytes, so each topic appears at most once.
+4. `partitionCount` is at least one, and partitions ascend strictly within their group.
+   Together with constraint 3 this lists channels in exactly version 1's order, and with
+   minimal varints the encoding of a given cause set is again unique byte for byte.
+5. `position` is non-negative.
+6. `topicId` is not all-zero bytes, exactly as version 1's constraint 5.
+
 ## Meaning
 
-Each entry `(topicId, partition, position)` expresses causes on one channel. The channel is
-the topic-partition identified by topic ID, so a topic deleted and recreated under the same
-name is a different channel. The entry stands for every cause of this message on that channel
-whose position is at or below `position`.
+Each entry `(topicId, partition, position)` expresses causes on one channel — in version 2,
+each pair carries its group's topic ID. The channel is the topic-partition identified by
+topic ID, so a topic deleted and recreated under the same name is a different channel. The
+entry stands for every cause of this message on that channel whose position is at or below
+`position`.
 
 A message's metadata expresses every cause of the message whose position is at or above its
 channel's earliest retained position at send time. This includes causes known to the sender
@@ -76,5 +120,8 @@ still matter.
 
 ## Stability
 
-The header key, the reserved prefix and the version-1 grammar are frozen. Any change to the
-grammar requires a new version byte. Readers encountering an unknown version fail closed.
+The header key, the reserved prefix and both grammars are frozen. Version 1 remains valid,
+and is what every writer emits until the writer flip D98 schedules — a flip that begins only
+once every reader in the causal closure, non-parsley readers included, accepts version 2.
+Any further change requires a new version byte. Readers encountering an unknown version fail
+closed.

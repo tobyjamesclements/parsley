@@ -64,7 +64,7 @@ prove it catches each violation class.
 
 ## Verifying anything
 
-- `./mvnw verify` is the full gate: **520 tests, green, roughly four minutes**. It must be
+- `./mvnw verify` is the full gate: **646 tests, green, roughly four minutes**. It must be
   green at every commit, and it grows. It never shrinks.
 - Three layers. Unit tests over the pure core. A **simulation harness** driving real engines
   under a simulated host that honours the spec's Host obligations, over randomised topologies,

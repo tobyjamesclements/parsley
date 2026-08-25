@@ -3521,3 +3521,103 @@ mutation afterwards.
 test constructs the runtime with a null Admin the failure path never touches. The streak-reset
 test's final confirmation exercises `observeWindow`'s `>=` boundary at equality; a deliberate move
 to a strict bound would need that assertion revisited alongside the decision.
+
+### D98 — Causes wire format version 2: entries grouped by topic, varint structural fields, behind a reader-first migration (extends D3)
+
+**Context**
+
+The causal frontier rides on every message, and its steady-state size approaches the sum of
+partition counts over the transitive upstream closure (docs/model.md). Version 1 spends the
+dominant term of that law twice over: the 16-byte topic ID is repeated once per partition, and
+the structural fields hold fixed 4-byte widths for values almost always under 128 — a frontier
+naming 32 partitions of one topic writes that topic's UUID 32 times, 901 bytes where 307 carry
+the same information. The bytes bite exactly where compression cannot reach: the growth gate in
+`mergeFrontier` runs before anything compresses, and the producer-side record ceiling is judged
+on uncompressed size (ASSESSMENT 2.4), so batch compression recovers the redundancy on disk and
+network but never at either wall. AGENTS.md prefers no change to the wire format; the argument
+past that default is that the constant factor is 2.7–2.9× on topics with tens of named
+partitions, never worse than version 1 for any shape with partition ids below 2²¹ (past that a
+single-partition group's 4-byte partition varint costs one byte over version 1's 28), and it
+decides whether transports
+with hard uncompressed header limits (issue #96) are viable at all — while the semantic answers
+to the growth law itself are separate work this neither blocks nor substitutes for. Issue #97
+records the full proposal and its evaluation, including the size table and the alternatives
+below.
+
+**Decision**
+
+A second grammar, version byte `0x02`, defined normatively in docs/wire-format.md beside the
+frozen version 1: topic IDs ascend once each in unsigned order carrying a partition count,
+partitions ascend within their group, and the three structural fields — topic count, partition
+count, partition id — are minimal unsigned base-128 varints spelling exactly 0 to 2³¹ − 1.
+Positions stay fixed eight bytes, deliberately: a varint position's width grows with the log,
+so encoded size would drift with wall-clock throughput toward a budget refusal no topology diff
+explains; fixed positions keep size a stable function of the topology, which is what belongs
+behind a budget. Canonical strictness is preserved by construction — the grouped order equals
+version 1's channel order because `ChannelId`'s comparison is topic-major unsigned with a
+numeric partition tie-break, coinciding with the 20-byte unsigned order for the non-negative
+partitions both grammars admit — and the
+decoder refuses padded varints, over-long varints, and a fifth byte carrying bits past the
+thirty-first: Java's shift discards those bits, so `85 80 80 80 10` would otherwise silently
+decode to the same value as `05`, an aliasing the padding rule alone cannot see.
+
+Migration is reader-first, three phases. (1) This change: `decode` dispatches on the version
+byte and accepts both grammars; `encode` still writes version 1; the version-2 encoder exists
+package-private (`encodeGrouped`) and is pinned against a hand-assembled version-2 golden, so
+the readers shipped now are provably byte-compatible with the writers of the flip. (2) The
+writer flip, a later change: `encode` writes version 2 and the budget arithmetic moves from the
+count-affine `encodedSize(entries)` to a size maintained incrementally at the frontier's three
+mutation sites (merge, prune, restore) — deployed only once every reader in the causal closure
+runs phase 1, external writers and readers included (`CausesCodec.encode` and `decode` are
+public precisely so non-parsley senders exist; no fleet inventory sees them). (3) Much later,
+version 1 decode is dropped — a calendar constraint, not a release-ordering one: no version-1
+bytes within retention on any topic in the closure, extended to token lifetime if #96 ever
+mints frontier bytes into client tokens (sequencing this work before #96 keeps any version-1
+token from existing at all).
+
+**Alternatives**
+
+* Keeping version 1 — rejected: the repetition sits on the growth law's dominant term, and the
+  walls it presses against are the ones compression cannot move.
+* Grouping without varints — rejected: single-partition-topic estates regress ~14% (20 bytes of
+  group framing to save 16 of repetition); with varints the per-topic cost is 17 + 9p against
+  version 1's 28p for partition ids and counts below 128, smaller for every p ≥ 1, so the
+  varints are what remove the regression.
+* Varints on positions too — rejected: a partition at 1,000 msg/s crosses into five varint
+  bytes within days, so encoded size would grow with elapsed time and a deployment could hit
+  the fail-closed budget with no topology change and nothing to point at in a diff. Checking
+  the budget against a fixed-width worst case while the wire shrinks was considered and
+  rejected with it: the real bytes still drift where hard external limits live (#96's headers),
+  and the 80% warning would fire at different calendar times for identical topologies.
+* Truncated topic ids (8 bytes) — rejected: the frontier's undeclared topics are resolvable
+  only because it carries full UUIDs (`AdminFactsSource` describes by id to prune entries below
+  logStart and on dead or recreated topics); truncation makes the bulk of a real frontier
+  permanently unprunable against a budget that fail-closes. A reverse-index registry restoring
+  the mapping is sound only under the single-cluster assumption (issue #98) and lands within 8%
+  of varints at best — not worth a new internal topic, bootstrap path, and refusal class.
+* Delta-encoding partitions within a group — rejected: it only narrows ids at or above 128
+  (about a byte per partition there) and adds another canonical-form rule to specify and pin.
+* A configuration knob selecting the encode version, the staged-upgrade pattern — rejected:
+  the budget arithmetic would be version-dynamic inside one binary and the knob a new way to
+  stop a mixed fleet; with release-based phases each binary has exactly one active sizing, and
+  rolling back the flip is a downgrade to a release that still reads both.
+
+**Cost**
+
+Two grammars live in the codec, the document, and the test suite until phase 3, and every
+malformation class is pinned twice. The flat grammar's negative-count diagnosis has no
+version-2 counterpart — a canonical varint cannot spell a negative — its place taken by the
+varint refusals. The phases are ordering-constrained: a writer flipped before every reader
+(parsley or not) runs phase 1 stops the unupgraded readers dead (D8), and phase 3 rushed
+refuses retained messages. The flip itself carries known debts recorded in issue #97: D52's
+premise that the budget check costs no encode because size is affine in the entry count stops
+holding (superseded then, not here), and the byte-calibrated tests are shape-sensitive — two
+land exactly on their budgets under grouped sizes (80 and 64 bytes) and stop firing behind
+strict `>` gates until recalibrated.
+
+**Specification gap**
+
+None. Structural 5 requires a documented, stable, distinguishable representation and
+Operational 4 and 5 a bound and observability — all version-neutral, and the spec is right not
+to fix an encoding. Structural 11 is satisfied by both grammars: a group header is factoring,
+not a new dependency form, and neither grammar has a field a process identity could hide in.

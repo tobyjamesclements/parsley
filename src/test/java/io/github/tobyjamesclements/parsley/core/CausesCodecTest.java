@@ -67,11 +67,17 @@ class CausesCodecTest {
                 java.util.Arrays.compareUnsigned(low.toBytes(), highBit.toBytes()) < 0);
     }
 
-    /** Rejects unknown version. */
+    /**
+     * Rejects unknown version. With version 2 now the grouped grammar (D98), the first
+     * unassigned byte is 3 — pinned alongside a far value so neither a widened accept set
+     * nor a salvaging default can stay green.
+     */
     @Test
     void rejectsUnknownVersion() {
         byte[] encoded = CausesCodec.encode(Causes.none());
         encoded[0] = 9;
+        assertThrows(CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(encoded));
+        encoded[0] = 3;
         assertThrows(CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(encoded));
     }
 
@@ -242,5 +248,287 @@ class CausesCodecTest {
         assertTrue(thrown.getMessage().contains("negative position -5 on " + CH_A),
                 () -> "the diagnosis must be the per-entry check's own, not the Causes.of backstop's: "
                         + thrown.getMessage());
+    }
+
+    private static ByteBuffer grouped(int capacity) {
+        ByteBuffer buffer = ByteBuffer.allocate(capacity);
+        buffer.put(CausesCodec.GROUPED_FORMAT_VERSION);
+        return buffer;
+    }
+
+    /**
+     * Matches the frozen version-2 golden bytes. Assembled by hand from the document alone,
+     * like the version-1 vector, so the grouped implementation and wire-format.md cannot
+     * drift together — and kept beside the version-1 golden, not instead of it, because both
+     * grammars stay live on the wire through the migration (D98). The two-partition first
+     * group is the point of the grammar: one topic id over two pairs.
+     */
+    @Test
+    void matchesTheFrozenGroupedGoldenBytes() throws Exception {
+        UUID low = new UUID(0x0102030405060708L, 0x090A0B0C0D0E0F10L);
+        UUID highBit = new UUID(0xF102030405060708L, 0x090A0B0C0D0E0F10L);
+        Causes causes = Causes.of(Map.of(
+                new ChannelId(low, 2), 41L,
+                new ChannelId(low, 5), 7L,
+                new ChannelId(highBit, 0), 9L));
+
+        ByteBuffer golden = ByteBuffer.allocate(1 + 1 + 16 + 1 + 2 * 9 + 16 + 1 + 9);
+        golden.put((byte) 2).put((byte) 2);
+        golden.putLong(0x0102030405060708L).putLong(0x090A0B0C0D0E0F10L).put((byte) 2);
+        golden.put((byte) 2).putLong(41);
+        golden.put((byte) 5).putLong(7);
+        golden.putLong(0xF102030405060708L).putLong(0x090A0B0C0D0E0F10L).put((byte) 1);
+        golden.put((byte) 0).putLong(9);
+
+        assertArrayEquals(golden.array(), CausesCodec.encodeGrouped(causes));
+        assertEquals(causes, CausesCodec.decode(golden.array()));
+    }
+
+    /**
+     * The two grammars express the same frontier, and the grouped encoding is canonical.
+     * This is the phase-1 compatibility pin (D98): a reader shipped now provably accepts,
+     * byte for byte, what the writer flip will produce.
+     */
+    @Test
+    void groupedRoundTripsAndAgreesWithTheFlatGrammar() throws Exception {
+        Causes causes = Causes.of(Map.of(CH_A, 41L, CH_B, 7L, new ChannelId(new UUID(1, 1), 6), 3L));
+        byte[] encoded = CausesCodec.encodeGrouped(causes);
+        assertEquals(causes, CausesCodec.decode(encoded));
+        assertArrayEquals(encoded, CausesCodec.encodeGrouped(CausesCodec.decode(encoded)),
+                "grouped encoding must be canonical");
+        assertEquals(CausesCodec.decode(CausesCodec.encode(causes)), CausesCodec.decode(encoded),
+                "both grammars must yield the same frontier");
+    }
+
+    /** An empty frontier in the grouped grammar is the version byte and a zero topic count. */
+    @Test
+    void groupedEmptyFrontierIsTwoBytes() throws Exception {
+        byte[] encoded = CausesCodec.encodeGrouped(Causes.none());
+        assertArrayEquals(new byte[] {2, 0}, encoded);
+        assertEquals(Causes.none(), CausesCodec.decode(encoded));
+    }
+
+    /**
+     * Pins the varint spelling itself: partition 300 is {@code 0xAC 0x02} — seven payload
+     * bits per byte, lowest bits first, the high bit set on every byte but the last — as
+     * wire-format.md defines it. A big-endian or padded spelling fails the array equality.
+     */
+    @Test
+    void groupedVarintSpellsMultiByteValuesLowBitsFirst() throws Exception {
+        Causes causes = Causes.of(Map.of(new ChannelId(new UUID(1, 1), 300), 7L));
+        ByteBuffer expected = grouped(1 + 1 + 16 + 1 + 2 + 8);
+        expected.put((byte) 1);
+        expected.putLong(1).putLong(1).put((byte) 1);
+        expected.put((byte) 0xAC).put((byte) 0x02).putLong(7);
+        assertArrayEquals(expected.array(), CausesCodec.encodeGrouped(causes));
+        assertEquals(causes, CausesCodec.decode(expected.array()));
+    }
+
+    /** Rejects grouped topics out of order or duplicated: each topic appears at most once, ascending. */
+    @Test
+    void rejectsGroupedTopicsOutOfOrderOrDuplicate() {
+        ByteBuffer descending = grouped(1 + 1 + 2 * 26);
+        descending.put((byte) 2);
+        descending.putLong(1).putLong(2).put((byte) 1).put((byte) 3).putLong(1);
+        descending.putLong(1).putLong(1).put((byte) 1).put((byte) 0).putLong(2);
+        CausesCodec.UndecodableMetadataException outOfOrder = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(descending.array()));
+        assertTrue(outOfOrder.getMessage().contains("topics not strictly ascending"),
+                () -> "the diagnosis must name the group order rule: " + outOfOrder.getMessage());
+
+        ByteBuffer duplicate = grouped(1 + 1 + 2 * 26);
+        duplicate.put((byte) 2);
+        duplicate.putLong(1).putLong(1).put((byte) 1).put((byte) 0).putLong(1);
+        duplicate.putLong(1).putLong(1).put((byte) 1).put((byte) 1).putLong(2);
+        CausesCodec.UndecodableMetadataException duplicated = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(duplicate.array()));
+        assertTrue(duplicated.getMessage().contains("topics not strictly ascending"),
+                () -> "a repeated topic must fall to the same order rule: " + duplicated.getMessage());
+    }
+
+    /** Rejects grouped partitions out of order or duplicated within their topic's group. */
+    @Test
+    void rejectsGroupedPartitionsOutOfOrderOrDuplicate() {
+        ByteBuffer descending = grouped(1 + 1 + 16 + 1 + 2 * 9);
+        descending.put((byte) 1);
+        descending.putLong(1).putLong(1).put((byte) 2);
+        descending.put((byte) 5).putLong(1);
+        descending.put((byte) 2).putLong(2);
+        CausesCodec.UndecodableMetadataException thrown = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(descending.array()));
+        assertTrue(thrown.getMessage().contains("partitions not strictly ascending"),
+                () -> "the diagnosis must name the intra-group order rule: " + thrown.getMessage());
+
+        ByteBuffer duplicate = grouped(1 + 1 + 16 + 1 + 2 * 9);
+        duplicate.put((byte) 1);
+        duplicate.putLong(1).putLong(1).put((byte) 2);
+        duplicate.put((byte) 2).putLong(1);
+        duplicate.put((byte) 2).putLong(2);
+        CausesCodec.UndecodableMetadataException duplicated = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(duplicate.array()));
+        assertTrue(duplicated.getMessage().contains("partitions not strictly ascending"),
+                () -> "a repeated partition must fall to the same order rule: " + duplicated.getMessage());
+    }
+
+    /** Rejects a topic group naming zero partitions: an empty group can carry no cause. */
+    @Test
+    void rejectsGroupedZeroPartitionTopic() {
+        ByteBuffer buffer = grouped(1 + 1 + 16 + 1);
+        buffer.put((byte) 1);
+        buffer.putLong(1).putLong(1).put((byte) 0);
+        CausesCodec.UndecodableMetadataException thrown = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()));
+        assertTrue(thrown.getMessage().contains("zero partitions"),
+                () -> "the diagnosis must name the empty group: " + thrown.getMessage());
+    }
+
+    /**
+     * Rejects the reserved zero topic ID in the grouped grammar — version 2's constraint 6,
+     * the same refusal as the flat grammar's constraint 5 (D83), checked once per group.
+     */
+    @Test
+    void rejectsGroupedZeroTopicId() {
+        ByteBuffer buffer = grouped(1 + 1 + 16 + 1 + 9);
+        buffer.put((byte) 1);
+        buffer.putLong(0).putLong(0).put((byte) 1).put((byte) 0).putLong(7);
+        CausesCodec.UndecodableMetadataException thrown = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()),
+                "an otherwise well-formed group naming the zero topic id must be undecodable");
+        assertTrue(thrown.getMessage().contains("zero topic id at group"),
+                () -> "the diagnosis must be the reserved-id refusal's own: " + thrown.getMessage());
+    }
+
+    /** Rejects a negative position in the grouped grammar, named per entry as in the flat one. */
+    @Test
+    void rejectsGroupedNegativePosition() {
+        ByteBuffer buffer = grouped(1 + 1 + 16 + 1 + 9);
+        buffer.put((byte) 1);
+        buffer.putLong(1).putLong(1).put((byte) 1).put((byte) 0).putLong(-5);
+        CausesCodec.UndecodableMetadataException thrown = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()));
+        assertTrue(thrown.getMessage().contains("negative position -5 on "),
+                () -> "the diagnosis must name the position and its channel: " + thrown.getMessage());
+    }
+
+    /**
+     * Rejects grouped truncation and trailing bytes. Truncation inside a position, inside a
+     * topic id and inside a varint all classify as the truncated-header diagnosis, never a
+     * raw underflow; a surplus byte after the last group is trailing, so the exact byte
+     * length stays part of the grammar even though it is no longer computable from a count.
+     */
+    @Test
+    void rejectsGroupedTruncationAndTrailingBytes() {
+        byte[] encoded = CausesCodec.encodeGrouped(
+                Causes.of(Map.of(CH_A, 41L, CH_B, 7L)));
+
+        byte[] midPosition = java.util.Arrays.copyOf(encoded, encoded.length - 3);
+        CausesCodec.UndecodableMetadataException insidePosition = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(midPosition));
+        assertEquals("truncated causes header", insidePosition.getMessage(),
+                "truncation inside a position must classify, not underflow raw");
+
+        byte[] midTopicId = java.util.Arrays.copyOf(encoded, encoded.length - 20);
+        CausesCodec.UndecodableMetadataException insideTopicId = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(midTopicId));
+        assertEquals("truncated causes header", insideTopicId.getMessage(),
+                "truncation inside a topic id must classify, not underflow raw");
+
+        byte[] midVarint = {CausesCodec.GROUPED_FORMAT_VERSION, (byte) 0xAC};
+        CausesCodec.UndecodableMetadataException insideVarint = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(midVarint));
+        assertEquals("truncated causes header", insideVarint.getMessage(),
+                "truncation inside a varint must classify, not underflow raw");
+
+        byte[] padded = java.util.Arrays.copyOf(encoded, encoded.length + 1);
+        CausesCodec.UndecodableMetadataException trailing = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(padded));
+        assertTrue(trailing.getMessage().contains("trailing bytes"),
+                () -> "the diagnosis must name the surplus: " + trailing.getMessage());
+    }
+
+    /** Rejects grouped count miscounts: topic counts and partition counts must match the bytes exactly. */
+    @Test
+    void rejectsGroupedCountMiscounts() {
+        ByteBuffer topicsOverstated = grouped(1 + 1 + 26);
+        topicsOverstated.put((byte) 2);
+        topicsOverstated.putLong(1).putLong(1).put((byte) 1).put((byte) 0).putLong(1);
+        assertThrows(CausesCodec.UndecodableMetadataException.class,
+                () -> CausesCodec.decode(topicsOverstated.array()));
+
+        ByteBuffer topicsUnderstated = grouped(1 + 1 + 2 * 26);
+        topicsUnderstated.put((byte) 1);
+        topicsUnderstated.putLong(1).putLong(1).put((byte) 1).put((byte) 0).putLong(1);
+        topicsUnderstated.putLong(1).putLong(2).put((byte) 1).put((byte) 0).putLong(2);
+        assertThrows(CausesCodec.UndecodableMetadataException.class,
+                () -> CausesCodec.decode(topicsUnderstated.array()));
+
+        ByteBuffer partitionsOverstated = grouped(1 + 1 + 16 + 1 + 9);
+        partitionsOverstated.put((byte) 1);
+        partitionsOverstated.putLong(1).putLong(1).put((byte) 2).put((byte) 0).putLong(1);
+        assertThrows(CausesCodec.UndecodableMetadataException.class,
+                () -> CausesCodec.decode(partitionsOverstated.array()));
+
+        ByteBuffer partitionsUnderstated = grouped(1 + 1 + 16 + 1 + 2 * 9);
+        partitionsUnderstated.put((byte) 1);
+        partitionsUnderstated.putLong(1).putLong(1).put((byte) 1);
+        partitionsUnderstated.put((byte) 0).putLong(1);
+        partitionsUnderstated.put((byte) 1).putLong(2);
+        assertThrows(CausesCodec.UndecodableMetadataException.class,
+                () -> CausesCodec.decode(partitionsUnderstated.array()));
+    }
+
+    /**
+     * Rejects non-minimal varints. A padded spelling — 1 as {@code 0x81 0x00}, 5 as
+     * {@code 0x85 0x00} — decodes to the same value through a salvaging reader, so two byte
+     * strings would mean one frontier and the document's byte-for-byte uniqueness promise
+     * would silently break. Pinned on both varint positions: the topic count and a
+     * partition id.
+     */
+    @Test
+    void rejectsNonMinimalVarint() {
+        ByteBuffer paddedTopicCount = grouped(1 + 2 + 26);
+        paddedTopicCount.put((byte) 0x81).put((byte) 0x00);
+        paddedTopicCount.putLong(1).putLong(1).put((byte) 1).put((byte) 0).putLong(1);
+        CausesCodec.UndecodableMetadataException thrown = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(paddedTopicCount.array()));
+        assertTrue(thrown.getMessage().contains("non-minimal varint"),
+                () -> "the diagnosis must name the padding: " + thrown.getMessage());
+
+        ByteBuffer paddedPartition = grouped(1 + 1 + 16 + 1 + 2 + 8);
+        paddedPartition.put((byte) 1);
+        paddedPartition.putLong(1).putLong(1).put((byte) 1);
+        paddedPartition.put((byte) 0x85).put((byte) 0x00).putLong(1);
+        CausesCodec.UndecodableMetadataException padded = assertThrows(
+                CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(paddedPartition.array()));
+        assertTrue(padded.getMessage().contains("non-minimal varint"),
+                () -> "the diagnosis must name the padding, not decode partition 5: " + padded.getMessage());
+    }
+
+    /**
+     * Rejects varints past the non-negative int range. Java's shift discards bits past 31,
+     * so a five-byte varint whose terminal byte carries only overflowed bits —
+     * {@code 85 80 80 80 10} — would silently decode to the same value as {@code 05} in a
+     * salvaging reader: aliasing the padding check cannot see. A terminal byte reaching the
+     * sign bit ({@code 08}) and a sixth byte ({@code 80} continuing) are the same refusal.
+     * Regression caught: dropping the terminal-byte guard admits the alias and turns only
+     * the first probe green through a different diagnosis.
+     */
+    @Test
+    void rejectsVarintBeyondTheNonNegativeIntRange() {
+        byte[][] probes = {
+                {(byte) 0x85, (byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x10},
+                {(byte) 0x85, (byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x08},
+                {(byte) 0x85, (byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x80, (byte) 0x01},
+        };
+        for (byte[] probe : probes) {
+            ByteBuffer buffer = grouped(1 + probe.length + 26);
+            buffer.put(probe);
+            buffer.putLong(1).putLong(1).put((byte) 1).put((byte) 0).putLong(1);
+            CausesCodec.UndecodableMetadataException thrown = assertThrows(
+                    CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(buffer.array()),
+                    "a varint past the int range must be undecodable");
+            assertTrue(thrown.getMessage().contains("exceeds the non-negative int range"),
+                    () -> "the diagnosis must name the overflow, not alias or misparse: " + thrown.getMessage());
+        }
     }
 }
