@@ -113,6 +113,12 @@ class AdminFactsSourceRoundAbortTest {
      * outage reopens rather than matures (D85). Rethreading the failure into the tolerate
      * branch would complete the outage round as observation and let two isolated
      * sightings bracketing it confirm death.
+     *
+     * <p>The post-outage sighting lands strictly inside the confirmation window (t=900 of
+     * a 1000ms window after a t=0 anchor), because a sighting at one full window or later
+     * trips {@code observeWindow}'s blind-gap restart on its own and would hide the
+     * abort's reset entirely; the discriminating assertion is the one at t=1000, exactly
+     * where an un-reset pre-outage anchor would mature into a confirmed death.
      */
     @Test
     void aBrokerFailureOnTheByIdDescribeAbortsTheRoundAndResetsTheStreak() throws Exception {
@@ -130,14 +136,19 @@ class AdminFactsSourceRoundAbortTest {
                 () -> "the abort carries the broker failure for the retry log: " + aborted);
         facts.byIdFailure = new UnknownTopicIdException("unknown topic id");
 
+        assertTrue(facts.nameGoneRound(9 * WINDOW_MILLIS / 10).deadChannels().isEmpty(),
+                "the streak was interrupted by the outage: this sighting — inside the window,"
+                        + " where the blind-gap rule alone would not restart it — must reopen"
+                        + " the window, not extend the pre-outage anchor");
         assertTrue(facts.nameGoneRound(WINDOW_MILLIS).deadChannels().isEmpty(),
-                "the streak was interrupted by the outage: this sighting must reopen the window,"
-                        + " not mature the pre-outage anchor into a confirmed death");
+                "one window after the pre-outage anchor is exactly where an un-reset streak"
+                        + " would mature: the abort's reset is what keeps this sighting from"
+                        + " confirming death");
         assertTrue(facts.nameGoneRound(WINDOW_MILLIS + WINDOW_MILLIS / 2).deadChannels().isEmpty(),
                 "the reopened window has not yet spanned its length");
-        assertEquals(Set.of(R), facts.nameGoneRound(2 * WINDOW_MILLIS).deadChannels(),
-                "an unbroken post-outage run must still confirm death through the real"
-                        + " describe classification");
+        assertEquals(Set.of(R), facts.nameGoneRound(2 * WINDOW_MILLIS - WINDOW_MILLIS / 10).deadChannels(),
+                "an unbroken post-outage run spanning the window from the reopened anchor must"
+                        + " still confirm death through the real describe classification");
     }
 
     /**

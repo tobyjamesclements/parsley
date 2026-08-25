@@ -2,12 +2,17 @@ package io.github.tobyjamesclements.parsley.kafka;
 
 import org.apache.kafka.clients.admin.ListOffsetsResult;
 import org.apache.kafka.clients.admin.OffsetSpec;
+import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.errors.UnknownTopicIdException;
+import org.apache.kafka.common.internals.KafkaFutureImpl;
 import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -68,17 +73,26 @@ class AdminFactsSourceEvictionTest {
             this.nowMillis = nowMillis;
         }
 
+        /**
+         * Scripts the by-id describe at the future level, as the round-abort tests do: a
+         * live id's future completes with its description, any other id's fails as
+         * unknown-topic, and the real {@code describeByIds} classification runs above it
+         * — including the name learning whose forgetting the eviction sweep is pinned on.
+         */
         @Override
-        Map<UUID, String> describeByIds(Set<UUID> topicIds) {
-            Map<UUID, String> names = new HashMap<>();
+        Map<Uuid, KafkaFuture<TopicDescription>> describeByIdFutures(Set<UUID> topicIds) {
+            Map<Uuid, KafkaFuture<TopicDescription>> futures = new HashMap<>();
             for (UUID id : topicIds) {
+                KafkaFutureImpl<TopicDescription> future = new KafkaFutureImpl<>();
                 String name = liveById.get(id);
                 if (name != null) {
-                    names.put(id, name);
-                    recordLearnedName(id, name);
+                    future.complete(new TopicDescription(name, false, List.of()));
+                } else {
+                    future.completeExceptionally(new UnknownTopicIdException("unknown topic id"));
                 }
+                futures.put(TopicInfo.toKafkaUuid(id), future);
             }
-            return names;
+            return futures;
         }
 
         @Override

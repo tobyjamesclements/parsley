@@ -34,6 +34,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 @Timeout(value = 30)
 class BootstrapMemberJoinTest {
+    /**
+     * The protocol-conflict backoff handed to the seam: production passes its own 500ms;
+     * the tests pass a millisecond so the conflict-path pins run the identical loop
+     * without spending real wall-clock time in the backoff.
+     */
+    private static final Duration TEST_BACKOFF = Duration.ofMillis(1);
 
     /**
      * The inherited-session-timeout floor: a resolved value below one millisecond can never
@@ -65,7 +71,7 @@ class BootstrapMemberJoinTest {
         UnassignedConsumer consumer = new UnassignedConsumer();
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> GroupMembershipCommitter.awaitAssignment(consumer, Duration.ofMillis(200)),
+                () -> GroupMembershipCommitter.awaitAssignment(consumer, Duration.ofMillis(200), TEST_BACKOFF),
                 "a join the coordinator never answers must end at the deadline, not hang");
         assertTrue(e.getMessage().contains("no assignment from group coordinator within PT0.2S"),
                 "the failure names the deadline it waited: " + e.getMessage());
@@ -87,7 +93,7 @@ class BootstrapMemberJoinTest {
         consumer.pollThrows = conflict;
 
         IllegalStateException e = assertThrows(IllegalStateException.class,
-                () -> GroupMembershipCommitter.awaitAssignment(consumer, Duration.ofMillis(200)),
+                () -> GroupMembershipCommitter.awaitAssignment(consumer, Duration.ofMillis(200), TEST_BACKOFF),
                 "a join grinding on the protocol conflict must still end at the deadline");
         assertTrue(e.getMessage().contains("held by protocol-incompatible members"),
                 "the deadline explains the conflict shape it saw: " + e.getMessage());
@@ -111,7 +117,7 @@ class BootstrapMemberJoinTest {
         boolean interrupted;
         try {
             e = assertThrows(IllegalStateException.class,
-                    () -> GroupMembershipCommitter.awaitAssignment(consumer, Duration.ofSeconds(2)),
+                    () -> GroupMembershipCommitter.awaitAssignment(consumer, Duration.ofSeconds(2), TEST_BACKOFF),
                     "an interrupt in the backoff must fail the join, not be swallowed");
         } finally {
             // read-and-clear so a failure above cannot leak interrupt status into later tests

@@ -138,8 +138,11 @@ final class GroupMembershipCommitter implements AutoCloseable {
             public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
             }
         });
-        awaitAssignment(consumer, timeout);
+        awaitAssignment(consumer, timeout, CONFLICT_BACKOFF);
     }
+
+    /** How long a poll that hit the protocol conflict backs off before asking again (D48). */
+    private static final Duration CONFLICT_BACKOFF = Duration.ofMillis(500);
 
     /**
      * The join wait, extracted so the deadline and its diagnoses are pinnable over a
@@ -149,11 +152,14 @@ final class GroupMembershipCommitter implements AutoCloseable {
      * backoff. This deadline is what turns a contested or unreachable group into a
      * diagnosed bootstrap failure instead of an infinite hang (Operational 2).
      *
-     * @param consumer a subscribed consumer whose assignment is awaited
-     * @param timeout  how long to wait for the assignment
+     * @param consumer        a subscribed consumer whose assignment is awaited
+     * @param timeout         how long to wait for the assignment
+     * @param conflictBackoff how long to back off after a protocol-conflict poll —
+     *                        {@link #CONFLICT_BACKOFF} in production, tiny in tests so
+     *                        the conflict-path pins do not spend real wall-clock time
      */
     static void awaitAssignment(org.apache.kafka.clients.consumer.Consumer<byte[], byte[]> consumer,
-                                Duration timeout) {
+                                Duration timeout, Duration conflictBackoff) {
         long deadline = System.nanoTime() + timeout.toNanos();
         org.apache.kafka.common.errors.InconsistentGroupProtocolException lastProtocolConflict = null;
         while (consumer.assignment().isEmpty()) {
@@ -171,7 +177,7 @@ final class GroupMembershipCommitter implements AutoCloseable {
             } catch (org.apache.kafka.common.errors.InconsistentGroupProtocolException e) {
                 lastProtocolConflict = e;
                 try {
-                    Thread.sleep(500);
+                    Thread.sleep(conflictBackoff.toMillis());
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     throw new IllegalStateException("interrupted while joining the group", interrupted);
