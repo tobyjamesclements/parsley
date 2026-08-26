@@ -58,25 +58,79 @@ serving anyway is a silent read-your-writes violation. `coverageOf` therefore ch
 channel a token names and reports the unverifiable ones as gaps. The error is always in the
 conservative direction — a refusal to serve, never a stale serve.
 
-The consequence to plan for: a read model that records only its own delivered coordinates
-can never cover a token naming a channel it does not receive. A client that writes to
-`orders` and reads a model fed only by a downstream `events` topic fails coverage forever,
-not transiently. Scope the pattern to read models that receive the channels clients write
-to, or carry upstream coordinates forward in message payloads at the application level.
+The consequence to plan for: a recorder that sees only its own delivered coordinates can
+never cover a token naming a channel it does not receive. That is the situation behind the
+handler seam, which filters the causes header before application code sees it: a client
+that writes to `orders` and reads a model fed only by a downstream `events` topic fails
+coverage forever, not transiently. A projector consuming raw records does not have this
+problem — the header carries the transitive closure — which is one reason the
+database-hosted shape below is the right one for a serving tier.
 
-## What the token does not replace
+## The token does not replace delivery
 
 The token protects the client's session; only causal delivery protects the projection's
 value. A projector applying updates out of causal order can leave a row whose recorded past
-covers a token while its value is wrong. Read models therefore want to be Parsley
-processes — which also puts row and recorded past in one `Store`, committing atomically in
-the Kafka transaction.
+covers a token while its value is wrong. The projector is therefore a Parsley process — and
+because clients query a database, not a Streams store, it wants to be a process hosted on
+the database's technology rather than on Kafka Streams.
 
-At the handler seam, record the delivery's own coordinate (`delivery.partition()`,
-`delivery.position()`), merged per row or into a model-wide clock. Do not derive a
-recorded past from `frontierSnapshot()`: the frontier advances on receipt, before
-delivery, so it can name coordinates whose effects are still held back — telling a client
-its write is visible when it is not.
+## A projector on the database's transaction
+
+Let the database be the host: projection rows, clock rows and consumed positions all commit
+in one database transaction, and the projector resumes from the positions the database
+holds. That is the Kafka Streams host's shape with the atomicity domain moved — one commit
+domain, so the dual-write discipline an external database usually demands never arises. The
+core was built to permit exactly this: the engine is host-independent, runs over an
+`OrderingStore`, and the delivery decision is a pure function. The library ships no
+database host today; the simulation harness is the proof that a non-Streams host honouring
+the specification's Host obligations runs real engines.
+
+Consuming raw records, the projector sees the `parsley.causes` header the seam withholds,
+so its clock is the transitively closed delivered past: per delivered message, merge the
+own coordinate and every carried pair — the same fold the engine's `markDelivered`
+performs. In exchange the host owes what Kafka Streams was providing: `read_committed`
+consumption, fencing of zombie writers (a partition epoch plus monotone guards), and
+position facts for pruning. Do not substitute `frontierSnapshot()` from behind a seam: the
+frontier advances on receipt, before delivery, so it can name coordinates whose effects
+are still held back — telling a client its write is visible when it is not.
+
+## Clocks are per partition; collections gate on the meet
+
+Keep one clock row per consumed partition, written in the same transaction as that
+partition's rows. Each partition's projector is the single writer of its own clock — no
+shared hot row, and ownership moves with partition assignment.
+
+A single-entity read gates against the owning partition's clock. A collection spanning
+partitions cannot gate on rows at all: its failure mode is absence — the row a write
+should have created is not there yet, and a missing row has no past to check — so it gates
+on what the whole model has applied. The sound aggregate is the pointwise **minimum**
+across partition clocks, not the maximum. A max-merged superset clock reports the most
+advanced partition while a collection's correctness is bounded by the least advanced: one
+caught-up partition hides every laggard, and the gate serves rows that do not yet reflect
+the write — a stale serve, the failure the pattern exists to prevent.
+
+One query computes the meet, because a terminal partition's own coordinates have exactly
+one contributor, where minimum and maximum coincide:
+
+```sql
+SELECT channel, MIN(position), COUNT(*) FROM partition_clock GROUP BY channel
+```
+
+treating an upstream channel counted on fewer than all partitions as absent, which fails
+closed. The meet also has the property the join lacks: stale is safe. A lagging meet only
+blocks a little longer, never serves stale data, so it may be materialised asynchronously
+where read volume demands it; a join must never be materialised as a gate.
+
+The meet's liveness cost is the idle partition. Inherited entries advance only when a
+partition applies a message; every emission carries the emitter's whole frontier, so active
+partitions converge on their next message, but a silent partition pins the meet at its
+last-seen frontier. Bound the wait and fail with retry-after, or have the application fan
+a periodic no-op event across every terminal partition — the pipeline stays clockless, and
+the heartbeat carries real causal evidence rather than a wall-clock guess.
+
+Refresh a collection read's token from the meet it was gated on, plus the own coordinates
+of the partitions that contributed rows — never from the superset, which inflates the
+client's future demands with coverage the read did not prove.
 
 ## Operating it
 
