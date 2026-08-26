@@ -38,7 +38,8 @@ format both differ from this version, and stays addressable by its version numbe
 
 - [Failing closed](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/failing-closed.md): what stops a process, the blast radius, and every refusal reason
 - [Runtime](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/runtime.md): start sequence, configuration lockdown, facts ingestion, the handler seam
-- [API](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/api.md): the three packages and where the generated Javadoc lives
+- [Session consistency](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/session.md): carrying the causal frontier past the last consumer, out to clients
+- [API](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/api.md): the packages and where the generated Javadoc lives
 
 ## Verification
 

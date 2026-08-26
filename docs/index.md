@@ -58,6 +58,7 @@ changes. It is given no producer, no timer and no clock.
 | [State](state.md) | Ordering state, persistence and recovery |
 | [Failing closed](failing-closed.md) | What stops a process, and why the blast radius is the process |
 | [Runtime](runtime.md) | Wiring into Kafka Streams |
+| [Session consistency](session.md) | Carrying the causal frontier past the last consumer, out to clients |
 | [Wire format](wire-format.md) | The frozen on-wire definition of causal metadata |
 | [Verification](verification.md) | How the guarantee is tested |
 | [API](api.md) | Generated Javadoc |

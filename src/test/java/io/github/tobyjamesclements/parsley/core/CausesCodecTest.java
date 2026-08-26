@@ -331,6 +331,25 @@ class CausesCodecTest {
     }
 
     /**
+     * Refuses every vector in the shared malformation battery. The named tests above pin
+     * each class with its own narrative and exact diagnoses; this sweep pins the codec to
+     * {@link CausesMalformationVectors}, the catalogue the session companion's mirror
+     * battery also runs, so a malformation class added there is enforced on both decoders
+     * with no further test change (D99's mirror, made structural).
+     */
+    @Test
+    void refusesEveryCataloguedMalformation() {
+        for (CausesMalformationVectors.Vector vector : CausesMalformationVectors.all()) {
+            CausesCodec.UndecodableMetadataException thrown = assertThrows(
+                    CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(vector.bytes()),
+                    () -> vector.family() + ": " + vector.label() + " must be undecodable");
+            assertTrue(thrown.getMessage().contains(vector.diagnosisFragment()),
+                    () -> vector.family() + ": " + vector.label() + " must diagnose \""
+                            + vector.diagnosisFragment() + "\": " + thrown.getMessage());
+        }
+    }
+
+    /**
      * Rejects varints past the non-negative int range. Java's shift discards bits past 31,
      * so a five-byte varint whose terminal byte carries only overflowed bits —
      * {@code 85 80 80 80 10} — would silently decode to the same value as {@code 05} in a
