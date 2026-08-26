@@ -1,3 +1,4 @@
 io.github.tobyjamesclements.parsley.api
 io.github.tobyjamesclements.parsley.core
 io.github.tobyjamesclements.parsley.kafka
+io.github.tobyjamesclements.parsley.session
