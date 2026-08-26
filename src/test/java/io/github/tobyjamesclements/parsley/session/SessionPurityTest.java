@@ -3,63 +3,34 @@ package io.github.tobyjamesclements.parsley.session;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.stream.Stream;
 
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import io.github.tobyjamesclements.parsley.core.PurityScan;
 
 /**
- * Establishes that the companion surface names no host facility and no adapter type.
+ * Establishes that the companion surface names no host facility and rides only the core.
  *
  * <p>The session package must be usable at any edge — an HTTP gateway, a plain Kafka
  * client, a read tier over a database — so, like the core it rides on, it may name no
- * clock, no network, no substrate, and additionally no type of the Kafka adapter package.
- * Residency outside {@code core} already guarantees it compiles against the public surface
- * only; this scan guarantees the host-independence half.
+ * clock, no randomness, no network and no substrate ({@link PurityScan}'s shared policy).
+ * Two entries are its own: the Kafka adapter package, because the companion must not
+ * couple to the host, and the {@code api} package, because the charter is the core's
+ * public surface alone — a session participant declares no process, so reaching for the
+ * declaration surface is exactly the accretion D99 fences against.
  */
 class SessionPurityTest {
-    private static final List<String> FORBIDDEN = List.of(
-            "org.apache.kafka",
-            "io.github.tobyjamesclements.parsley.kafka",
-            "java.net.",
-            "java.nio.channels",
-            "java.nio.file",
-            "java.io.",
-            "java.time.",
-            "java.util.Date",
-            "java.util.Random",
-            "ThreadLocalRandom",
-            "Math.random",
-            "Thread.sleep",
-            "System.currentTimeMillis",
-            "System.nanoTime",
-            "System.getenv",
-            "System.getProperty",
-            "Instant.now",
-            "Clock.");
 
-    /** Session sources touch neither clock nor network nor substrate nor the adapter. */
+    /** Session sources touch neither clock nor network nor substrate, nor the adapter or api packages. */
     @Test
-    void sessionSourcesTouchNeitherClockNorNetworkNorSubstrateNorAdapter() throws IOException {
-        Path sessionSources = Path.of("src", "main", "java", "io", "github", "tobyjamesclements", "parsley", "session");
-        assertTrue(Files.isDirectory(sessionSources), "session sources must be present for this scan");
-        // Recursive, so a future subpackage of session/ cannot escape the scan.
-        try (Stream<Path> files = Files.walk(sessionSources)) {
-            files.filter(path -> path.toString().endsWith(".java")).forEach(path -> {
-                String source;
-                try {
-                    source = Files.readString(path);
-                } catch (IOException e) {
-                    throw new java.io.UncheckedIOException(e);
-                }
-                for (String forbidden : FORBIDDEN) {
-                    assertTrue(!source.contains(forbidden),
-                            path.getFileName() + " must not use \"" + forbidden
-                                    + "\": the companion must stay usable at any edge");
-                }
-            });
-        }
+    void sessionSourcesTouchOnlyTheCoreSurface() throws IOException {
+        List<String> forbidden = new ArrayList<>(PurityScan.HOST_FACILITIES);
+        forbidden.add("io.github.tobyjamesclements.parsley.kafka");
+        forbidden.add("io.github.tobyjamesclements.parsley.api");
+        PurityScan.assertSourcesAvoid(
+                Path.of("src", "main", "java", "io", "github", "tobyjamesclements", "parsley", "session"),
+                forbidden,
+                "the companion must stay usable at any edge, over the core's public surface alone");
     }
 }

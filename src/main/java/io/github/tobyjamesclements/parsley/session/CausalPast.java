@@ -167,18 +167,20 @@ public final class CausalPast {
      * re-minting it.
      *
      * @param other the past to merge in
-     * @return a past covering both; this instance is unchanged, and when either side is
-     *         empty the other is returned itself
+     * @return a past covering both; this instance is unchanged, and when either side
+     *         already covers the other — the steady state of a session re-reading settled
+     *         data — that side is returned itself, so an unchanged token need not be
+     *         re-encoded
      * @throws IllegalArgumentException if {@code other} is null
      */
     public CausalPast merge(CausalPast other) {
         if (other == null) {
             throw new IllegalArgumentException("other must be non-null");
         }
-        if (other.isEmpty()) {
+        if (coverageOf(other).covers()) {
             return this;
         }
-        if (isEmpty()) {
+        if (other.coverageOf(this).covers()) {
             return other;
         }
         TreeMap<ChannelId, Long> merged = new TreeMap<>(causes.byChannel());
@@ -213,7 +215,12 @@ public final class CausalPast {
                     Long recorded = causes.byChannel().get(channel);
                     return recorded == null ? OptionalLong.empty() : OptionalLong.of(recorded);
                 });
-        return new Coverage(verdict instanceof Deliverability.Held held ? held.blockers() : List.of());
+        // No default: a verdict kind this class has not weighed must fail compilation here,
+        // not silently mean covered — the one direction this type must never err in.
+        return new Coverage(switch (verdict) {
+            case Deliverability.Deliverable deliverable -> List.of();
+            case Deliverability.Held held -> held.blockers();
+        });
     }
 
     /**
@@ -228,6 +235,8 @@ public final class CausalPast {
          * Copies the gaps.
          *
          * @throws IllegalArgumentException if {@code gaps} is null
+         * @throws NullPointerException if {@code gaps} contains a null element, from the
+         *         copy itself
          */
         public Coverage {
             if (gaps == null) {

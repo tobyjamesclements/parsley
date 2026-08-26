@@ -3722,3 +3722,78 @@ None. The specification ends at the process seam and is right to: session guaran
 non-participants are an application concern, and the spec's own criteria (Liveness 4,
 Safety 7) are what force the companion's two deliberate departures — the inverted skip and
 the inherited strictness — to be recorded rather than improvised.
+
+### D100 — Review hardenings to the session companion: compile-checked coverage exhaustiveness, identity merges, and shared fences (extends D99)
+
+**Context**
+
+An adversarial review of the D99 companion (nine independent finder angles, each surviving
+finding re-verified) found no live bug but a cluster of hardenings, all in the same key:
+places where a future, individually reasonable change would silently weaken the companion's
+fail-closed posture or let its twin fences drift. Chief among them: `coverageOf` mapped the
+sealed `Deliverability.Verdict` with an `instanceof Held` ternary, so a hypothetical third
+permitted verdict kind would have meant *covered* — fail-open in the one class whose
+documented invariant is that errors are only ever conservative. Alongside it: the
+malformation battery and the purity fence were both verbatim copies of their core-side
+originals, drift-prone in exactly the mirror properties they exist to hold; the
+gate-contrast test's `SettledView` violated the interface's empty-for-unsettled contract
+and so pinned `decide`'s incidental evaluation order; `merge(CausalPast)` rebuilt two maps
+to return a value equal to an input in the session steady state; and the fence never
+guarded the "core's public surface alone" half of the package charter.
+
+**Decision**
+
+Fail-closed made compile-checked: `coverageOf` maps the verdict through a default-less
+pattern switch over the sealed interface, so a new permitted verdict kind fails compilation
+at this seam rather than silently serving (verified by compile test against a widened
+replica). The battery gets one spelling: `CausesMalformationVectors`, a public test-package
+catalogue of every malformation class as (family, label, bytes, diagnosis-fragment)
+vectors, swept by both decoders — `CausesCodecTest` through `CausesCodec.decode`,
+`CausalPastMalformationTest` through `CausalPast.decode`, each per family for its own red
+plus a whole-catalogue sweep as the drift fence, so a class added to the catalogue is
+enforced on both decoders with no further test change. The purity fence likewise:
+`PurityScan` holds the one forbidden-facility list — hardened with `java.util.concurrent`,
+`SecureRandom` and `UUID.randomUUID`, all verified absent from the scanned sources today —
+and the session scan appends the adapter *and* `api` packages, closing the charter gap.
+`merge(CausalPast)` returns the covering side itself when one side already covers the
+other, deciding coverage through `coverageOf` so the covers rule keeps one spelling; the
+identity return is pinned by `assertSame`, and lets a read tier skip re-encoding an
+unchanged token. The contrast test's `SettledView` now honours empty-for-unsettled, so it
+stays red on a genuine disposition change and stops dying with an unlabeled
+`NullPointerException` on a verdict-identical reordering inside `decide`. `Coverage`'s
+null-element `NullPointerException` is documented. The verification docs and AGENTS.md now
+name the session companion in the unit layer.
+
+**Alternatives**
+
+* Leaving the `instanceof` ternary — rejected: the review's compile test showed the sealed
+  switch turns the fail-open case into a build failure for free, and this codebase's whole
+  posture is that the conservative direction must be structural, not remembered.
+* Replacing `coverageOf`'s reuse of `Deliverability.decide` with direct iteration — 
+  rejected, twice over: D99 records the reuse as deliberate (one safety rule, one
+  spelling), and the review refuted the per-entry overhead on materiality against
+  budget-bounded frontiers.
+* Consolidating the session battery into a single sweep method — rejected: the gate's test
+  count never shrinks, and per-family methods keep each refusal class its own red.
+* A zero-allocation hand-rolled pre-scan for the merge short-circuit — rejected: the win is
+  the identity return, not the constant factor, and deciding "covers" anywhere except
+  `coverageOf` would give the rule a second spelling.
+* Shipping a public topic-name-to-id resolver, and the collection-gate meet as library
+  algebra — deferred, recorded here as the two review findings deliberately not built:
+  both widen surfaces (`kafka` and the companion respectively) beyond a hardening round,
+  and the meet belongs with whatever future change ships clock machinery at all.
+
+**Cost**
+
+`CausesCodecTest`'s narrative tests keep their own hand-built vectors beside the
+catalogue's — deliberate, since D94's exact-message pins stay verbatim, but it means a new
+malformation class pinned narratively without a catalogue entry still escapes the mirror;
+the catalogue's javadoc names it as the place new classes land. The steady-state merge now
+runs up to two coverage scans before a genuine merge pays for three map builds. And the
+hardened facility list constrains `core` too: a future core need for `java.util.concurrent`
+would have to argue with the shared fence rather than quietly extend a private list.
+
+**Specification gap**
+
+None. Everything here hardens application-layer companions and test structure; the
+specification's criteria are untouched.

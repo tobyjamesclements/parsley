@@ -15,6 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -99,6 +100,23 @@ class CausalPastTest {
         assertEquals(left, CausalPast.none().merge(left));
     }
 
+    /**
+     * A merge whose result would equal one side returns that side itself — the steady
+     * state of a session re-reading settled data — so callers can skip re-encoding an
+     * unchanged token. Identity is the pin: an implementation that rebuilt an equal past
+     * would pass equality but fail these.
+     */
+    @Test
+    void mergePastReturnsTheCoveringSideItself() {
+        CausalPast covering = past(Map.of(ORDERS, 5L, EVENTS, 9L));
+        CausalPast covered = past(Map.of(ORDERS, 3L));
+        assertSame(covering, covering.merge(covered));
+        assertSame(covering, covered.merge(covering));
+        assertSame(covering, covering.merge(covering));
+        assertSame(covering, covering.merge(CausalPast.none()));
+        assertSame(covering, CausalPast.none().merge(covering));
+    }
+
     /** Instances are values: a merge returns a new past and the original is unchanged. */
     @Test
     void mergeLeavesTheOriginalUnchanged() {
@@ -166,7 +184,10 @@ class CausalPastTest {
         CausalPast token = past(Map.of(ORDERS, 5L));
 
         assertTrue(Deliverability.decide(token.causes(), recorded.causes().byChannel().keySet(),
-                        channel -> OptionalLong.of(recorded.causes().byChannel().get(channel)))
+                        channel -> {
+                            Long recordedPosition = recorded.causes().byChannel().get(channel);
+                            return recordedPosition == null ? OptionalLong.empty() : OptionalLong.of(recordedPosition);
+                        })
                 .isDeliverable(),
                 "the delivery gate skips the unreceived channel and would deliver");
         CausalPast.Coverage coverage = recorded.coverageOf(token);
