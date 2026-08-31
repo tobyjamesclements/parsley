@@ -128,7 +128,8 @@ public final class CausesMalformationVectors {
 
         return List.of(
                 new Vector("null-value", "null header value", null, "null value"),
-                new Vector("unknown-version", "retired version 1", new byte[] {1, 0}, "unknown causes format version"),
+                new Vector("unknown-version", "version zero", new byte[] {0, 0}, "unknown causes format version"),
+                new Vector("unknown-version", "snapshot-era version 2", new byte[] {2, 0}, "unknown causes format version"),
                 new Vector("unknown-version", "unassigned version 3", new byte[] {3, 0}, "unknown causes format version"),
                 new Vector("unknown-version", "far version 9", new byte[] {9, 0}, "unknown causes format version"),
                 new Vector("truncation", "inside a position", java.util.Arrays.copyOf(twoChannels, twoChannels.length - 3), "truncated causes header"),

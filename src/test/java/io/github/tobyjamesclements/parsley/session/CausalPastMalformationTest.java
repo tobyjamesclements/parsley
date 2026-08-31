@@ -46,7 +46,7 @@ class CausalPastMalformationTest {
         refusesFamily("null-value");
     }
 
-    /** Rejects unknown versions, the retired flat grammar's byte included. */
+    /** Rejects unknown versions, the pre-release snapshot grammar's byte included. */
     @Test
     void rejectsUnknownVersion() {
         refusesFamily("unknown-version");

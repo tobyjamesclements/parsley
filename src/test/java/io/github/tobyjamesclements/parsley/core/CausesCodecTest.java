@@ -41,7 +41,7 @@ class CausesCodecTest {
     @Test
     void emptyFrontierIsTwoBytes() throws Exception {
         byte[] encoded = CausesCodec.encode(Causes.none());
-        assertArrayEquals(new byte[] {2, 0}, encoded);
+        assertArrayEquals(new byte[] {1, 0}, encoded);
         assertEquals(Causes.none(), CausesCodec.decode(encoded));
     }
 
@@ -70,7 +70,7 @@ class CausesCodecTest {
                 new ChannelId(highBit, 0), 9L));
 
         ByteBuffer golden = ByteBuffer.allocate(1 + 1 + 16 + 1 + 2 * 9 + 16 + 1 + 9);
-        golden.put((byte) 2).put((byte) 2);
+        golden.put((byte) 1).put((byte) 2);
         golden.putLong(0x0102030405060708L).putLong(0x090A0B0C0D0E0F10L).put((byte) 2);
         golden.put((byte) 2).putLong(41);
         golden.put((byte) 5).putLong(7);
@@ -109,15 +109,15 @@ class CausesCodecTest {
     }
 
     /**
-     * Rejects unknown version. Version byte 1 named a pre-release flat grammar no released
-     * message ever carried; it is retired and refused like any unknown byte, pinned here
-     * beside the first unassigned value (3) and a far one (9) so neither a widened accept
-     * set nor a salvaging default can stay green.
+     * Rejects unknown version. Version byte 2 named this same grouped grammar in
+     * pre-release snapshots only (D101) and is refused like any unknown byte, pinned here
+     * beside zero, the first unassigned value (3) and a far one (9) so neither a widened
+     * accept set nor a salvaging default can stay green.
      */
     @Test
     void rejectsUnknownVersion() {
         byte[] encoded = CausesCodec.encode(Causes.none());
-        for (byte version : new byte[] {1, 3, 9}) {
+        for (byte version : new byte[] {0, 2, 3, 9}) {
             encoded[0] = version;
             assertThrows(CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(encoded),
                     "version byte " + version + " must be undecodable");
