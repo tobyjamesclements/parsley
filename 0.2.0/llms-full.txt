@@ -1,0 +1,886 @@
+# Parsley — full documentation
+
+> Causal delivery order for Kafka Streams processors. If message A is a cause of message B,
+> every process that delivers both delivers A first, across restarts and for the whole
+> lifetime of a process. Causal safety is inviolable: a process blocks or stops, and never
+> reorders, drops, or resolves a wait by timeout.
+
+Parsley is a Java 21 library, MIT licensed, for Kafka Streams applications. The runtime
+dependencies are kafka-clients and kafka-streams. One declared process becomes one Kafka
+Streams application running under exactly_once_v2 and read_committed. The on-wire footprint
+is one record header, `parsley.causes`, on the application's own records. There are no
+protocol records, and plain consumers decode key and value with the application's own serdes
+alone.
+
+The delivery discipline is that of causal broadcast, indexed by channel rather than by
+process, over Lamport's happened-before relation. The correctness gate is a deterministic
+simulator checked against a happened-before oracle, run by `mvn verify`, together with
+integration tests against an embedded KRaft broker.
+
+This file describes version 0.2.0, the Maven artifact
+`io.github.tobyjamesclements:parsley:0.2.0`, resolved from Maven Central. Every link below
+tracks the main branch. The 0.1.0 release is a different implementation, whose API and wire
+format both differ from this version, and stays addressable by its version number.
+
+This file is the full text of every document listed in llms.txt, in the same
+order. It is generated from that file on each docs build; do not edit it by hand.
+
+---
+
+# Overview
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/index.md
+
+the guarantee, the scope, and the shape of an application
+
+# Parsley
+
+Kafka orders records within a topic-partition and orders nothing between partitions. Parsley
+supplies the missing cross-channel guarantee.
+
+> If message A is a cause of message B, every process that delivers both delivers A first.
+
+The guarantee holds for the whole lifetime of a process, across restarts, rebalances and
+partition reassignment.
+
+## Scope
+
+Parsley is a library over Kafka Streams. One declared process becomes one Kafka Streams
+application running under `exactly_once_v2` and `read_committed`. State changes, sends and
+consumed read positions commit in a single transaction.
+
+The delivery discipline is that of causal broadcast, indexed by channel rather than by
+process. Causality is Lamport's happened-before: same-process precedence, plus the edge from
+a delivery to any later send, closed transitively. A causes B when a delivery of A happened
+before B was sent.
+
+Where the guarantee cannot be upheld, a process stops. Waiting is never resolved by a
+timeout, and a held message is released only by evidence.
+
+## Shape of an application
+
+```java
+var orders    = Channel.of("orders", Serdes.String(), orderSerde);
+var shipments = Channel.of("shipments", Serdes.String(), shipmentSerde);
+var inventory = Store.of("inventory", Serdes.String(), Serdes.Long());
+
+var shipper = ProcessDefinition.named("shipper")
+    .receives(orders, (delivery, state) -> {
+        Long stock = state.get(inventory, delivery.key());
+        return Effects.builder()
+            .put(inventory, delivery.key(), (stock == null ? 100 : stock) - 1)
+            .send(shipments, delivery.key(), Shipment.of(delivery.value()))
+            .build();
+    })
+    .sends(shipments)
+    .stores(inventory)
+    .build();
+
+try (Parsley parsley = Parsley.start(config, shipper)) {
+    // runs until closed
+}
+```
+
+A handler receives the delivered message and a read view of state, and returns what it
+changes. It is given no producer, no timer and no clock.
+
+## Getting it
+
+Parsley is published to
+[Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
+
+```xml
+<dependency>
+  <groupId>io.github.tobyjamesclements</groupId>
+  <artifactId>parsley</artifactId>
+  <version>0.2.0</version>
+</dependency>
+```
+
+It requires Java 21 or newer, and inherits `kafka-streams` and `kafka-clients` at the version
+it was built against, 4.3.1. Those are the only libraries it adds to an application.
+
+0.2.0 is a reimplementation from the specification, and its API shares no type with 0.1.0.
+The causal metadata travels in a different header, so the two do not interoperate. Nothing
+written against 0.1.0 carries over.
+
+## Reading order
+
+| Page | Subject |
+|---|---|
+| [Model](model.md) | How the specification's terms map onto Kafka, and what the metadata expresses |
+| [Delivery](delivery.md) | The settled frontier and the delivery decision |
+| [State](state.md) | Ordering state, persistence and recovery |
+| [Failing closed](failing-closed.md) | What stops a process, and why the blast radius is the process |
+| [Runtime](runtime.md) | Wiring into Kafka Streams |
+| [Session consistency](session.md) | Carrying the causal frontier past the last consumer, out to clients |
+| [Wire format](wire-format.md) | The frozen on-wire definition of causal metadata |
+| [Verification](verification.md) | How the guarantee is tested |
+| [API](api.md) | Generated Javadoc |
+
+`SPEC.md` in the repository is the authority on correctness. `DECISIONS.md` records every
+choice the specification left open, and `EVIDENCE.md` records, per criterion, what would
+catch a violation.
+
+---
+
+# Model
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/model.md
+
+specification terms in Kafka, the causal frontier, pruning and growth
+
+# Model
+
+## Terms
+
+Every term of art in this repository names the following.
+
+**Happened-before.** Lamport's irreflexive partial order over events: same-process
+precedence, plus send-to-receipt edges, closed transitively (Lamport, *Time, Clocks, and the
+Ordering of Events in a Distributed System*, CACM 1978).
+
+**Cause, causal delivery.** A causes B when a delivery of A happened before B was sent.
+Causal delivery means no process that delivers both delivers them inverted. This is the
+delivery discipline of causal broadcast (Birman and Joseph, *Reliable Communication in the
+Presence of Failures*, TOCS 1987), transplanted onto channels.
+
+**Causal frontier.** A map from channel to the highest position known causal. It plays the
+role a vector clock plays in process-indexed causal broadcast (Fidge 1988; Mattern 1989),
+indexed by channel because the metadata carries no process identity.
+
+**Hold-back buffer.** The causal-broadcast queue of received but not yet deliverable
+messages, here per channel and persistent.
+
+**Exactly-once, EOS.** Kafka's transactional processing, `exactly_once_v2` with
+`read_committed`: a step's state changes, sends and consumed read positions commit atomically
+or not at all.
+
+**LSO, last stable offset.** Kafka's barrier for `read_committed` readers. It is the first
+offset of the earliest still-open transaction on a partition, and the high watermark where
+none is open. Everything below it is settled as committed data, or as aborted and control
+positions that will never yield a message.
+
+**Fail closed.** Stop delivering rather than weaken the guarantee.
+
+## Specification terms in Kafka
+
+| Term | Kafka realisation |
+|---|---|
+| Channel | Topic-partition, identified by topic ID and partition |
+| Position | Record offset |
+| Message | Record: key bytes, value bytes, headers, offset |
+| Process | One Kafka Streams task of the application built for a declared process |
+| Step | One Kafka Streams transaction |
+| Earliest retained position | Log-start offset |
+
+A channel is identified by topic ID rather than topic name. A topic deleted and recreated
+under the same name yields a different channel, so positions recorded against the old log
+cannot be read as positions in the new one.
+
+One declared process becomes one Kafka Streams application, with its own `application.id`
+and therefore its own consumer group. This is what allows two declared processes to receive
+the same channel, which a single Streams application cannot do, since it cannot register one
+topic in two source nodes.
+
+Each application holds one subtopology: byte-level sources for the received topics, one
+processor node, byte-level sinks for the send topics. Streams induces one task per partition
+group. That task is the specification's process, and its received-channel set is partition
+*i* of each received topic.
+
+## The causal frontier
+
+A message's metadata expresses its causes as (channel, position) pairs. Each process keeps a
+frontier: per channel, the highest position known to be a cause of that process's subsequent
+sends.
+
+One pair per channel suffices. Replacing two pairs on one channel by the greater position is
+compression, since expressing a position at or above a cause's position expresses the cause.
+
+The frontier grows from two events.
+
+**Delivery.** Delivering message M from channel *c* at position *p* merges `(c, p)`. The
+delivery happened before every later send, so M is a cause of them.
+
+**Receipt.** Receiving M merges every pair in M's metadata, whether or not M is delivered.
+Happened-before passes through receipt, so M's causes are already causes of subsequent sends.
+A process that has seen a message but not yet delivered it is still constrained by what that
+message carried.
+
+Sends do not enter the frontier. Causality flows through delivery-before-send, so a process's
+own send becomes a cause of its later sends only once some process delivers it and that
+delivery flows back. One consequence is that a message sent to a channel its sender also
+receives from carries only positions strictly below its own, because offsets are assigned in
+append order.
+
+## Pruning and growth
+
+A pair `(c, p)` is dropped when *p* falls below *c*'s log-start offset, or when *c*'s topic
+identity no longer resolves. Log-start facts may be stale, and a stale fact is a lower bound,
+so staleness delays pruning without over-pruning.
+
+Frontier size follows the causal graph rather than a process's own declaration. Receipt
+merges every pair a message carried, including channels the receiving process never receives,
+which is required for downstream re-expression. Steady-state size approaches the sum of
+partition counts over the transitive upstream closure.
+
+Encoded size depends on the frontier's shape: a topic's first partition costs 26 bytes and
+each further partition of the same topic 9 (a byte more per field once partition ids or
+counts pass 127), so the encoding reaches Kafka's default 1 MiB record ceiling between
+roughly 40,000 entries when every topic contributes one partition and 116,000 when few
+topics contribute many. Reaching it inside the producer would stop the process with no
+diagnosis from Parsley, so a metadata budget is applied first:
+`ParsleyConfig.metadataBudgetBytes`, 256 KiB by default. Exceeding it stops the process with
+an attributable reason. Frontier size and encoded width are logged each facts round, and
+again at 80% of budget.
+
+---
+
+# Delivery
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/delivery.md
+
+settled positions, the delivery decision, order and duplicates
+
+# Delivery
+
+## Settled positions
+
+Per received channel *c* the engine tracks two things.
+
+`fedUpTo(c)` is the highest position such that every position at or below it has either been
+fed to this process as a message or will never arrive as one. Two inputs advance it.
+
+Receipt of a record at offset *o* on *c* sets `fedUpTo(c) := max(fedUpTo(c), o)`. Within an
+execution the host feeds each partition in offset order, and Kafka's per-partition order
+means every earlier offset was already fed or will never yield a record. Aborted
+transactions, control records and compaction account for the positions that yield nothing.
+
+Read-position facts contribute the group's committed offset *n*, giving
+`fedUpTo(c) := max(fedUpTo(c), n - 1)`. A committed position asserts that everything below it
+was fed or never will be. This is what advances past a trailing run of positions that never
+arrive, and it rests on the substrate's own report rather than on elapsed time.
+
+`held(c)` is the hold-back buffer: received but undelivered messages of *c*, in position
+order, persisted.
+
+Settled position is derived from these rather than stored:
+
+```
+settled(c) = held(c) is empty ? fedUpTo(c) : head(held(c)).position - 1
+```
+
+Every position at or below `settled(c)` is delivered or will never arrive. Positions below
+the buffer head that were fed are delivered, since the head is the lowest undelivered one,
+and gaps are covered by the fed-or-never meaning of `fedUpTo`.
+
+## The decision
+
+```
+decide(causes, receivedChannels, settled)
+```
+
+Message M is deliverable when, for every pair `(c, p)` in M's causes, either *c* lies outside
+`receivedChannels`, or `settled(c)` is defined and `p <= settled(c)`.
+
+A cause on a channel the process does not receive imposes no constraint. The process will
+never deliver that message, so no order it could observe can be inverted. This also covers
+dead incarnations of recreated topics, whose topic identity matches no received channel.
+
+The function reads no clock, no timestamps, and nothing outside its arguments. The same unit
+decides every delivery, and it is callable without a host.
+
+## Order within and across channels
+
+Only the head of each channel's buffer is offered to the decision, which enforces per-channel
+FIFO structurally.
+
+Across channels, delivery is a deterministic drain: scan the received channels in a fixed
+total order, deliver every deliverable head, and repeat until a full pass delivers nothing.
+Determinism means replay after a restart reproduces the same order from the same state.
+
+## Baselines and duplicates
+
+Before anything is known of *c*, `settled(c)` is undefined, and any dependency on *c* holds
+the message while *c* is received. The initial committed position established at first start
+initialises `fedUpTo(c)`, so positions below the first receipt count as already satisfied.
+
+A record at an offset at or below `fedUpTo(c)` that is not in the buffer was already
+delivered in a committed step. The host re-feeds exactly those records whose read positions
+were not committed, so such a record is dropped rather than redelivered. An aborted step
+rolls `fedUpTo` back with everything else, so a redelivery after an abort is not a duplicate.
+
+---
+
+# State
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/state.md
+
+ordering state layout, persistence and recovery
+
+# State
+
+## Ordering state
+
+Each process owns one reserved Kafka Streams `KeyValueStore<Bytes, byte[]>`, named with the
+reserved prefix `__parsley.`.
+
+| Key | Value |
+|---|---|
+| `v` | Store format version |
+| `f` + channelId | `fedUpTo`, int64 |
+| `c` + channelId | Frontier position, int64 |
+| `p` + channelId | Delivered causal past, int64 |
+| `n` + topic name | Topic identity recorded for that name |
+| `h` + channelId + position | Held message: key, value, headers, decoded causes, timestamp |
+
+`channelId` is 20 bytes, being the topic identity followed by the partition, big-endian. Each
+key class carries a distinct leading tag, so one class can be scanned without reading the
+rest. Held messages sort by position within a channel, so a prefix scan returns a channel's
+hold-back buffer in order.
+
+Both the key layout and the held-message encoding are versioned. A version this build does
+not recognise stops the process.
+
+## Persistence and recovery
+
+The store is persistent and changelogged. Under exactly-once semantics its content commits
+atomically with the read positions consumed and the messages sent. This is what carries held
+messages across a restart, even though Streams commits read positions past records that were
+buffered rather than delivered.
+
+A held message is restored with its key, value, headers and timestamp exactly as received.
+Null keys, null values and null header values are each distinguished from empty ones.
+
+The delivered causal past is stored separately from the frontier. The frontier governs what a
+process may express on its sends. The delivered past governs what a channel joining the
+received set later may deliver, by clamping it above effects already delivered while that
+channel was absent. Both are advanced on delivery.
+
+## Isolation from application state
+
+Application state cannot alter ordering state. Application store names may not use the
+reserved prefix, and the handler seam exposes only the stores a process declared.
+
+---
+
+# Wire format
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/wire-format.md
+
+the frozen, normative definition of the causal metadata header
+
+# Wire format
+
+This page is the normative definition of the causal metadata a Parsley-sent message carries.
+It stands alone. Any reader can decode a message's key and value with the application's own
+codecs and ignore this metadata. Any implementation of this format can decide deliverability
+from what is defined here.
+
+## Placement
+
+Causal metadata travels in exactly one Kafka record header.
+
+The header key is `parsley.causes`, in ASCII. The header key prefix `parsley.` is reserved.
+Applications must not attach headers with this prefix, and Parsley refuses emissions that do.
+This is what makes the metadata distinguishable by construction from headers attached by
+applications or by other systems.
+
+Every message a Parsley process sends carries this header, including where it expresses no
+causes.
+
+A message with no `parsley.causes` header has no causes and is immediately deliverable. A
+message with more than one such header, or one failing the grammar below, is undecodable: the
+receiver fails closed, and must not treat the metadata as absent. A header present with a
+null or empty value counts as present and fails the grammar.
+
+## Grammar
+
+All fixed-width integers are big-endian. Version 1 is the only version: entries grouped by
+topic, structural fields as minimal varints, positions fixed-width.
+
+```
+value          := version topicCount group*
+version        := uint8    -- 0x01
+topicCount     := varint   -- number of groups, >= 0
+group          := topicId partitionCount pair*
+topicId        := 16 bytes -- Kafka topic ID: 8 most significant bytes, then 8 least
+partitionCount := varint   -- number of pairs in the group, >= 1
+pair           := partition position
+partition      := varint   -- >= 0
+position       := int64    -- >= 0, a Kafka offset on that topic-partition
+```
+
+`varint` is unsigned base-128: seven payload bits per byte, lowest bits first, the high bit
+set on every byte except the last. Only the minimal spelling is valid, and the values a
+varint may spell are exactly 0 to 2³¹ − 1: a terminal byte of zero after the first byte, a
+varint longer than five bytes, and a fifth byte carrying anything beyond the low three bits
+are each undecodable. The last of these matters even though it looks like more padding — a
+32-bit reader that shifts the surplus away would decode `85 80 80 80 10` to the same value
+as `05`, two spellings for one value that the padding rule alone cannot see.
+
+Every constraint below is mandatory. Violating any one makes the value undecodable.
+
+1. The version byte is `0x01`. Any other value is undecodable, and readers must not guess
+   forward compatibility.
+2. The value contains exactly `topicCount` groups with no trailing bytes, and each group
+   exactly `partitionCount` pairs.
+3. Topic IDs ascend strictly across groups in the unsigned lexicographic order of their 16
+   bytes, so each topic appears at most once.
+4. `partitionCount` is at least one, and partitions ascend strictly within their group.
+   This lists channels in the unsigned lexicographic order of their 20-byte encoding — the
+   16 topic-ID bytes followed by 4 big-endian partition bytes — and with minimal varints
+   the encoding of a given cause set is unique byte for byte.
+5. `topicId` is not all-zero bytes. The substrate reserves the zero topic ID and never
+   assigns it to a channel, so no genuine cause can name it; a group carrying it is
+   undecodable. (A reader-side tightening, not a grammar change: no conforming writer has
+   ever produced such a group, because writers only express channels the substrate named —
+   D83 records the reasoning.)
+6. `position` is non-negative.
+
+## Meaning
+
+Each pair, with its group's topic ID, expresses causes on one channel as the entry
+`(topicId, partition, position)`. The channel is the topic-partition identified by topic ID,
+so a topic deleted and recreated under the same name is a different channel. The entry
+stands for every cause of this message on that channel whose position is at or below
+`position`.
+
+A message's metadata expresses every cause of the message whose position is at or above its
+channel's earliest retained position at send time. This includes causes known to the sender
+only from the metadata of messages it had received and not yet delivered.
+
+Entries never name the sending process, and never name a position that had not been assigned
+when the message was sent. A message sent to a channel its sender also receives from never
+carries an entry for its own channel at or above its own position.
+
+A receiver may deliver a message only when, for every entry naming a channel in the receiver's
+received-channel set, every position on that channel up to and including the entry's position
+has either been delivered at that receiver or will never yield a message it receives. Entries
+naming channels outside that set impose no constraint there, which includes dead incarnations
+of recreated topics. The receiver still re-expresses them on its own sends while they can
+still matter.
+
+## Stability
+
+The header key, the reserved prefix and the version-1 grammar are frozen. Any change to the
+grammar requires a new version byte. Readers encountering an unknown version fail closed.
+
+---
+
+# Failing closed
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/failing-closed.md
+
+what stops a process, the blast radius, and every refusal reason
+
+# Failing closed
+
+Where the guarantee cannot be upheld, a process stops delivering. It stays stopped, and
+re-fails on restart, until an operator intervenes — with one recorded exception:
+`COVERED_POSITION_FED` raised because this execution was superseded does not recur, and a
+restart recovers it (the reason's row below, and its exception message, say so).
+
+A fail-closed event throws `ParsleyFailClosedException` out of the processor, which fails the
+task's step. The transaction aborts, and nothing is delivered past the failure.
+
+## Blast radius
+
+The blast radius is the whole process rather than the affected channel alone.
+
+After receiving a message whose metadata cannot be decoded, every subsequent send of that
+process risks under-expressing causes. Causes known only from the metadata of received but
+undelivered messages must be re-expressed, and an undecodable header conceals exactly those.
+A downstream process acting on an under-expressed frontier could then invert causal order.
+Stopping the process satisfies the requirement to stop at minimum on the affected channel.
+
+## Triggers
+
+| Reason | Condition |
+|---|---|
+| `UNDECODABLE_METADATA` | Metadata present and not decodable |
+| `POSITIONS_DISCARDED_UNREAD` | A read position at or below the log-start offset, so discarded positions cannot be assumed empty — whether detected by the engine's log-start check mid-run, or at start when a lost read position would be re-established beyond the ordering state's covered position |
+| `OUT_OF_ORDER_FEED` | The host fed a channel out of position order within one execution, or fed a channel recorded as no longer existing |
+| `COVERED_POSITION_FED` | A message arrived at a position a read-position report had already covered as fed-or-never-arriving. Either the report was false, or this execution was superseded and a facts round observed its successor's committed progress — a superseded execution's step cannot commit, a restart recovers, and the refusal then does not recur |
+| `ORDERING_STATE_LOST` | Committed read positions the bootstrap did not write (a previous Kafka Streams execution's stamp, or bare external commits) exist while the ordering-changelog partition behind them holds no records — the topic absent, or its records purged, in whole or for that one partition. If a prior execution ran, the state of its most recent committed step has been lost and resuming would silently under-express every cause delivered before the loss |
+| `CHANNEL_REMOVED_WITH_HELD_MESSAGES` | A declaration removed a channel that still holds messages |
+| `CHANNEL_IDENTITY_CHANGED` | A topic resolves to an identity other than the one recorded |
+| `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES` | A received topic was deleted while its messages remain held |
+| `TASK_WIDTH_CHANGED` | The task count changed, so ordering state no longer matches its partitioning |
+| `UNKNOWN_ORDERING_STATE_FORMAT` | Stored state cannot be trusted: a format version this build cannot read, state present without its version entry (the changelog head has been lost), a corrupt entry — malformed key, wrong-length value, or a held blob whose lengths do not match its bytes — a restored frontier naming the reserved zero topic ID, or held messages restored out of position order |
+| `EMISSION_TO_UNDECLARED_CHANNEL` | A handler emitted on a topic outside its process's declared send set. Membership is by topic name: an emission on a declared topic is sent (serialized with the declared channel's serdes) whatever `Channel` instance carried it |
+| `STATE_ACCESS_TO_UNDECLARED_STORE` | Application logic read or wrote a store its process never declared, or used a `Store` instance other than the declared one. Every effect target is validated before any write applies, so the refusal leaves no partial step behind — and a read refusal an application catch swallows is latched and rethrown at the delivery frame's next boundary (after the payload's deserializers, after the handler, and after the effects apply), so the step still fails wherever in the frame the read ran |
+| `RESERVED_HEADER_USED` | An application header used the reserved prefix |
+| `HANDLER_RETURNED_NULL_EFFECTS` | A handler returned `null` instead of `Effects`; return `Effects.none()` for a step that changes nothing |
+| `APPLICATION_PAYLOAD_UNDECODABLE` | A payload — a delivered message's, or a stored state value read through the seam — could not be decoded by its declared serde. A state-read failure an application catch swallows is latched and rethrown at the delivery frame's next boundary |
+| `APPLICATION_PAYLOAD_UNSERIALIZABLE` | An effect's payload or a state-read key could not be serialized by its declared serde — including a `Channel` or `Store` instance whose types mismatch the declared one. Effects are serialized during planning, before any write applies |
+| `SUBSTRATE_MISCONFIGURED` | The substrate is configured in a way the guarantee cannot survive |
+| `METADATA_BUDGET_EXCEEDED` | Causal metadata exceeded the configured budget |
+
+Truncation is caught three times. The main consumer runs with `auto.offset.reset=none`, so an
+out-of-range position kills the task rather than silently jumping; the engine independently
+fails when a log-start fact exceeds `fedUpTo + 1`; and a start that would re-establish an
+expired read position beyond the ordering state's covered position refuses before committing
+it — the one shape the other two cannot see, because the re-established position is in range
+and its own report would advance the coverage the engine's check compares against.
+
+## Diagnosis
+
+`Parsley.status()` reports each process. `ProcessStatus.refusalReason()` is present where a
+process stopped to preserve the guarantee, and distinguishes that from any other stop.
+
+A held message is not a failure. It means a cause has not arrived, and the diagnosis is which
+cause: `Deliverability.Held` names every outstanding blocker, with the position required and
+the position reached.
+
+---
+
+# Runtime
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/runtime.md
+
+start sequence, configuration lockdown, facts ingestion, the handler seam
+
+# Runtime
+
+## Start
+
+`Parsley.start` performs the following for each declared process.
+
+1. Resolves topic identities through the admin client, and fails where a received topic is
+   missing.
+2. Reads the group's committed positions. For received partitions with none, it pre-commits
+   the declared initial position, taking earliest as the log start and latest as the end.
+   The commit goes through a generation-fenced group membership rather than an admin
+   alteration, so a stale paused bootstrap cannot overwrite a newer lifetime's positions.
+   This gives `auto.offset.reset=none` a defined starting point and establishes the
+   first-receipt baseline. On later starts, existing commits win.
+3. Builds the topology and starts Kafka Streams with `processing.guarantee=exactly_once_v2`,
+   from which `isolation.level=read_committed` follows.
+
+Prior state pins the task width. The ordering store's changelog cannot change partition
+count, so a width-changing declaration refuses with its remedy rather than failing inside the
+host's internal-topic validation.
+
+A channel that rejoins the received set resumes rather than re-entering delivered past. This
+is backed by the `fedUpTo` record even where group positions have expired. A missing position
+alongside prior state re-establishes earliest rather than the declared latest.
+
+## Configuration lockdown
+
+Configuration carrying the guarantee is set by the runtime and cannot be overridden.
+`ParsleyConfig.Builder.streamsProperty` rejects the owned keys, among them
+`processing.guarantee`, `isolation.level`, `auto.offset.reset`, `group.id` and
+`transactional.id`. Neither the `Topology` nor raw configuration is exposed, so no documented
+operation runs the topology without exactly-once semantics.
+
+## Facts ingestion
+
+Inside the processor, a punctuator periodically ingests position facts: committed positions,
+log-start positions, and topic existence and identity. A name resolving to a different
+identity is affirmative evidence of recreation. An unknown identity is corroborated against
+its last-known name and debounced in time. An authorization denial is treated as denial
+rather than death.
+
+Gathering runs on one background thread per runtime. The punctuator snapshots the inputs,
+applies each completed round exactly once on the stream thread, and never blocks on the
+cluster. Every fact is a per-position lower bound, so a round applied one interval late
+releases and prunes exactly what a fresh one would.
+
+This punctuator is internal plumbing for ingesting the host's read-position reports, which is
+the only transport Kafka Streams offers for them. It delivers nothing that was not received
+from a channel, and the decision it triggers remains the pure function described in
+[Delivery](delivery.md). Time never appears among that function's inputs. The public API
+offers no timers and no scheduled callbacks.
+
+## Zombie safety
+
+Facts are monotone. Any delivery a superseded execution performs on stale state sits in a
+transaction the host fences and aborts, so it has not occurred.
+
+## The seam
+
+```java
+Effects handle(Delivery<K, V> delivery, StateReader state)
+```
+
+`Delivery` carries the delivered message. `StateReader` is a read-only typed view over the
+process's declared stores. Effects return through the return value: typed sends, statically
+typed per channel, and state writes.
+
+The logic receives no other capability. Sending never blocks on the deliverability of the
+message sent. Emissions are stamped with the current frontier and forwarded within the step.
+
+---
+
+# Session consistency
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/session.md
+
+carrying the causal frontier past the last consumer, out to clients
+
+# Session consistency
+
+Parsley's guarantee ends at the last consumer's seam. A client behind an HTTP gateway sees
+projections of the pipeline's output with no ordering promise at all: it can write an order,
+query a read model, and be told the order does not exist.
+
+The `session` package extends the causal frontier past that edge. A client holds its
+frontier as a token the server mints; the server stamps a validated token onto writes as
+causes, refuses to serve reads from data whose recorded past does not cover the token, and
+returns the token refreshed with what was served. That buys **session consistency** —
+read-your-writes, monotonic reads, writes-follow-reads — for a participant that runs no
+protocol at all.
+
+This is an application-layer pattern built *on* Parsley, not a change to the guarantee
+Parsley provides. Nothing in `core`, `api` or `kafka` reads a token, and holding one grants
+no delivery guarantee. The design and its open questions are recorded in issue
+[#96](https://github.com/tobyjamesclements/parsley/issues/96); the layout decision is D99.
+
+## The client as a process
+
+The pattern works because the protocol's rules already describe a client, with channel
+indexing doing the heavy lifting: coordinates are `(topicId, partition, offset)` — durable,
+globally meaningful, and meaningful to a party in no group membership.
+
+| Engine rule ([Model](model.md#the-causal-frontier)) | Client equivalent |
+|---|---|
+| Receipt merges every carried cause | Read merges the served data's recorded past |
+| Delivery merges `(channel, position)` | — the client delivers nothing |
+| Sends are stamped with the frontier | Write stamps the validated token as causes |
+| Sends do not enter the frontier | A write enters the token only once the broker's acknowledgement confirms its coordinate |
+
+## One type, every role
+
+`CausalPast` is the companion: a frontier used as a client's token, as the past recorded
+beside a projected row, and as either side of the comparison between them.
+
+**Write path.** Decrypt and bound the inbound token → produce with the token's pairs merged
+into the record's `parsley.causes` header (`encode()` is a valid header value) → merge the
+acknowledged `(topic, partition, offset)` coordinate → re-mint → return.
+
+**Read path.** Decrypt the inbound token → query → `recordedPast.coverageOf(token)` → if it
+does not cover, wait bounded, fail with retry-after, or route to a caught-up replica; never
+serve → merge the served past into the token → re-mint → return.
+
+The wire form is the [frozen grammar](wire-format.md) itself, and `decode` is exactly as
+strict as the engine's: a damaged token is refused, never salvaged into a weaker one.
+
+Coordinates at the edge arrive as topic names — the produce acknowledgement and the handler
+seam alike — while `ChannelId` carries the topic id. Resolve names once at startup, from
+the admin client; a recreated topic resolves to a different id, which is the point.
+
+## Coverage fails closed
+
+The delivery gate skips a cause on a channel outside the process's received set — mandatory,
+since a gate cannot wait for what it will never see. A read tier wants the opposite
+disposition: a channel its recorded past cannot verify must mean *do not serve*, because
+serving anyway is a silent read-your-writes violation. `coverageOf` therefore checks every
+channel a token names and reports the unverifiable ones as gaps. The error is always in the
+conservative direction — a refusal to serve, never a stale serve.
+
+The consequence to plan for: a recorder that sees only its own delivered coordinates can
+never cover a token naming a channel it does not receive. That is the situation behind the
+handler seam, which filters the causes header before application code sees it: a client
+that writes to `orders` and reads a model fed only by a downstream `events` topic fails
+coverage forever, not transiently. A projector consuming raw records does not have this
+problem — the header carries the transitive closure — which is one reason the
+database-hosted shape below is the right one for a serving tier.
+
+## The token does not replace delivery
+
+The token protects the client's session; only causal delivery protects the projection's
+value. A projector applying updates out of causal order can leave a row whose recorded past
+covers a token while its value is wrong. The projector is therefore a Parsley process — and
+because clients query a database, not a Streams store, it wants to be a process hosted on
+the database's technology rather than on Kafka Streams.
+
+## A projector on the database's transaction
+
+Let the database be the host: projection rows, clock rows and consumed positions all commit
+in one database transaction, and the projector resumes from the positions the database
+holds. That is the Kafka Streams host's shape with the atomicity domain moved — one commit
+domain, so the dual-write discipline an external database usually demands never arises. The
+core was built to permit exactly this: the engine is host-independent, runs over an
+`OrderingStore`, and the delivery decision is a pure function. The library ships no
+database host today; the simulation harness is the proof that a non-Streams host honouring
+the specification's Host obligations runs real engines.
+
+Consuming raw records, the projector sees the `parsley.causes` header the seam withholds,
+so its clock is the transitively closed delivered past: per delivered message, merge the
+own coordinate and every carried pair — the same fold the engine's `markDelivered`
+performs. In exchange the host owes what Kafka Streams was providing: `read_committed`
+consumption, fencing of zombie writers (a partition epoch plus monotone guards), and
+position facts for pruning. Do not substitute `frontierSnapshot()` from behind a seam: the
+frontier advances on receipt, before delivery, so it can name coordinates whose effects
+are still held back — telling a client its write is visible when it is not.
+
+## Clocks are per partition; collections gate on the meet
+
+Keep one clock row per consumed partition, written in the same transaction as that
+partition's rows. Each partition's projector is the single writer of its own clock — no
+shared hot row, and ownership moves with partition assignment.
+
+A single-entity read gates against the owning partition's clock. A collection spanning
+partitions cannot gate on rows at all: its failure mode is absence — the row a write
+should have created is not there yet, and a missing row has no past to check — so it gates
+on what the whole model has applied. The sound aggregate is the pointwise **minimum**
+across partition clocks, not the maximum. A max-merged superset clock reports the most
+advanced partition while a collection's correctness is bounded by the least advanced: one
+caught-up partition hides every laggard, and the gate serves rows that do not yet reflect
+the write — a stale serve, the failure the pattern exists to prevent.
+
+One query computes the meet, because a terminal partition's own coordinates have exactly
+one contributor, where minimum and maximum coincide:
+
+```sql
+SELECT channel, MIN(position), COUNT(*) FROM partition_clock GROUP BY channel
+```
+
+treating an upstream channel counted on fewer than all partitions as absent, which fails
+closed. The meet also has the property the join lacks: stale is safe. A lagging meet only
+blocks a little longer, never serves stale data, so it may be materialised asynchronously
+where read volume demands it; a join must never be materialised as a gate.
+
+The meet's liveness cost is the idle partition. Inherited entries advance only when a
+partition applies a message; every emission carries the emitter's whole frontier, so active
+partitions converge on their next message, but a silent partition pins the meet at its
+last-seen frontier. Bound the wait and fail with retry-after, or have the application fan
+a periodic no-op event across every terminal partition — the pipeline stays clockless, and
+the heartbeat carries real causal evidence rather than a wall-clock guess.
+
+Refresh a collection read's token from the meet it was gated on, plus the own coordinates
+of the partitions that contributed rows — never from the superset, which inflates the
+client's future demands with coverage the read did not prove.
+
+## Operating it
+
+Build service-to-service first. Between Kafka participants a producer stamps
+`parsley.causes` directly and the ceiling is Parsley's own metadata budget, so the token
+size question never binds; at the HTTP boundary the same frontier must fit a header or a
+cookie, which is what makes the browser-facing form the constrained one.
+
+A token is untrusted input even when this application minted it. Bound the entry count and
+encoded width, reject channels the tier does not recognise, and bound positions against a
+known-live upper bound: a validated token becomes causes on a produced record, and every
+downstream receiver of those channels holds messages until they settle
+([failing closed](failing-closed.md)), so an over-broad token affects liveness for everyone
+behind the topic.
+
+Client-facing tokens should be encrypted, not merely signed — offsets leak throughput and
+topic ids leak topology — but the encrypted form stops at the gateway: the engine decodes
+only the frozen grammar, so the gateway decrypts, bounds, and stamps a plain header.
+
+Give tokens a TTL well short of retention. A pruned coordinate can otherwise never be
+covered again, and on mirrored estates no log-start evidence ever arrives for foreign
+topics, so expiry is the mitigation that works everywhere. The token also only ever grows;
+expiry is what stops a long session converging on the size of the topology.
+
+---
+
+# API
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/api.md
+
+the packages and where the generated Javadoc lives
+
+# API
+
+The generated Javadoc for this version is published alongside this site.
+
+[Browse the Javadoc](javadoc/index.html)
+
+## Packages
+
+`io.github.tobyjamesclements.parsley.api` is the declaration surface. An application declares
+`Channel` typed topics, `Store` typed stores, and one `ProcessDefinition` per process.
+Logic is a `Handler`, receiving a `Delivery` and returning `Effects`.
+
+`io.github.tobyjamesclements.parsley.core` is the protocol, independent of any host. It names
+no host type and touches nothing outside its `OrderingStore`. The safety rule is
+`Deliverability.decide`, a pure function. `ProcessEngine` holds the state that function reads.
+
+`io.github.tobyjamesclements.parsley.kafka` is the Kafka Streams adapter.
+
+`io.github.tobyjamesclements.parsley.session` is the companion surface for
+[session consistency](session.md) at the pipeline's edge: `CausalPast`, a causal frontier
+carried as a client token or recorded beside projected data. It rides the core's public
+surface and is read by nothing in the other three packages.
+
+## Automatic module name
+
+`io.github.tobyjamesclements.parsley`
+
+---
+
+# Verification
+
+Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/verification.md
+
+the test layers, the sabotage meta-tests, and the standard of evidence
+
+# Verification
+
+The suite runs under `./mvnw verify` in roughly four minutes and requires no Docker.
+
+## Layers
+
+**Pure core.** Codec round-trip tests, decision-unit table tests, and engine unit tests. A
+purity scan — `PurityScan`, the one spelling of the fence — fails on any reference to a
+clock, randomness, the network, or the substrate in the `core` sources.
+
+**Session companion.** Unit tests over `CausalPast` in the same style: merge and coverage
+semantics, and a malformation battery drawn from the shared vector catalogue the codec's
+own tests also sweep, so both decoders stay exactly as strict with one spelling per
+vector. The purity scan runs again over the `session` sources, with the Kafka adapter and
+`api` packages additionally forbidden, pinning the companion to the core's public surface
+([Session consistency](session.md)).
+
+**Simulation.** A simulated substrate and host honouring the host obligations drives many
+engines over randomised topologies, interleavings, gaps, aborted-transaction runs, crashes,
+restarts and read-position reports. Runs are seeded and deterministic, so a failure
+reproduces exactly from its seed. `CausalOrderPropertyTest` sweeps seeds 1 to 300.
+
+An oracle tracks real happened-before outside the engine and asserts causal order, absence of
+duplicates, FIFO per channel, and quiescent liveness, meaning everything received is
+eventually delivered. Causal order is checked twice: over delivered pairs at the end of a
+run, and at the moment of each delivery — every true cause must already be delivered,
+settled by evidence the simulated world corroborates, or lie within the delivered past the
+engine is entitled to drop behind. The delivery-time check exists for the case the pair
+check cannot see: a premature delivery whose cause never delivers, because the delivery
+itself advanced the clamp that later drops the cause.
+
+**Sabotage meta-tests.** The same suite runs against deliberately broken engines through a
+test-only hook, asserting that the oracle fails. The `Sabotage` modes each disable one
+guarantee: the dependency check, the FIFO hold, the duplicate drop on refeed, the treatment
+of undecodable metadata, persistence of held messages, truncation handling, and others.
+
+This is the evidence that the tests would catch a violation. `SabotageMetaTest` pins one
+targeted case per mode — for the refusal-disarming modes, both that the sabotage disarms the
+refusal and a pinned seed on which the oracle catches the resulting violation — and a
+randomised sweep records the margin by which the oracle catches each broken engine. One mode
+is the exception: `DELIVER_PAST_DEAD_HOLDS` is reached by no random seed (calibrated at 0 in
+300), so its oracle evidence is a deterministic scenario constructing the causal inversion,
+and it carries no sweep floor.
+
+**Streams wiring.** `TopologyTestDriver` tests for the header format on the wire, byte-exact
+key and value pass-through, Schema-Registry-format serdes, and punctuator fact ingestion
+through an injected facts source.
+
+**Integration.** Embedded KRaft broker tests for commit and abort behaviour under
+exactly-once semantics, restart with state restore, restart after a state-dir wipe with the
+ordering state rebuilt entirely from its changelog, migration of a task holding an
+undelivered effect between two live instances, a full broker bounce with a held message
+neither lost nor freed by the outage, aborted-transaction gaps and trailing
+runs, log truncation, and a plain `read_committed` consumer decoding output with application
+serdes alone.
+
+## Standard of evidence
+
+`EVIDENCE.md` records, per specification criterion, what would catch a violation of it. Each
+cell names the test that fails when the behaviour breaks. A test that stays green when the
+behaviour breaks is treated as worse than an empty cell.
+
+There is no mutation-testing gate. `Sabotage` is this project's mutation testing, with the
+mutations chosen against specification criteria rather than syntax. `DECISIONS.md` D67
+records that decision, and the gaps found before the gate was removed.
