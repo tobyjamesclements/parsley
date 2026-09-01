@@ -14,7 +14,7 @@ site/
 .venv/
 
 # Generated Javadoc staged into docs source for versioned builds
-docs/api/
+docs/javadoc/
 
 # Concatenated docs generated from docs/llms.txt by scripts/build-llms-full.py
 docs/llms-full.txt

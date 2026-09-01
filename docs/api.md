@@ -2,7 +2,7 @@
 
 The generated Javadoc for this version is published alongside this site.
 
-[Browse the Javadoc](api/index.html)
+[Browse the Javadoc](javadoc/index.html)
 
 ## Packages
 
