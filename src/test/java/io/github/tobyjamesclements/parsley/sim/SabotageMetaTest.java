@@ -108,6 +108,30 @@ class SabotageMetaTest {
                 () -> "seed 4 must catch the engine sailing past truncation, got: " + violations);
     }
 
+    /**
+     * Delivering past a hold that retention discarded inverts causal order and the oracle
+     * sees it (D104): with the log-start check disarmed, the holder delivers the effect B,
+     * whose sender legally pruned the discarded cause, before the held cause X. Both the
+     * delivery-time check (a cause this process still holds is never settled by world
+     * truth) and the end-of-run pair check flag it.
+     */
+    @Test
+    void deliveringPastARetentionDiscardedHoldInvertsCausalOrderAndTheOracleSeesIt() {
+        Rig rig = TargetedScenarioTest.retentionCrossesAHeldMessage(SabotageMode.IGNORE_TRUNCATION);
+        SimProcess p = rig.proc("p");
+        assertDoesNotThrow(p::ingestFacts, "the sabotage must disarm the refusal, or the assertion below tests nothing");
+        p.feedOne(rig.chans.get("b"));
+        p.feedOne(rig.chans.get("w"));
+        p.drain();
+        p.commitStep();
+        List<String> violations = rig.violationsAfterFinalChecks();
+        assertTrue(violations.stream().anyMatch(v -> v.startsWith("Safety 1 (delivery-time)")),
+                () -> "expected the delivery-time check to flag the effect delivered past its held cause, got: "
+                        + violations);
+        assertTrue(violations.stream().anyMatch(v -> v.startsWith("Safety 1:")),
+                () -> "expected the pair check to flag the inversion once X delivers, got: " + violations);
+    }
+
     /** Starting without a removed held channel is caught. */
     @Test
     void startingWithoutARemovedHeldChannelIsCaught() {
@@ -137,9 +161,11 @@ class SabotageMetaTest {
         assertDoesNotThrow(() -> rig.proc("p").ingestFacts(),
                 "the sabotage must disarm the refusal, or the oracle assertion below tests nothing");
 
-        List<String> violations = Scenario.run(65, SabotageMode.IGNORE_RECREATION).violations();
+        // Re-pinned from seed 65 when D104 biased the sweep's truncation events toward held
+        // channels; seeds 17, 101 and 112 catch this mode under the current generator.
+        List<String> violations = Scenario.run(17, SabotageMode.IGNORE_RECREATION).violations();
         assertTrue(violations.stream().anyMatch(v -> v.startsWith("Assumption 2")),
-                () -> "seed 65 must catch the engine running across a recreation, got: " + violations);
+                () -> "seed 17 must catch the engine running across a recreation, got: " + violations);
     }
 
     /**

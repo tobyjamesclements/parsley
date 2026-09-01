@@ -1,8 +1,14 @@
 package io.github.tobyjamesclements.parsley.api;
 
 /**
- * Read access to the stores a process declared, scoped to the key range of the step in
- * progress.
+ * Read access to the stores a process declared.
+ *
+ * <p>Reads are served from the shard of each store owned by the task delivering the
+ * message: partition {@code p} of every received topic shares one shard, and a key is
+ * found only if the delivering topic was keyed so that the same partitioner put it on
+ * {@code p}. To keep state about a different attribute than the delivered key, emit a
+ * message keyed by that attribute to a topic this or another process receives — a
+ * self-channel is a repartition. Producers outside Parsley must partition by the same rule.
  *
  * @see Handler
  * @see Effects

@@ -129,7 +129,7 @@ class ProcessorRevivalTest {
         facts = new ControllableFacts();
         executor = Executors.newSingleThreadExecutor();
         processor = new ParsleyProcessor(twoInputRecorder(delivered), TOPICS, facts,
-                Duration.ofMillis(100), executor, 64 * 1024);
+                Duration.ofMillis(100), executor, 64 * 1024, new ProcessDiagnostics());
         context = newContext();
         orderingStore = Stores.keyValueStoreBuilder(
                         Stores.inMemoryKeyValueStore(ProcessTopology.ORDERING_STORE),

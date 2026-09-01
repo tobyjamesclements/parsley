@@ -29,8 +29,10 @@ import io.github.tobyjamesclements.parsley.api.Effects;
 import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
 import io.github.tobyjamesclements.parsley.api.StateReader;
 import io.github.tobyjamesclements.parsley.api.Store;
+import io.github.tobyjamesclements.parsley.api.TaskStatus;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
+import io.github.tobyjamesclements.parsley.core.Deliverability;
 import io.github.tobyjamesclements.parsley.core.DeliverableMessage;
 import io.github.tobyjamesclements.parsley.core.HeaderKV;
 import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
@@ -60,6 +62,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private final Duration factsInterval;
     private final java.util.concurrent.Executor factsExecutor;
     private final int metadataBudgetBytes;
+    private final ProcessDiagnostics diagnostics;
 
     private final java.util.concurrent.atomic.AtomicLong incarnation =
             new java.util.concurrent.atomic.AtomicLong();
@@ -88,6 +91,9 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
 
     private ProcessorContext<byte[], byte[]> context;
     private ProcessEngine engine;
+    private int partition;
+    /** Monotonic time facts were last applied to the engine, or zero when none have been. */
+    private long factsAppliedAtNanos;
     private final Map<String, ChannelId> channelByTopic = new HashMap<>();
     private final Map<ChannelId, String> topicByChannel = new HashMap<>();
     private final Map<String, KeyValueStore<Bytes, byte[]>> appStores = new HashMap<>();
@@ -111,16 +117,19 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      * @param factsInterval       how often to refresh them
      * @param factsExecutor       where the refresh runs
      * @param metadataBudgetBytes the largest causal metadata a message may carry
+     * @param diagnostics         where this task publishes its status
      */
     ParsleyProcessor(ProcessDefinition definition, Map<String, TopicInfo> topics,
                      FactsSource factsSource, Duration factsInterval,
-                     java.util.concurrent.Executor factsExecutor, int metadataBudgetBytes) {
+                     java.util.concurrent.Executor factsExecutor, int metadataBudgetBytes,
+                     ProcessDiagnostics diagnostics) {
         this.definition = definition;
         this.topics = topics;
         this.factsSource = factsSource;
         this.factsInterval = factsInterval;
         this.factsExecutor = factsExecutor;
         this.metadataBudgetBytes = metadataBudgetBytes;
+        this.diagnostics = diagnostics;
     }
 
     /**
@@ -146,7 +155,8 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         }
 
         this.context = context;
-        int partition = context.taskId().partition();
+        partition = context.taskId().partition();
+        factsAppliedAtNanos = 0;
 
         channelByTopic.clear();
         topicByChannel.clear();
@@ -181,16 +191,59 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             drain();
             engine.flushHolds();
             observeFrontier();
+            publishStatus();
         });
 
         ingestFacts();
+        publishStatus();
     }
 
     private void applyGatheredFacts() {
         GatheredRound round = pendingRound.getAndSet(null);
         if (round != null && round.incarnation() == incarnation.get()) {
             engine.onFacts(round.facts());
+            factsAppliedAtNanos = System.nanoTime();
         }
+    }
+
+    /**
+     * Publishes this task's delivery state for {@code status()} (D103): every channel with
+     * holds, what its head waits for, and the frontier's size. Taken on the stream thread,
+     * where the engine lives, once per facts interval — the decision for each head is the
+     * one {@link #drain()} would act on, so the cost is one decision per held channel.
+     */
+    private void publishStatus() {
+        List<TaskStatus.HeldChannel> heldChannels = new ArrayList<>();
+        int heldMessages = 0;
+        for (ChannelId channel : engine.receivedChannelSet()) {
+            int held = engine.heldCount(channel);
+            if (held == 0) {
+                continue;
+            }
+            heldMessages += held;
+            List<TaskStatus.Blocker> blockers = new ArrayList<>();
+            engine.headVerdict(channel).ifPresent(verdict -> {
+                if (verdict instanceof Deliverability.Held heldVerdict) {
+                    for (Deliverability.Blocker blocker : heldVerdict.blockers()) {
+                        blockers.add(new TaskStatus.Blocker(topicNameOf(blocker.channel()),
+                                blocker.channel().partition(), blocker.requiredPosition(), blocker.settledPosition()));
+                    }
+                }
+            });
+            heldChannels.add(new TaskStatus.HeldChannel(topicNameOf(channel), channel.partition(), held,
+                    engine.headPosition(channel).orElseThrow(), blockers));
+        }
+        Optional<Duration> sinceLastFacts = factsAppliedAtNanos == 0
+                ? Optional.empty()
+                : Optional.of(Duration.ofNanos(System.nanoTime() - factsAppliedAtNanos));
+        diagnostics.publish(new TaskStatus(partition, engine.frontierSize(), engine.frontierBytes(),
+                heldMessages, heldChannels, sinceLastFacts));
+    }
+
+    /** A received channel's topic name; a blocker is always on a received channel. */
+    private String topicNameOf(ChannelId channel) {
+        String topic = topicByChannel.get(channel);
+        return topic != null ? topic : channel.toString();
     }
 
     private void startGatherIfIdle() {
@@ -238,6 +291,9 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         if (factsPunctuator != null) {
             factsPunctuator.cancel();
             factsPunctuator = null;
+        }
+        if (engine != null) {
+            diagnostics.retire(partition);
         }
     }
 
@@ -308,18 +364,41 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         engine.flushHolds();
     }
 
+    /**
+     * The channels worth probing for a trailing never-yielding run: those a held head is
+     * waiting on (D107). A channel that itself holds messages settles at its head whatever
+     * the broker says above it, and a channel nothing waits on has nothing a probe could
+     * release, so probing every received channel — the previous rule — spent a second per
+     * idle channel per round for no fact anyone would act on.
+     */
     private Map<ChannelId, Long> probeHints() {
         Map<ChannelId, Long> hints = new java.util.TreeMap<>();
-        if (engine.heldCountTotal() > 0) {
-            for (ChannelId channel : engine.receivedChannelSet()) {
-                engine.fedUpTo(channel).ifPresent(fed -> hints.put(channel, fed));
+        if (engine.heldCountTotal() == 0) {
+            return hints;
+        }
+        for (ChannelId channel : engine.receivedChannelSet()) {
+            if (engine.heldCount(channel) == 0) {
+                continue;
             }
+            engine.headVerdict(channel).ifPresent(verdict -> {
+                if (verdict instanceof Deliverability.Held held) {
+                    for (Deliverability.Blocker blocker : held.blockers()) {
+                        ChannelId blocked = blocker.channel();
+                        if (engine.heldCount(blocked) == 0) {
+                            engine.fedUpTo(blocked).ifPresent(fed -> hints.put(blocked, fed));
+                        }
+                    }
+                }
+            });
         }
         return hints;
     }
 
     private void ingestFacts() {
-        Map<ChannelId, Long> hints = probeHints();
+        // Unhinted on purpose (D107): the seed runs on the stream thread inside task
+        // initialisation, and a probe costs a poll loop per round. Facts are lower bounds,
+        // so the first background round probes instead, one interval later.
+        Map<ChannelId, Long> hints = Map.of();
         io.github.tobyjamesclements.parsley.core.PositionFacts facts;
         try {
             facts = factsSource.gatherForSeed(engine.receivedChannelSet(), hints,
@@ -332,6 +411,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             return;
         }
         engine.onFacts(facts);
+        factsAppliedAtNanos = System.nanoTime();
     }
 
     private void drain() {
@@ -405,7 +485,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         }
         List<PlannedSend> sends = new ArrayList<>(effects.emissions().size());
         for (Effects.Emission<?, ?> emission : effects.emissions()) {
-            sends.add(planEmission(emission, message.timestamp()));
+            sends.add(planEmission(emission, emission.timestamp().orElse(message.timestamp())));
         }
         for (PlannedWrite write : writes) {
             if (write.value() == null) {

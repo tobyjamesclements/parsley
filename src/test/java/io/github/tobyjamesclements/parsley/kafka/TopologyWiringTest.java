@@ -61,10 +61,13 @@ class TopologyWiringTest {
 
     static final class FakeFacts implements FactsSource {
         volatile PositionFacts facts = PositionFacts.EMPTY;
+        /** The hints each round was given, in order, for the probe-hint pins. */
+        final List<Map<ChannelId, Long>> hintsSeen = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         @Override
         public PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
                                     Set<ChannelId> frontierChannels) {
+            hintsSeen.add(Map.copyOf(fedUpToHints));
             return facts;
         }
     }
@@ -86,13 +89,150 @@ class TopologyWiringTest {
     }
 
     private TopologyTestDriver newDriver(ProcessDefinition definition, FakeFacts facts, Map<String, TopicInfo> topics) {
+        return newDriver(definition, facts, topics, new ProcessDiagnostics());
+    }
+
+    private TopologyTestDriver newDriver(ProcessDefinition definition, FakeFacts facts, Map<String, TopicInfo> topics,
+                                         ProcessDiagnostics diagnostics) {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "wiring-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "unused:9092");
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toString());
         driver = new TopologyTestDriver(
-                ProcessTopology.build(definition, topics, facts, Duration.ofMillis(100)), props);
+                ProcessTopology.build(definition, topics, facts, Duration.ofMillis(100), diagnostics), props);
         return driver;
+    }
+
+    /**
+     * An emission carries the delivered message's timestamp unless given one of its own
+     * (D15, D111): a message emitted long after the one it answers may otherwise carry a
+     * timestamp old enough for time-based retention to discard it on the next segment roll.
+     */
+    @Test
+    void anEmissionInheritsTheDeliveredTimestampUnlessGivenItsOwn() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> Effects.builder()
+                        .send(out, "inherited", delivery.value())
+                        .send(out, "own", delivery.value(), 5_000L)
+                        .send(out, "own-with-headers", delivery.value(), delivery.headers(), 6_000L)
+                        .build())
+                .sends(out)
+                .build();
+        newDriver(definition, new FakeFacts());
+        input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes(), new RecordHeaders(), 1_000L));
+
+        TestOutputTopic<byte[], byte[]> outTopic =
+                driver.createOutputTopic("out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
+        var first = outTopic.readRecord();
+        var second = outTopic.readRecord();
+        var third = outTopic.readRecord();
+        assertEquals("inherited", new String(first.key()));
+        assertEquals(1_000L, first.timestamp(), "an emission without a timestamp inherits the delivered one");
+        assertEquals("own", new String(second.key()));
+        assertEquals(5_000L, second.timestamp(), "an emission's own timestamp is the record's");
+        assertEquals(6_000L, third.timestamp(), "with headers too");
+        assertTrue(outTopic.isEmpty());
+    }
+
+    /**
+     * Probe hints name the channels a held head waits on, and nothing else (D107): not the
+     * holding channel, whose settled position is its head whatever lies above it, and not
+     * an idle channel nothing waits on. The seed round at initialisation carries no hints
+     * at all, so task initialisation never probes on the stream thread.
+     */
+    @Test
+    void probeHintsNameOnlyTheChannelsAHeldHeadWaitsOn() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> Effects.none())
+                .receives(in2, (delivery, state) -> Effects.none())
+                .build();
+        FakeFacts facts = new FakeFacts();
+        facts.facts = new PositionFacts(Map.of(IN1, 2L, IN2, 0L), Map.of(), Set.of());
+        newDriver(definition, facts);
+        assertEquals(List.of(Map.of()), facts.hintsSeen, "the seed round at initialisation carries no hints");
+
+        driver.advanceWallClockTime(Duration.ofMillis(200));
+        assertEquals(Map.of(), facts.hintsSeen.get(facts.hintsSeen.size() - 1),
+                "nothing held, nothing to probe");
+
+        var headers = new RecordHeaders();
+        headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(IN1, 5L)))));
+        input("in2").pipeInput(new TestRecord<>("k".getBytes(), "b".getBytes(), headers));
+        driver.advanceWallClockTime(Duration.ofMillis(200));
+        assertEquals(Map.of(IN1, 1L), facts.hintsSeen.get(facts.hintsSeen.size() - 1),
+                "the held head on in2 waits on in1, so in1 is hinted at its fed position and in2 is not");
+    }
+
+    /**
+     * A task publishes what it holds and why (D103): the held channel, its head's position,
+     * every cause the head waits for with the position required and the position reached,
+     * and the frontier's size — refreshed each facts interval, and cleared as the hold
+     * releases. An operator asking "what is this process waiting for?" reads it from
+     * {@code status()} rather than from logs.
+     */
+    @Test
+    void taskStatusNamesWhatIsHeldAndWhichCauseItWaitsFor() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
+        List<String> delivered = new ArrayList<>();
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    delivered.add(delivery.value());
+                    return Effects.none();
+                })
+                .receives(in2, (delivery, state) -> {
+                    delivered.add(delivery.value());
+                    return Effects.none();
+                })
+                .build();
+        FakeFacts facts = new FakeFacts();
+        ProcessDiagnostics diagnostics = new ProcessDiagnostics();
+        newDriver(definition, facts, TOPICS, diagnostics);
+
+        io.github.tobyjamesclements.parsley.api.TaskStatus initial = diagnostics.snapshot().get(0);
+        assertEquals(0, initial.partition(), "the task receives partition 0 of each topic");
+        assertEquals(0, initial.heldMessages(), "nothing is held before anything is received");
+        assertEquals(List.of(), initial.heldChannels());
+        assertTrue(initial.sinceLastFacts().isPresent(), "the seed round applied facts at initialisation");
+
+        var headers = new RecordHeaders();
+        headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(IN1, 3L)))));
+        input("in2").pipeInput(new TestRecord<>("k".getBytes(), "b".getBytes(), headers));
+        driver.advanceWallClockTime(Duration.ofMillis(200));
+
+        io.github.tobyjamesclements.parsley.api.TaskStatus held = diagnostics.snapshot().get(0);
+        assertEquals(1, held.heldMessages(), "the effect is held behind its missing cause");
+        assertEquals(1, held.heldChannels().size());
+        io.github.tobyjamesclements.parsley.api.TaskStatus.HeldChannel channel = held.heldChannels().get(0);
+        assertEquals("in2", channel.topic());
+        assertEquals(0, channel.partition());
+        assertEquals(1, channel.held());
+        assertEquals(0L, channel.headPosition(), "the head is the one held record, at offset 0");
+        assertEquals(1, channel.blockers().size(), "one cause is outstanding");
+        io.github.tobyjamesclements.parsley.api.TaskStatus.Blocker blocker = channel.blockers().get(0);
+        assertEquals("in1", blocker.topic(), "the blocker is named by topic, not by identity");
+        assertEquals(0, blocker.partition());
+        assertEquals(3L, blocker.requiredPosition(), "the position the cause named");
+        assertTrue(blocker.settledPosition().isEmpty(), "nothing is known of in1 yet");
+        assertEquals(1, held.frontierChannels(), "receipt merged the cause into the frontier");
+        assertEquals(CausesCodec.encode(Causes.of(Map.of(IN1, 3L))).length, held.frontierBytes(),
+                "the frontier's width is the encoded header's width");
+
+        facts.facts = new PositionFacts(Map.of(IN1, 4L), Map.of(), Set.of());
+        driver.advanceWallClockTime(Duration.ofMillis(200));
+        assertEquals(List.of("b"), delivered, "the facts settled the cause and released the hold");
+        io.github.tobyjamesclements.parsley.api.TaskStatus released = diagnostics.snapshot().get(0);
+        assertEquals(0, released.heldMessages(), "nothing remains held");
+        assertEquals(List.of(), released.heldChannels(), "a channel with nothing held is not listed");
+        assertEquals(2, released.frontierChannels(), "delivery merged the delivered position beside the cause");
+
+        driver.close();
+        driver = null;
+        assertEquals(List.of(), diagnostics.snapshot(), "a closed task retires its status rather than lingering");
     }
 
     private TestInputTopic<byte[], byte[]> input(String topic) {

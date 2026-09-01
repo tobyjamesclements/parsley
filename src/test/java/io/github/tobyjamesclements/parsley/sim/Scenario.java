@@ -208,6 +208,19 @@ public final class Scenario {
                 }
             }
         }
+        for (SimProcess p : processes) {
+            if (p.failedClosed() || !p.isRunning()) {
+                continue;
+            }
+            for (SimChannel channel : iterate(p.receivedChannels())) {
+                java.util.OptionalLong head = p.engine().headPosition(channel.id());
+                if (!channel.dead && head.isPresent() && head.getAsLong() < channel.logStart) {
+                    violations.add("Safety 8 (held): " + p.name + " still holds " + channel.name + "@"
+                            + head.getAsLong() + " below the earliest retained position " + channel.logStart
+                            + " without failing closed; its senders may have pruned it (D104)");
+                }
+            }
+        }
         for (CorruptSpot spot : corrupted) {
             for (SimProcess p : processes) {
                 if (oracle.committedFeedOf(p.name, spot.instance())) {
@@ -275,17 +288,33 @@ public final class Scenario {
 
     private static void truncateEvent(SimWorld world, List<SimProcess> processes, List<SimChannel> channels,
                                       Random rng, List<String> journal, RefusalLedger ledger) {
-        SimChannel channel = channels.get(rng.nextInt(channels.size()));
+        // Biased toward channels some running process holds messages from, as killEvent is:
+        // retention crossing a held message is the shape D104 refuses, and an unbiased pick
+        // reached it in a handful of seeds.
+        List<SimChannel> heldFrom = channels.stream()
+                .filter(c -> !c.dead && processes.stream().anyMatch(p ->
+                        p.isRunning() && p.engine().receivedChannelSet().contains(c.id())
+                                && p.engine().heldCount(c.id()) > 0))
+                .toList();
+        List<SimChannel> pool = heldFrom.isEmpty() || rng.nextInt(3) == 0 ? channels : heldFrom;
+        SimChannel channel = pool.get(rng.nextInt(pool.size()));
         long lso = world.lso(channel);
         List<SimProcess> readers = processes.stream()
                 .filter(p -> iterate(p.receivedChannels()).contains(channel))
                 .toList();
         long target;
-        int shape = rng.nextInt(4);
+        int shape = rng.nextInt(5);
         if (shape <= 1 && !readers.isEmpty()) {
             SimProcess reader = readers.get(rng.nextInt(readers.size()));
 
             target = reader.committedNextRead(channel) + (shape == 0 ? 0 : 1);
+        } else if (shape == 4 && !readers.isEmpty()) {
+            // Exactly one past a reader's oldest held message: the smallest retention that
+            // discards something a process still owes (D104).
+            SimProcess reader = readers.get(rng.nextInt(readers.size()));
+            java.util.OptionalLong head = reader.isRunning()
+                    ? reader.engine().headPosition(channel.id()) : java.util.OptionalLong.empty();
+            target = head.isPresent() ? head.getAsLong() + 1 : lso;
         } else if (shape == 2) {
             target = lso;
         } else {

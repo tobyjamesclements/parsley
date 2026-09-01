@@ -87,6 +87,13 @@ A pair `(c, p)` is dropped when *p* falls below *c*'s log-start offset, or when 
 identity no longer resolves. Log-start facts may be stale, and a stale fact is a lower bound,
 so staleness delays pruning without over-pruning.
 
+Pruning is what makes retention a safety matter for a holder. A process that delivered a
+message prunes it once retention discards it, and its later sends then express nothing about
+it; a process still holding that message can no longer tell which later arrivals depend on
+it. Retention must therefore cover hold-back time, not only consumer lag: where it does not,
+the holder stops with `POSITIONS_DISCARDED_UNREAD` rather than deliver past the hold
+([Failing closed](failing-closed.md)).
+
 Frontier size follows the causal graph rather than a process's own declaration. Receipt
 merges every pair a message carried, including channels the receiving process never receives,
 which is required for downstream re-expression. Steady-state size approaches the sum of

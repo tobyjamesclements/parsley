@@ -6,11 +6,17 @@ on:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor the library declares, and the newest release: the suite runs on both, so
+        # "Java 21 or newer" is tested rather than inferred from a --release build.
+        java: ['21', '25']
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-java@v5
         with:
-          java-version: '25'
+          java-version: ${{ matrix.java }}
           distribution: 'temurin'
           cache: 'maven'
       - name: Build and test

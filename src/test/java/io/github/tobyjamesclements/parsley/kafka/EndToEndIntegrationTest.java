@@ -272,6 +272,19 @@ class EndToEndIntegrationTest {
 
         try (Parsley parsley = Parsley.start(config("wipe"), pw)) {
             awaitFedAndHeld("wipe-pw", "wipe-b", delivered);
+            // The status surface names the hold and the cause it waits for (D103), on the
+            // real host: the snapshot refreshes once per facts interval.
+            await("status names the held message and its missing cause", () -> {
+                var tasks = parsley.status().get("pw").tasks();
+                if (tasks.size() != 1 || tasks.get(0).heldMessages() != 1) {
+                    return false;
+                }
+                var held = tasks.get(0).heldChannels().get(0);
+                return held.topic().equals("wipe-b") && held.headPosition() == 0L
+                        && held.blockers().size() == 1
+                        && held.blockers().get(0).topic().equals("wipe-a")
+                        && held.blockers().get(0).requiredPosition() == 0L;
+            }, Duration.ofSeconds(30));
         }
 
         deleteRecursively(stateDir.resolve("wipe"));

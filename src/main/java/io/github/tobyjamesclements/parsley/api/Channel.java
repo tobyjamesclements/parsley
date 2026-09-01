@@ -73,8 +73,12 @@ public final class Channel<K, V> {
     /**
      * Returns a copy of this channel with a different starting position.
      *
-     * <p>The starting position applies only where no committed position exists. It has no
-     * effect on a process resuming from committed state.
+     * <p>The starting position applies only on a process's first start ever, before it has
+     * any ordering state. A channel added later to a process that has run, or a partition
+     * whose committed position has expired, begins at {@link InitialPosition#EARLIEST}
+     * whatever was declared: a later {@code LATEST} would make a restart observable in
+     * what is delivered (D36). Positions below the first receipt count as already
+     * satisfied.
      *
      * @param initialPosition where to begin reading
      * @return a new channel, leaving this one unchanged

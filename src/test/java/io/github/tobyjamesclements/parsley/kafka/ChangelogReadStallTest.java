@@ -19,6 +19,7 @@ import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -206,6 +207,44 @@ class ChangelogReadStallTest {
     }
 
     /**
+     * The bootstrap view keeps a held message's presence, never its body (D110): the checks
+     * that read the view ask which channels hold something, and retaining every blob put the
+     * whole hold-back backlog on the heap at every start. A tombstone still clears the
+     * entry, and other tags keep their values.
+     */
+    @Test
+    void heldMessageBodiesAreKeptAsPresenceMarkersNotRetained() {
+        ScriptedConsumer consumer = new ScriptedConsumer(List.of(P0));
+        io.github.tobyjamesclements.parsley.core.ChannelId channel =
+                new io.github.tobyjamesclements.parsley.core.ChannelId(new java.util.UUID(5, 5), 0);
+        byte[] heldKey = heldKey(channel, 7L);
+        byte[] otherHeldKey = heldKey(channel, 9L);
+        byte[] body = new byte[64 * 1024];
+        consumer.append(P0, heldKey, body);
+        consumer.append(P0, otherHeldKey, body);
+        consumer.append(P0, "task0", "covered");
+        consumer.append(P0, otherHeldKey, null);
+
+        ParsleyRuntime.ChangelogView view = ParsleyRuntime.readToEnds(consumer, CHANGELOG, List.of(P0),
+                Map.of(P0, 4L), Duration.ofSeconds(5));
+        assertEquals(0, view.latest().get(heldKey).length,
+                "a held message's body is replaced by an empty presence marker");
+        assertEquals(Set.of(channel),
+                io.github.tobyjamesclements.parsley.core.OrderingStateInspector.heldChannels(view.latest()),
+                "the marker still counts as a held message for the stranded-hold scan");
+        assertNull(view.latest().get(otherHeldKey), "a tombstone clears a held entry as before");
+        assertArrayEquals(bytes("covered"), view.latest().get(bytes("task0")), "other tags keep their values");
+    }
+
+    private static byte[] heldKey(io.github.tobyjamesclements.parsley.core.ChannelId channel, long position) {
+        java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(1 + 20 + 8);
+        buffer.put((byte) 'h');
+        channel.writeTo(buffer);
+        buffer.putLong(position);
+        return buffer.array();
+    }
+
+    /**
      * A hand-rolled consumer double for the read loop: an assigned, rewound consumer over
      * scripted per-partition logs. Scripts only what {@code readToEnds} uses —
      * {@code poll}, {@code position}, {@code pause}, {@code paused} — and inherits
@@ -231,9 +270,13 @@ class ChangelogReadStallTest {
 
         /** Appends one record at the partition's next offset. */
         void append(TopicPartition tp, String key, String value) {
+            append(tp, bytes(key), value == null ? null : bytes(value));
+        }
+
+        /** Appends one record with raw bytes, a null value being a tombstone. */
+        void append(TopicPartition tp, byte[] key, byte[] value) {
             List<ConsumerRecord<byte[], byte[]>> log = logs.get(tp);
-            log.add(new ConsumerRecord<>(tp.topic(), tp.partition(), log.size(),
-                    bytes(key), bytes(value)));
+            log.add(new ConsumerRecord<>(tp.topic(), tp.partition(), log.size(), key, value));
         }
 
         /**

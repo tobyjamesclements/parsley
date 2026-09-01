@@ -1,7 +1,10 @@
 # Parsley
 
-A Java library for Kafka Streams applications. The documentation site is at
-<https://tobyjamesclements.github.io/parsley/>, built from `docs/` in this repository.
+Causal delivery order for Kafka Streams processors: if message A is a cause of message B,
+every process that delivers both delivers A first, across restarts and for the whole lifetime
+of a process. Where the guarantee cannot be upheld a process stops rather than weaken it. The
+documentation site is at <https://tobyjamesclements.github.io/parsley/>, built from `docs/`
+in this repository.
 
 ## Requirements
 
@@ -29,8 +32,9 @@ To package without running the tests:
 ./mvnw test
 ```
 
-668 tests, taking roughly four minutes. Integration tests start an embedded KRaft broker in
-the same JVM, so nothing external needs to be running.
+The whole suite, roughly five minutes; the surefire summary prints the count. Integration
+tests start an embedded KRaft broker in the same JVM, so nothing external needs to be
+running.
 
 Run one class, or one method:
 

@@ -48,6 +48,9 @@ fi
 echo "==> Generating docs/llms-full.txt"
 python3 scripts/build-llms-full.py .
 
+echo "==> Generating docs/decisions.md"
+python3 scripts/build-decisions-index.py .
+
 if [ "$serve" = true ]; then
     exec .venv/bin/mkdocs serve --strict
 fi

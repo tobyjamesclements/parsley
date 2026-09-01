@@ -22,6 +22,10 @@ validation:
     absolute_links: warn
     unrecognized_links: warn
 
+# decisions.md is generated from DECISIONS.md by scripts/build-decisions-index.py, run by
+# scripts/docs-build.sh and by the Pages workflow before mkdocs; it is not in the tree, and a
+# build without that step fails on the nav entry above rather than shipping a stale index.
+#
 # Javadoc, staged into docs/javadoc by scripts/docs-build.sh and by the Pages workflow. It is
 # a generated tree reached through the button on api.md, so it is deliberately absent from the
 # nav; without this, nav.omitted_files above would fail every build that stages it.
@@ -78,8 +82,10 @@ nav:
   - Operation:
     - Failing closed: failing-closed.md
     - Runtime: runtime.md
+    - Operations: operations.md
   - Patterns:
     - Session consistency: session.md
   - Reference:
     - Verification: verification.md
+    - Decisions: decisions.md
     - API: api.md

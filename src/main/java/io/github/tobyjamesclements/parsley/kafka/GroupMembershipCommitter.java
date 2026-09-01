@@ -25,6 +25,13 @@ import java.util.Set;
 final class GroupMembershipCommitter implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(GroupMembershipCommitter.class);
 
+    /**
+     * The client id every bootstrap member carries, so a starting instance can see another
+     * instance's member in the group description and wait for it to leave before its own
+     * Kafka Streams joins (D108).
+     */
+    static final String CLIENT_ID_PREFIX = "parsley-bootstrap-";
+
     private final KafkaConsumer<byte[], byte[]> consumer;
 
     /**
@@ -40,6 +47,7 @@ final class GroupMembershipCommitter implements AutoCloseable {
     static Map<String, Object> memberProperties(Map<String, Object> clientProperties, String groupId) {
         Map<String, Object> props = new HashMap<>(clientProperties);
         props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+        props.put(ConsumerConfig.CLIENT_ID_CONFIG, CLIENT_ID_PREFIX + java.util.UUID.randomUUID());
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
         // The member's subscription must never create a missing received topic: every

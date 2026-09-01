@@ -48,6 +48,13 @@ public final class Store<K, V> {
     /**
      * Defines a store.
      *
+     * <p>Declare each store once and pass that instance both to
+     * {@link ProcessDefinition.Builder#stores(Store...)} and to every read and write: the
+     * seam matches stores by instance, since a read returns a value cast to the instance's
+     * types, so a second {@code Store.of} for the same name is refused at the first access
+     * as {@code STATE_ACCESS_TO_UNDECLARED_STORE}. Channels, by contrast, are matched by
+     * topic name.
+     *
      * @param name       the store name
      * @param keySerde   serde for keys
      * @param valueSerde serde for values
