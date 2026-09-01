@@ -17,9 +17,8 @@ process, over Lamport's happened-before relation. The correctness gate is a dete
 simulator checked against a happened-before oracle, run by `mvn verify`, together with
 integration tests against an embedded KRaft broker.
 
-This file describes version 0.2.0-SNAPSHOT, the Maven artifact
-`io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT`, resolved from the Central snapshots
-repository (https://central.sonatype.com/repository/maven-snapshots/). Every link below
+This file describes version 0.2.0, the Maven artifact
+`io.github.tobyjamesclements:parsley:0.2.0`, resolved from Maven Central. Every link below
 tracks the main branch. The 0.1.0 release is a different implementation, whose API and wire
 format both differ from this version, and stays addressable by its version number.
 

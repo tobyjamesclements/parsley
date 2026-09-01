@@ -17,9 +17,8 @@ process, over Lamport's happened-before relation. The correctness gate is a dete
 simulator checked against a happened-before oracle, run by `mvn verify`, together with
 integration tests against an embedded KRaft broker.
 
-This file describes version 0.2.0-SNAPSHOT, the Maven artifact
-`io.github.tobyjamesclements:parsley:0.2.0-SNAPSHOT`, resolved from the Central snapshots
-repository (https://central.sonatype.com/repository/maven-snapshots/). Every link below
+This file describes version 0.2.0, the Maven artifact
+`io.github.tobyjamesclements:parsley:0.2.0`, resolved from Maven Central. Every link below
 tracks the main branch. The 0.1.0 release is a different implementation, whose API and wire
 format both differ from this version, and stays addressable by its version number.
 
@@ -84,6 +83,26 @@ try (Parsley parsley = Parsley.start(config, shipper)) {
 
 A handler receives the delivered message and a read view of state, and returns what it
 changes. It is given no producer, no timer and no clock.
+
+## Getting it
+
+Parsley is published to
+[Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
+
+```xml
+<dependency>
+  <groupId>io.github.tobyjamesclements</groupId>
+  <artifactId>parsley</artifactId>
+  <version>0.2.0</version>
+</dependency>
+```
+
+It requires Java 21 or newer, and inherits `kafka-streams` and `kafka-clients` at the version
+it was built against, 4.3.1. Those are the only libraries it adds to an application.
+
+0.2.0 is a reimplementation from the specification, and its API shares no type with 0.1.0.
+The causal metadata travels in a different header, so the two do not interoperate. Nothing
+written against 0.1.0 carries over.
 
 ## Reading order
 
@@ -769,7 +788,7 @@ the packages and where the generated Javadoc lives
 
 The generated Javadoc for this version is published alongside this site.
 
-[Browse the Javadoc](api/index.html)
+[Browse the Javadoc](javadoc/index.html)
 
 ## Packages
 
