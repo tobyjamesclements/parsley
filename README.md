@@ -1,6 +1,7 @@
 # Parsley
 
-A Java library for Kafka Streams applications. Documentation is in `docs/`.
+A Java library for Kafka Streams applications. The documentation site is at
+<https://tobyjamesclements.github.io/parsley/>, built from `docs/` in this repository.
 
 ## Requirements
 

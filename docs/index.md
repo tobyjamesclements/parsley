@@ -49,6 +49,26 @@ try (Parsley parsley = Parsley.start(config, shipper)) {
 A handler receives the delivered message and a read view of state, and returns what it
 changes. It is given no producer, no timer and no clock.
 
+## Getting it
+
+Parsley is published to
+[Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
+
+```xml
+<dependency>
+  <groupId>io.github.tobyjamesclements</groupId>
+  <artifactId>parsley</artifactId>
+  <version>0.2.0</version>
+</dependency>
+```
+
+It requires Java 21 or newer, and inherits `kafka-streams` and `kafka-clients` at the version
+it was built against, 4.3.1. Those are the only libraries it adds to an application.
+
+0.2.0 is a reimplementation from the specification, and its API shares no type with 0.1.0.
+The causal metadata travels in a different header, so the two do not interoperate. Nothing
+written against 0.1.0 carries over.
+
 ## Reading order
 
 | Page | Subject |
