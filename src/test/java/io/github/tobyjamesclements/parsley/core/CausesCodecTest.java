@@ -111,16 +111,37 @@ class CausesCodecTest {
     /**
      * Rejects unknown version. Version byte 2 named this same grouped grammar in
      * pre-release snapshots only (D101) and is refused like any unknown byte, pinned here
-     * beside zero, the first unassigned value (3) and a far one (9) so neither a widened
-     * accept set nor a salvaging default can stay green.
+     * beside zero, the first unassigned value (3), a far one (9) and two high-bit bytes
+     * (0x81, 0xFF — negative as Java bytes) so neither a widened accept set, a salvaging
+     * default nor a sign- or mask-shaped compare can stay green.
      */
     @Test
     void rejectsUnknownVersion() {
         byte[] encoded = CausesCodec.encode(Causes.none());
-        for (byte version : new byte[] {0, 2, 3, 9}) {
+        for (byte version : new byte[] {0, 2, 3, 9, (byte) 0x81, (byte) 0xFF}) {
             encoded[0] = version;
             assertThrows(CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(encoded),
                     "version byte " + version + " must be undecodable");
+        }
+    }
+
+    /**
+     * Rejects the snapshot-era flat-grammar shapes, which lead with the now-released
+     * version byte and so pass the version check (D101). The flat layout's fixed 4-byte
+     * big-endian entry count leads with a zero byte, read here as a zero topic count, so
+     * both the empty flat frontier and a populated one must refuse as trailing bytes —
+     * an empty-frontier fast path or tolerated trailing padding would instead decode them
+     * as the empty frontier, discarding real causes, and fails this test.
+     */
+    @Test
+    void rejectsSnapshotEraFlatEncodingsAsTrailingBytes() {
+        for (CausesMalformationVectors.Vector vector : CausesMalformationVectors.family("snapshot-flat")) {
+            CausesCodec.UndecodableMetadataException thrown = assertThrows(
+                    CausesCodec.UndecodableMetadataException.class, () -> CausesCodec.decode(vector.bytes()),
+                    () -> vector.label() + " must be undecodable, never the empty frontier");
+            assertTrue(thrown.getMessage().contains("trailing bytes after 0 topic groups"),
+                    () -> vector.label() + " must refuse on the bytes past the zero topic count: "
+                            + thrown.getMessage());
         }
     }
 

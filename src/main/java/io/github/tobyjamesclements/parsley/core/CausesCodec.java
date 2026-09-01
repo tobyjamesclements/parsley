@@ -167,7 +167,8 @@ public final class CausesCodec {
         try {
             byte version = buffer.get();
             if (version != FORMAT_VERSION) {
-                throw new UndecodableMetadataException("unknown causes format version " + version);
+                throw new UndecodableMetadataException(
+                        "unknown causes format version " + Byte.toUnsignedInt(version));
             }
             return decodeBody(buffer);
         } catch (BufferUnderflowException e) {

@@ -52,6 +52,16 @@ class CausalPastMalformationTest {
         refusesFamily("unknown-version");
     }
 
+    /**
+     * Rejects the snapshot-era flat-grammar shapes, which lead with the released version
+     * byte and refuse by grammar rather than by version (D101) — a token parser serving
+     * one as the empty frontier would silently weaken the session guarantee.
+     */
+    @Test
+    void rejectsSnapshotEraFlatEncodings() {
+        refusesFamily("snapshot-flat");
+    }
+
     /** Rejects truncation at every depth, and a surplus byte, as classified refusals. */
     @Test
     void rejectsTruncationAndTrailingBytes() {

@@ -3831,16 +3831,30 @@ snapshot-era exposure is accepted, examined rather than assumed away:
 * A snapshot-era flat message (leading byte `0x01`) now enters the grouped parse instead of
   being refused at the version byte. It still fails closed, by grammar rather than by
   version: the flat layout put a fixed 4-byte big-endian entry count after its version byte,
-  and a conforming flat writer's count is bounded far below 2²⁴ by the metadata budget, so
-  the count's leading `0x00` byte reads as a zero topic count and the remaining bytes are
-  refused as trailing. The empty flat frontier (`01 00 00 00 00`) falls to the same refusal.
-  What is lost is only the diagnosis — "trailing bytes" where "unknown version" would have
-  named the real cause.
+  so the count's leading `0x00` byte reads as a zero topic count and the remaining bytes are
+  refused as trailing; the empty flat frontier (`01 00 00 00 00`) falls to the same refusal.
+  The leading-zero premise is the deployment's doing, not the grammar's — the flat-era
+  budget was caller-supplied, and only a deployment configured for frontiers near 470 MB
+  could spell a count at 2²⁴ — so both flat shapes are pinned as refusals in the shared
+  battery (family `snapshot-flat`, swept by both decoders and named by
+  `CausesCodecTest#rejectsSnapshotEraFlatEncodingsAsTrailingBytes` and
+  `CausalPastMalformationTest#rejectsSnapshotEraFlatEncodings`) rather than left to prose:
+  an empty-frontier fast path or tolerated trailing padding would otherwise decode them as
+  the empty frontier, discarding real causes. What is lost is only the diagnosis —
+  "trailing bytes" where "unknown version" would have named the real cause.
+* The reverse direction fails closed structurally. A flat-era snapshot reader meeting a
+  released message accepts the version byte, then reads the varint topic count and the
+  first three topic-id bytes as a 4-byte big-endian entry count — at least 2²⁴ for any
+  non-empty frontier, against a message orders of magnitude smaller — and refuses as
+  truncated; the released empty frontier (`01 00`) underflows the count read itself. No
+  rolling-upgrade ordering constraint follows, though snapshot builds carry no
+  compatibility promise either way.
 
 The refusal pins move with the numbering rather than shrinking: the unknown-version battery
 (`CausesMalformationVectors`, swept by both decoders) now holds byte zero, the snapshot-era
-`0x02`, the first unassigned byte and a far one, and `CausesCodecTest#rejectsUnknownVersion`
-pins the same set against a widened accept or a salvaging default.
+`0x02`, the first unassigned byte, a far one and two high-bit bytes, and
+`CausesCodecTest#rejectsUnknownVersion` pins the same set against a widened accept, a
+salvaging default or a sign- or mask-shaped compare.
 
 **Alternatives**
 
