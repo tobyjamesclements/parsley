@@ -13,8 +13,7 @@ import java.util.UUID;
  * <p>The format is frozen: entries grouped by topic, structural fields as minimal varints,
  * positions fixed-width (wire-format.md, D98). Any change to the grammar requires a new
  * {@link #FORMAT_VERSION} and a documented migration, because a frontier written by one
- * process is read by another. Version byte {@code 0x01} named a pre-release flat grammar
- * that no released message ever carried; it is retired, and decode refuses it as unknown.
+ * process is read by another.
  *
  * <p>Decoding is strict: a header that is truncated, miscounted, negatively positioned, out
  * of canonical order or padded in its varints is rejected rather than salvaged. Metadata
@@ -31,7 +30,7 @@ public final class CausesCodec {
     public static final String RESERVED_HEADER_PREFIX = "parsley.";
 
     /** Version byte leading every encoded frontier. */
-    public static final byte FORMAT_VERSION = 2;
+    public static final byte FORMAT_VERSION = 1;
 
     private CausesCodec() {
     }
@@ -168,7 +167,8 @@ public final class CausesCodec {
         try {
             byte version = buffer.get();
             if (version != FORMAT_VERSION) {
-                throw new UndecodableMetadataException("unknown causes format version " + version);
+                throw new UndecodableMetadataException(
+                        "unknown causes format version " + Byte.toUnsignedInt(version));
             }
             return decodeBody(buffer);
         } catch (BufferUnderflowException e) {

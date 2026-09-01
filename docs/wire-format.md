@@ -24,12 +24,12 @@ null or empty value counts as present and fails the grammar.
 
 ## Grammar
 
-All fixed-width integers are big-endian. Version 2 is the only version: entries grouped by
+All fixed-width integers are big-endian. Version 1 is the only version: entries grouped by
 topic, structural fields as minimal varints, positions fixed-width.
 
 ```
 value          := version topicCount group*
-version        := uint8    -- 0x02
+version        := uint8    -- 0x01
 topicCount     := varint   -- number of groups, >= 0
 group          := topicId partitionCount pair*
 topicId        := 16 bytes -- Kafka topic ID: 8 most significant bytes, then 8 least
@@ -49,7 +49,7 @@ as `05`, two spellings for one value that the padding rule alone cannot see.
 
 Every constraint below is mandatory. Violating any one makes the value undecodable.
 
-1. The version byte is `0x02`. Any other value is undecodable, and readers must not guess
+1. The version byte is `0x01`. Any other value is undecodable, and readers must not guess
    forward compatibility.
 2. The value contains exactly `topicCount` groups with no trailing bytes, and each group
    exactly `partitionCount` pairs.
@@ -91,7 +91,5 @@ still matter.
 
 ## Stability
 
-The header key, the reserved prefix and the version-2 grammar are frozen. Any change to the
+The header key, the reserved prefix and the version-1 grammar are frozen. Any change to the
 grammar requires a new version byte. Readers encountering an unknown version fail closed.
-Version byte `0x01` named a pre-release flat grammar that no released message ever carried
-(D98); it is retired rather than reserved, and readers refuse it as unknown.

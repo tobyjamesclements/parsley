@@ -3534,6 +3534,10 @@ to a strict bound would need that assertion revisited alongside the decision.
 
 ### D98 — Causes wire format: entries grouped by topic id, varint structural fields, fixed-width positions (supersedes D3's value grammar and D52's affine-size check)
 
+*Superseded in part by D101: the version byte this record assigned (`0x02`, with `0x01`
+retired) was renumbered to `0x01` pre-release, before any released message carried either.
+The grammar itself stands unchanged.*
+
 **Context**
 
 The causal frontier rides on every message, and its steady-state size approaches the sum of
@@ -3797,3 +3801,88 @@ would have to argue with the shared fence rather than quietly extend a private l
 
 None. Everything here hardens application-layer companions and test structure; the
 specification's criteria are untouched.
+
+### D101 — The grouped grammar releases as version byte `0x01` (supersedes D98's renumbering rejection)
+
+**Context**
+
+D98 assigned the grouped grammar version byte `0x02` and retired `0x01`, which had named the
+flat grammar for part of the pre-release history, rejecting a renumbering as record ambiguity
+for no gain. Approaching the 0.2.0 release — the first release of this wire format, since
+0.1.0's protocol travelled in different headers entirely (`vc`, `vc-sender`, `vc-seq`) with
+its own internal versioning — the owner weighed the other side of that trade: a released
+format whose history starts at version 2 carries a permanent retirement note in a document
+that is otherwise standalone, and every future reader of the frozen grammar meets a dangling
+"what happened to 1?" before the grammar itself. No released message carries either byte
+under `parsley.causes`, so the release is the last moment the numbering can be chosen rather
+than inherited. The one complication is that pre-release snapshot builds were published to
+Central's snapshot repository continuously, so messages under both pre-release bytes — the
+flat grammar under `0x01`, and this grouped grammar under `0x02` — may exist in logs the
+project cannot see.
+
+**Decision**
+
+The grouped grammar releases as version byte `0x01`, and the released wire document carries
+no retirement note: version 1 is the only version, and any other byte is undecodable. The
+snapshot-era exposure is accepted, examined rather than assumed away:
+
+* A snapshot-era grouped message (leading byte `0x02`) is refused as an unknown version —
+  fail closed, with an exact diagnosis.
+* A snapshot-era flat message (leading byte `0x01`) now enters the grouped parse instead of
+  being refused at the version byte. It still fails closed, by grammar rather than by
+  version: the flat layout put a fixed 4-byte big-endian entry count after its version byte,
+  so the count's leading `0x00` byte reads as a zero topic count and the remaining bytes are
+  refused as trailing; the empty flat frontier (`01 00 00 00 00`) falls to the same refusal.
+  The leading-zero premise is the deployment's doing, not the grammar's — the flat-era
+  budget was caller-supplied, and only a deployment configured for frontiers near 470 MB
+  could spell a count at 2²⁴ — so both flat shapes are pinned as refusals in the shared
+  battery (family `snapshot-flat`, swept by both decoders and named by
+  `CausesCodecTest#rejectsSnapshotEraFlatEncodingsAsTrailingBytes` and
+  `CausalPastMalformationTest#rejectsSnapshotEraFlatEncodings`) rather than left to prose:
+  an empty-frontier fast path or tolerated trailing padding would otherwise decode them as
+  the empty frontier, discarding real causes. What is lost is only the diagnosis —
+  "trailing bytes" where "unknown version" would have named the real cause.
+* The reverse direction fails closed structurally. A flat-era snapshot reader meeting a
+  released message accepts the version byte, then reads the varint topic count and the
+  first three topic-id bytes as a 4-byte big-endian entry count — at least 2²⁴ for any
+  non-empty frontier, against a message orders of magnitude smaller — and refuses as
+  truncated; the released empty frontier (`01 00`) underflows the count read itself. No
+  rolling-upgrade ordering constraint follows, though snapshot builds carry no
+  compatibility promise either way.
+
+The refusal pins move with the numbering rather than shrinking: the unknown-version battery
+(`CausesMalformationVectors`, swept by both decoders) now holds byte zero, the snapshot-era
+`0x02`, the first unassigned byte, a far one and two high-bit bytes, and
+`CausesCodecTest#rejectsUnknownVersion` pins the same set against a widened accept, a
+salvaging default or a sign- or mask-shaped compare.
+
+**Alternatives**
+
+* Keeping `0x02` with the retirement note (D98's choice) — rejected by the owner at the
+  release decision: the note is a permanent cost in the one document meant to stand alone,
+  paid to preserve a distinction — one byte, one grammar, across the pre-release period —
+  that protects only logs of unreleased snapshot builds, which carry no compatibility
+  promise. D98's principle that no byte ever names two grammars is kept for the released
+  history, which is the history the document governs; version bytes stay unscarce from here.
+* Renumbering while keeping the retirement note for the snapshot-era bytes — rejected: it
+  spends the change without collecting its benefit. The history lives here instead, which is
+  what this record is for.
+* A grammar-level sentinel distinguishing renumbered v1 from flat v1 — rejected: it is a
+  grammar change purchased to improve a diagnosis for unreleased builds, against AGENTS.md's
+  preference for no change and D98's own analysis that the flat shapes already fail closed.
+
+**Cost**
+
+Snapshot-era flat messages refuse with a structural diagnosis rather than a version one, and
+an operator meeting that refusal finds the explanation here rather than in the wire document.
+Any doc-driven decoder of the pre-renumbering grouped grammar is orphaned by one byte, as
+D98's flat-grammar decoders were orphaned entirely — the same pre-release license, used the
+same way. The wire document's stability section shrinks by its historical sentence; the
+"never two grammars under one byte" fence is now enforced for released history by this
+record and the refusal pins rather than by never reusing a pre-release byte.
+
+**Specification gap**
+
+None. Structural 5 requires a documented, stable, distinguishable representation; the
+representation is unchanged and its version byte is release-frozen from here. The
+specification is version-neutral, as D98 recorded.

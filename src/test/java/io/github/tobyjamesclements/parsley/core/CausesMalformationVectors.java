@@ -126,11 +126,25 @@ public final class CausesMalformationVectors {
                     buffer.array(), "exceeds the non-negative int range");
         }
 
+        // Snapshot-era flat-grammar shapes (D101): version byte 1 hardcoded, not
+        // FORMAT_VERSION, because these bytes are historical constants — the retired flat
+        // layout was version, a fixed 4-byte big-endian entry count, then 28-byte entries.
+        // Under the grouped grammar the count's leading zero byte reads as a zero topic
+        // count, so both shapes must refuse as trailing bytes, never decode as empty.
+        ByteBuffer flatOneEntry = ByteBuffer.allocate(1 + 4 + 28);
+        flatOneEntry.put((byte) 1).putInt(1);
+        flatOneEntry.putLong(1).putLong(1).putInt(0).putLong(7);
+
         return List.of(
                 new Vector("null-value", "null header value", null, "null value"),
-                new Vector("unknown-version", "retired version 1", new byte[] {1, 0}, "unknown causes format version"),
+                new Vector("unknown-version", "version zero", new byte[] {0, 0}, "unknown causes format version"),
+                new Vector("unknown-version", "snapshot-era version 2", new byte[] {2, 0}, "unknown causes format version"),
                 new Vector("unknown-version", "unassigned version 3", new byte[] {3, 0}, "unknown causes format version"),
                 new Vector("unknown-version", "far version 9", new byte[] {9, 0}, "unknown causes format version"),
+                new Vector("unknown-version", "high-bit version 0x81", new byte[] {(byte) 0x81, 0}, "unknown causes format version"),
+                new Vector("unknown-version", "all-bits version 0xFF", new byte[] {(byte) 0xFF, 0}, "unknown causes format version"),
+                new Vector("snapshot-flat", "flat empty frontier", new byte[] {1, 0, 0, 0, 0}, "trailing bytes"),
+                new Vector("snapshot-flat", "flat one-entry frontier", flatOneEntry.array(), "trailing bytes"),
                 new Vector("truncation", "inside a position", java.util.Arrays.copyOf(twoChannels, twoChannels.length - 3), "truncated causes header"),
                 new Vector("truncation", "inside a topic id", java.util.Arrays.copyOf(twoChannels, twoChannels.length - 20), "truncated causes header"),
                 new Vector("truncation", "inside a varint", new byte[] {CausesCodec.FORMAT_VERSION, (byte) 0xAC}, "truncated causes header"),
