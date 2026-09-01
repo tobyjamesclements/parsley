@@ -1038,10 +1038,10 @@ message with more than one such header, or one failing the grammar below, is und
 receiver fails closed, and must not treat the metadata as absent. A header present with a
 null or empty value counts as present and fails the grammar.</p>
 <h2 id="grammar">Grammar</h2>
-<p>All fixed-width integers are big-endian. Version 2 is the only version: entries grouped by
+<p>All fixed-width integers are big-endian. Version 1 is the only version: entries grouped by
 topic, structural fields as minimal varints, positions fixed-width.</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>value          := version topicCount group*
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>version        := uint8    -- 0x02
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>version        := uint8    -- 0x01
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>topicCount     := varint   -- number of groups, &gt;= 0
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>group          := topicId partitionCount pair*
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>topicId        := 16 bytes -- Kafka topic ID: 8 most significant bytes, then 8 least
@@ -1059,7 +1059,7 @@ are each undecodable. The last of these matters even though it looks like more p
 as <code>05</code>, two spellings for one value that the padding rule alone cannot see.</p>
 <p>Every constraint below is mandatory. Violating any one makes the value undecodable.</p>
 <ol>
-<li>The version byte is <code>0x02</code>. Any other value is undecodable, and readers must not guess
+<li>The version byte is <code>0x01</code>. Any other value is undecodable, and readers must not guess
    forward compatibility.</li>
 <li>The value contains exactly <code>topicCount</code> groups with no trailing bytes, and each group
    exactly <code>partitionCount</code> pairs.</li>
@@ -1095,10 +1095,8 @@ naming channels outside that set impose no constraint there, which includes dead
 of recreated topics. The receiver still re-expresses them on its own sends while they can
 still matter.</p>
 <h2 id="stability">Stability</h2>
-<p>The header key, the reserved prefix and the version-2 grammar are frozen. Any change to the
-grammar requires a new version byte. Readers encountering an unknown version fail closed.
-Version byte <code>0x01</code> named a pre-release flat grammar that no released message ever carried
-(D98); it is retired rather than reserved, and readers refuse it as unknown.</p>
+<p>The header key, the reserved prefix and the version-1 grammar are frozen. Any change to the
+grammar requires a new version byte. Readers encountering an unknown version fail closed.</p>
 
 
 
