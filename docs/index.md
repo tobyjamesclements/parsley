@@ -53,6 +53,7 @@ changes. It is given no producer, no timer and no clock.
 
 Parsley is published to
 [Maven Central](https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley).
+The current release is 0.2.0.
 
 ```xml
 <dependency>
@@ -62,12 +63,19 @@ Parsley is published to
 </dependency>
 ```
 
-It requires Java 21 or newer, and inherits `kafka-streams` and `kafka-clients` at the version
-it was built against, 4.3.1. Those are the only libraries it adds to an application.
+It requires Java 21 or newer. Its own dependencies are `kafka-streams`, `kafka-clients` and
+`slf4j-api`, at the versions it was built against; everything else on the classpath arrives
+with Kafka, which brings RocksDB, Jackson and the compression libraries.
 
 0.2.0 is a reimplementation from the specification, and its API shares no type with 0.1.0.
 The causal metadata travels in a different header, so the two do not interoperate. Nothing
 written against 0.1.0 carries over.
+
+These pages track the `main` branch, which is 0.3.0-SNAPSHOT and can differ from the release
+above. Snapshots are published continuously to
+[Central's snapshot repository](https://central.sonatype.com/repository/maven-snapshots/),
+which is publicly readable and needs no credentials, but carries no compatibility promise.
+Pick the release unless you are tracking unreleased work.
 
 ## Reading order
 
