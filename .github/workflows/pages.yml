@@ -36,14 +36,26 @@ jobs:
 
       - name: Stage Javadoc into docs source
         run: |
-          mkdir -p docs/api
-          cp -r target/reports/apidocs/. docs/api/
+          mkdir -p docs/javadoc
+          cp -r target/reports/apidocs/. docs/javadoc/
 
       - name: Generate llms-full.txt
         run: python3 scripts/build-llms-full.py .
 
       - name: Install MkDocs + mike
         run: pip install mkdocs-material mike
+
+      - name: Check the Javadoc index survives the build
+        # A page whose name matches the staging directory renders to the same destination, and
+        # MkDocs reports no conflict when the page wins — it silently displaces the Javadoc's
+        # own index.html. mike builds internally, so build once here and check before anything
+        # reaches gh-pages.
+        run: |
+          mkdocs build --strict --site-dir /tmp/site-check
+          if ! grep -q 'name="generator" content="javadoc' /tmp/site-check/javadoc/index.html; then
+            echo "::error::javadoc/index.html is not the generated Javadoc index; a docs page has displaced it."
+            exit 1
+          fi
 
       - name: Configure git identity
         run: |

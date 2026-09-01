@@ -2,7 +2,7 @@
 #
 # Build the docs site the way .github/workflows/pages.yml builds it, so a broken site
 # surfaces here rather than after a push. MkDocs needs two generated inputs that are not in
-# the tree — the Javadoc staged into docs/api, and llms-full.txt concatenated from llms.txt —
+# the tree — the Javadoc staged into docs/javadoc, and llms-full.txt concatenated from llms.txt —
 # so running mkdocs alone tests something the workflow never builds. This runs all three
 # steps, and builds strictly, which turns any MkDocs warning into a failure.
 #
@@ -12,7 +12,7 @@
 #
 #   scripts/docs-build.sh              build to site/
 #   scripts/docs-build.sh --serve      serve on http://127.0.0.1:8000, reloading on edit
-#   scripts/docs-build.sh --skip-api   skip the Javadoc build, leaving docs/api as it is
+#   scripts/docs-build.sh --skip-api   skip the Javadoc build, leaving docs/javadoc as it is
 #
 # Deploying is a separate act, and only the workflow does it: mike owns the version aliases
 # on the gh-pages branch, and a local deploy would push a version into that selector.
@@ -38,11 +38,11 @@ if [ ! -x .venv/bin/mkdocs ]; then
 fi
 
 if [ "$skip_api" = false ]; then
-    echo "==> Building Javadoc into docs/api"
+    echo "==> Building Javadoc into docs/javadoc"
     ./mvnw javadoc:javadoc --no-transfer-progress -DskipTests -q
-    rm -rf docs/api
-    mkdir -p docs/api
-    cp -r target/reports/apidocs/. docs/api/
+    rm -rf docs/javadoc
+    mkdir -p docs/javadoc
+    cp -r target/reports/apidocs/. docs/javadoc/
 fi
 
 echo "==> Generating docs/llms-full.txt"
@@ -54,3 +54,17 @@ fi
 
 echo "==> Building site/"
 .venv/bin/mkdocs build --strict
+
+if [ "$skip_api" = false ]; then
+    # The Javadoc's own index.html is the one staged file a docs page can silently displace:
+    # a page whose name matches the staging directory renders to the same destination under
+    # use_directory_urls, and MkDocs reports no conflict when the page wins. Strict mode does
+    # not see it, and the only symptom is a "Browse the Javadoc" button that reloads its own
+    # page, so check the built file is the generated one.
+    echo "==> Checking the Javadoc index survived the build"
+    if ! grep -q 'name="generator" content="javadoc' site/javadoc/index.html; then
+        echo "site/javadoc/index.html is not the generated Javadoc index; a docs page" >&2
+        echo "renders to that path and has displaced it." >&2
+        exit 1
+    fi
+fi
