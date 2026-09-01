@@ -1,1 +1,0 @@
-packageSearchIndex = [{"l":"All Packages","u":"allpackages-index.html","k":"18"},{"l":"io.github.tobyjamesclements.parsley.api"},{"l":"io.github.tobyjamesclements.parsley.core"},{"l":"io.github.tobyjamesclements.parsley.kafka"},{"l":"io.github.tobyjamesclements.parsley.session"}];updateSearchResults();
