@@ -73,7 +73,7 @@ prove it catches each violation class.
 ## Verifying anything
 
 - `./mvnw verify` is the full gate: **the whole suite, green, roughly five minutes** (the
-  surefire summary prints the count; it was 712 at D112). It must be green at every commit,
+  surefire summary prints the count; it was 716 at D113). It must be green at every commit,
   and it grows. It never shrinks.
 - Three layers. Unit tests over the pure core and the `session` companion. A **simulation harness** driving real engines
   under a simulated host that honours the spec's Host obligations, over randomised topologies,

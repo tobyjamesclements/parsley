@@ -540,16 +540,46 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     private Map<String, TopicInfo> resolveTopics(Set<String> names) {
-        try {
-            Map<String, TopicDescription> descriptions =
-                    admin.describeTopics(names).allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            Map<String, TopicInfo> topics = new LinkedHashMap<>();
-            descriptions.forEach((name, description) -> topics.put(name, requireTopicId(name, description)));
-            return topics;
-        } catch (ParsleyFailClosedException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new IllegalStateException("declared topics could not be resolved; refusing to start", e);
+        return resolveTopicsCorroborated(
+                () -> admin.describeTopics(names).allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                java.time.Duration.ofMillis(500));
+    }
+
+    /** The describe of every declared topic, behind a seam so tests can script the answers. */
+    @FunctionalInterface
+    interface TopicsDescribe {
+        Map<String, TopicDescription> describe() throws Exception;
+    }
+
+    /**
+     * Resolves the declared topics, concluding that one does not exist only from three
+     * consistent unknown-topic answers half a second apart (D113): a describe is served from
+     * one broker's metadata view, which can lag a topic created moments before the start,
+     * and a start that trusted a single stale answer refused a topic that existed. Any other
+     * failure refuses at once, since nothing about it is a matter of corroboration. The same
+     * evidence standard D84 applies to the ordering changelog's describe.
+     */
+    static Map<String, TopicInfo> resolveTopicsCorroborated(TopicsDescribe describe, java.time.Duration backoff) {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                Map<String, TopicInfo> topics = new LinkedHashMap<>();
+                describe.describe().forEach((name, description) -> topics.put(name, requireTopicId(name, description)));
+                return topics;
+            } catch (ParsleyFailClosedException e) {
+                throw e;
+            } catch (Exception e) {
+                boolean unknown = e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
+                if (!unknown || attempt == 2) {
+                    throw new IllegalStateException("declared topics could not be resolved; refusing to start", e);
+                }
+                try {
+                    Thread.sleep(backoff.toMillis());
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(
+                            "interrupted while resolving the declared topics; refusing to start", interrupted);
+                }
+            }
         }
     }
 
@@ -1219,7 +1249,9 @@ public final class ParsleyRuntime implements AutoCloseable {
             }
         }
         try {
-            admin.close(java.time.Duration.ofSeconds(TIMEOUT_SECONDS));
+            if (admin != null) {
+                admin.close(java.time.Duration.ofSeconds(TIMEOUT_SECONDS));
+            }
         } catch (RuntimeException e) {
             LOG.warn("the admin client failed to close", e);
         }

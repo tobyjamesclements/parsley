@@ -4706,3 +4706,44 @@ Six tests. The reflective pin binds a private method's name and signature.
 **Specification gap**
 
 None.
+
+### D113 — Declared-topic resolution corroborates an unknown-topic answer before refusing (extends D84)
+
+**Context**
+
+A CI run of this branch failed on one leg with `declared topics could not be resolved;
+refusing to start` for a topic the test had created a moment earlier. The describe that
+resolves declared topics is served from one broker's metadata view, which can lag the
+controller's creation of a topic; a single stale "unknown topic" answer refused the start.
+D84 already refuses to conclude the ordering changelog's absence from one such answer, for
+the same reason, and demands three consistent unknown answers half a second apart. Declared
+topics had no such tolerance: the one describe either resolved or refused.
+
+**Decision**
+
+`resolveTopicsCorroborated` retries a describe that fails with `UnknownTopicOrPartitionException`
+twice more, half a second apart, and refuses only on the third consistent answer, with the
+same diagnosis and cause as before. Any other failure refuses at once, since nothing about
+it is a matter of corroboration, and a refusal from the identity floor (D83) passes through
+untouched. Pinned by `DeclaredTopicResolutionTest`: a lagging answer is retried and the topic
+resolves once described; three unknown answers refuse naming the missing topic after exactly
+three describes; a generic failure refuses after one; the identity refusal is neither retried
+nor rewrapped. `BootstrapIntegrationTest#aDeclaredTopicThatDoesNotExistRefusesToStartNamingTheResolutionFailure`
+still pins the refusal on a real broker.
+
+**Alternatives**
+
+* Waiting in the test after creating the topic. Rejected: the race is the runtime's, not the
+  test's. An application that creates its topics and starts is the ordinary first deployment,
+  and it should not refuse on a broker whose metadata is a moment behind.
+* Retrying every describe failure. Rejected for the reason D84 gave: a timeout or an outage
+  retried three times is a slower version of the same refusal, and it must not be mistaken
+  for a matter of corroboration.
+
+**Cost**
+
+A genuinely missing topic is refused one second later than before.
+
+**Specification gap**
+
+None.
