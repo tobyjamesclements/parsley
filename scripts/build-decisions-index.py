@@ -14,9 +14,10 @@ A citation is evidence that a later record bears on this one, not proof that it 
 follow the link and read. A record cited by nothing later is, as far as the log knows,
 current.
 
-Usage: scripts/build-decisions-index.py [repo-root] [output-path]
+Usage: PARSLEY_DOCS_REF=<commit-or-tag> scripts/build-decisions-index.py [repo-root] [output-path]
 """
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -44,7 +45,11 @@ RELATION_LABEL = {
     "tighten": "tightens",
     "widen": "widens",
 }
-GITHUB_BLOB = "https://github.com/tobyjamesclements/parsley/blob/main/DECISIONS.md"
+# Links carry the line numbers of the DECISIONS.md the build read, so they must point at that
+# exact revision: the workflow passes the commit it builds from, and a local build passes HEAD.
+# "main" is the fallback for a build that names no revision, right only until main moves.
+GITHUB_BLOB = ("https://github.com/tobyjamesclements/parsley/blob/"
+               + os.environ.get("PARSLEY_DOCS_REF", "main") + "/DECISIONS.md")
 
 
 def parse(text: str):
@@ -75,20 +80,40 @@ def label(verb: str) -> str:
     return verb
 
 
+CLAUSE_BOUNDARY = re.compile(r"[;()]|\. ")
+
+
 def relation(sentence: str, cited: int) -> str:
     """The relation a sentence names for its citation of D<cited>, or '' if none is recognisable.
 
-    Only a verb within a few words of the citation counts, so a sentence that corrects one
-    record while merely mentioning another does not label both.
+    Only the verb nearest the citation within its own clause counts, so a heading that
+    narrows one thing and corrects another labels each citation with the verb that governs
+    it, and a sentence that corrects one record while merely mentioning another does not
+    label both. "closes" names a relation only when it precedes the citation directly:
+    "fails closed" and `close()` are the log's ordinary vocabulary, not relations.
     """
     for match in re.finditer(rf"\bD{cited}\b", sentence):
-        window = sentence[max(0, match.start() - 40):match.end() + 40]
-        for verb in RELATION.finditer(window):
+        left = 0
+        for boundary in CLAUSE_BOUNDARY.finditer(sentence, 0, match.start()):
+            left = boundary.end()
+        right_match = CLAUSE_BOUNDARY.search(sentence, match.end())
+        right = right_match.start() if right_match else len(sentence)
+        clause = sentence[left:right]
+        citation_at = match.start() - left
+        nearest = None
+        for verb in RELATION.finditer(clause):
             # "a superseded execution" is the protocol's term for a zombie, not a relation
             # between records.
-            if re.match(r"\s+(execution|lifetime|instance)", window[verb.end():]):
+            if re.match(r"\s+(execution|lifetime|instance)", clause[verb.end():]):
                 continue
-            return label(verb.group("verb"))
+            word = verb.group("verb").lower()
+            if word.startswith("close") and not re.match(r"\s+D\d", clause[verb.end():]):
+                continue
+            distance = abs(verb.start() - citation_at)
+            if distance <= 60 and (nearest is None or distance < nearest[0]):
+                nearest = (distance, word)
+        if nearest:
+            return label(nearest[1])
     return ""
 
 

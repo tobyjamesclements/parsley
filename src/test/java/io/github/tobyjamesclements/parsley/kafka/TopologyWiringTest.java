@@ -196,7 +196,7 @@ class TopologyWiringTest {
         io.github.tobyjamesclements.parsley.api.TaskStatus initial = diagnostics.snapshot().get(0);
         assertEquals(0, initial.partition(), "the task receives partition 0 of each topic");
         assertEquals(0, initial.heldMessages(), "nothing is held before anything is received");
-        assertEquals(List.of(), initial.heldChannels());
+        assertEquals(List.of(), initial.heldChannels(), "nothing is held before the first receipt");
         assertTrue(initial.sinceLastFacts().isPresent(), "the seed round applied facts at initialisation");
 
         var headers = new RecordHeaders();
@@ -206,7 +206,7 @@ class TopologyWiringTest {
 
         io.github.tobyjamesclements.parsley.api.TaskStatus held = diagnostics.snapshot().get(0);
         assertEquals(1, held.heldMessages(), "the effect is held behind its missing cause");
-        assertEquals(1, held.heldChannels().size());
+        assertEquals(1, held.heldChannels().size(), "exactly one channel holds after the held receipt");
         io.github.tobyjamesclements.parsley.api.TaskStatus.HeldChannel channel = held.heldChannels().get(0);
         assertEquals("in2", channel.topic());
         assertEquals(0, channel.partition());

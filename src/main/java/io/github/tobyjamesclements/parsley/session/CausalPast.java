@@ -143,7 +143,7 @@ public final class CausalPast {
      *         named for {@code channel}; this instance is unchanged, and is returned
      *         itself when it already covers the coordinate
      * @throws IllegalArgumentException if {@code channel} is null or {@code position} is
-     *                                  negative
+     *                                  negative or the reserved maximum no channel assigns
      */
     public CausalPast merge(ChannelId channel, long position) {
         if (channel == null) {

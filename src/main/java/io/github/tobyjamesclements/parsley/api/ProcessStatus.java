@@ -37,6 +37,9 @@ public record ProcessStatus(
         if (process == null || state == null || refusalReason == null || failureDetail == null || tasks == null) {
             throw new IllegalArgumentException("every component of a status must be non-null");
         }
+        if (tasks.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new IllegalArgumentException("tasks must not contain null");
+        }
         tasks = List.copyOf(tasks);
     }
 

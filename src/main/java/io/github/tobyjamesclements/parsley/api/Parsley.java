@@ -88,7 +88,9 @@ public final class Parsley implements AutoCloseable {
      * whose work is its processes has nothing else to do but wait here. The wait ends when
      * any process stops — deliberately, to preserve the guarantee, or otherwise — which is
      * the moment to read {@link #status()} and act, or when another thread calls
-     * {@link #close()}.
+     * {@link #close()}. The wait ends as soon as the stop is known; the host's own shutdown
+     * may still be completing, so {@link #status()} can report the process as running for a
+     * moment longer before it settles on the stopped state and its reason.
      *
      * @throws InterruptedException if the waiting thread is interrupted
      */
@@ -103,11 +105,14 @@ public final class Parsley implements AutoCloseable {
      * @return {@code true} if a process stopped or the handle was closed within the timeout,
      *         {@code false} if every process was still running when it elapsed
      * @throws InterruptedException if the waiting thread is interrupted
-     * @throws IllegalArgumentException if {@code timeout} is null
+     * @throws IllegalArgumentException if {@code timeout} is null or negative
      */
     public boolean awaitStopped(java.time.Duration timeout) throws InterruptedException {
         if (timeout == null) {
             throw new IllegalArgumentException("timeout must be non-null");
+        }
+        if (timeout.isNegative()) {
+            throw new IllegalArgumentException("timeout must not be negative: " + timeout);
         }
         return runtime.awaitStopped(timeout);
     }

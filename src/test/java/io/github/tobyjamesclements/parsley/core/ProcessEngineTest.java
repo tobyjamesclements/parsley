@@ -715,7 +715,7 @@ class ProcessEngineTest {
         restarted.onFacts(new PositionFacts(Map.of(c3, 101L), Map.of(), Set.of()));
         Optional<DeliverableMessage> next = restarted.nextDeliverable();
         assertTrue(next.isPresent(), "C2's head is released once c3 settles past its cause");
-        assertEquals(C2, next.get().channel());
+        assertEquals(C2, next.get().channel(), "the head of C2 must be offered next");
         restarted.markDelivered(C2, 0);
         assertTrue(restarted.nextDeliverable().isPresent(), "the next hold on C2 becomes the head");
         assertEquals(2, restarted.decodedHoldCount(),
@@ -793,7 +793,8 @@ class ProcessEngineTest {
         store.delete(StoreCodec.heldKey(C2, 0));
         ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class, restarted::nextDeliverable,
                 "a hold absent from the store must stop the process");
-        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason());
+        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason(),
+                "a hold whose blob is absent from the store is refused as an unknown state format");
         assertTrue(e.getMessage().contains("absent from the store"), e.getMessage());
     }
 
@@ -839,7 +840,9 @@ class ProcessEngineTest {
     /**
      * Flushing after every receipt stays cheap while the buffer deepens: a flush writes the
      * holds taken in since the previous flush and never scans the buffer (D102). This is
-     * the suite's one wall-clock bound, chosen with a wide margin: 50,000 receipts each
+     * one of the suite's two wall-clock bounds (the other, in
+     * {@code ProbeIdleChannelCostIntegrationTest}, times a real broker's probe), chosen
+     * with a wide margin: 50,000 receipts each
      * followed by a flush complete in well under a second here, where a flush that scanned
      * every hold would spend on the order of twenty seconds in the scan alone.
      */

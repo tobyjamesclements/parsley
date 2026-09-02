@@ -4,6 +4,7 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -248,12 +249,15 @@ public final class ProcessEngine {
     }
 
     /**
-     * Refuses a restored position at the reserved maximum, which no channel can assign and
-     * which the engine uses in-band as its fed-to-end marker (D105). Such a value can only
-     * have entered the store through a forged header absorbed before receipt refused it;
-     * restored into the frontier it would be re-expressed forever, and restored into the
-     * delivered past it would reach {@code fedUpTo} through the join clamp and read as
-     * "this channel no longer exists" for a topic that is alive.
+     * Refuses a restored position no channel can assign (D105): the reserved maximum, which
+     * the engine uses in-band as its fed-to-end marker, and any negative value. The maximum
+     * can only have entered the store through a forged header absorbed before receipt
+     * refused it; a negative row is store corruption, since receipt has always refused
+     * negative positions. Restored into the frontier either would be re-expressed on every
+     * emission — the emission path encodes the frontier directly and validates nothing, so
+     * this is the one check between the store and the wire — and restored into the
+     * delivered past the maximum would reach {@code fedUpTo} through the join clamp and
+     * read as "this channel no longer exists" for a topic that is alive.
      */
     private long requireAssignablePosition(ChannelId channel, long position, String what) {
         if (position == Long.MAX_VALUE) {
@@ -262,6 +266,13 @@ public final class ProcessEngine {
                             + channel + ", which no channel can assign; this state absorbed a forged causes"
                             + " header before receipt refused it (wire-format constraint 7). Reset the process's"
                             + " state and group offsets deliberately to proceed.");
+        }
+        if (position < 0) {
+            throw new ParsleyFailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+                    "process " + processName + ": restored " + what + " names position " + position + " on "
+                            + channel + ", which no channel can assign; receipt refuses negative positions, so"
+                            + " this row is corrupt ordering state. Reset the process's state and group offsets"
+                            + " deliberately to proceed.");
         }
         return position;
     }
@@ -719,7 +730,7 @@ public final class ProcessEngine {
         if (head.position == position) {
             delivered = channelHeld.pollFirst();
         } else {
-            for (java.util.Iterator<Hold> holds = channelHeld.iterator(); holds.hasNext();) {
+            for (Iterator<Hold> holds = channelHeld.iterator(); holds.hasNext();) {
                 Hold hold = holds.next();
                 if (hold.position == position) {
                     holds.remove();

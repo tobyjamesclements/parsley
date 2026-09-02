@@ -39,7 +39,7 @@ public record TaskStatus(
     /**
      * Copies the held channels and refuses null components.
      *
-     * @throws IllegalArgumentException if {@code heldChannels} or {@code sinceLastFacts} is
+     * @throws IllegalArgumentException if {@code heldChannels} contains null, or if {@code heldChannels} or {@code sinceLastFacts} is
      *         null, or any count is negative
      */
     public TaskStatus {
@@ -48,6 +48,9 @@ public record TaskStatus(
         }
         if (partition < 0 || frontierChannels < 0 || frontierBytes < 0 || heldMessages < 0) {
             throw new IllegalArgumentException("task status counts must be non-negative");
+        }
+        if (heldChannels.stream().anyMatch(java.util.Objects::isNull)) {
+            throw new IllegalArgumentException("held channels must not contain null");
         }
         heldChannels = List.copyOf(heldChannels);
     }
@@ -66,11 +69,15 @@ public record TaskStatus(
         /**
          * Copies the blockers and refuses null components.
          *
-         * @throws IllegalArgumentException if {@code topic} or {@code blockers} is null
+         * @throws IllegalArgumentException if {@code topic} or {@code blockers} is null, or
+         *         {@code blockers} contains null
          */
         public HeldChannel {
             if (topic == null || blockers == null) {
                 throw new IllegalArgumentException("every component of a held channel must be non-null");
+            }
+            if (blockers.stream().anyMatch(java.util.Objects::isNull)) {
+                throw new IllegalArgumentException("blockers must not contain null");
             }
             blockers = List.copyOf(blockers);
         }

@@ -40,7 +40,8 @@ class SubstrateDetectedStopStatusTest {
         ParsleyFailClosedException refusal = ParsleyFailClosedException.findIn(runtime.recordedFailure("p"));
         assertNotNull(refusal, "a Safety 8 stop detected by the consumer must reach status() as a refusal,"
                 + " not as an undiagnosed transient (Operational 1)");
-        assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, refusal.reason());
+        assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, refusal.reason(),
+                "the consumer's out-of-range stop is the engine's discarded-unread refusal");
     }
 
     /** A record beyond the substrate's size limit carries SUBSTRATE_MISCONFIGURED. */
@@ -52,7 +53,8 @@ class SubstrateDetectedStopStatusTest {
         ParsleyFailClosedException refusal = ParsleyFailClosedException.findIn(runtime.recordedFailure("p"));
         assertNotNull(refusal, "a size limit the changelog cannot take is a substrate configuration the guarantee"
                 + " cannot survive, and recurs identically until it changes");
-        assertEquals(ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED, refusal.reason());
+        assertEquals(ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED, refusal.reason(),
+                "a record too large for the changelog is a substrate limit, not a transient");
         assertTrue(refusal.getMessage().contains("max.message.bytes"), refusal.getMessage());
     }
 

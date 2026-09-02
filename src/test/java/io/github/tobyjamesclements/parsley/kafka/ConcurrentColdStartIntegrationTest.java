@@ -25,7 +25,7 @@ import io.github.tobyjamesclements.parsley.api.ParsleyConfig;
 import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
 import io.github.tobyjamesclements.parsley.api.ProcessStatus;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -68,14 +68,23 @@ class ConcurrentColdStartIntegrationTest {
         return ProcessDefinition.named("cc").receives(in, (d, s) -> Effects.none()).build();
     }
 
+    /**
+     * {@code Parsley.start} returns once each process's host has been started, without
+     * waiting for it to run (D109): the state read immediately after is the host's
+     * rebalance or, after a fast join, already running, and never a stop. How long the
+     * rebalance takes is the host's to decide, so the pin is what {@code start} promises
+     * rather than the transient state one particular join leaves behind.
+     */
     @Test
-    void startReturnsBeforeTheProcessIsRunning() throws Exception {
+    void startReturnsWithoutWaitingForTheProcessToRun() throws Exception {
         admin.createTopics(List.of(new NewTopic("cc-single", 2, (short) 1))).all().get(30, TimeUnit.SECONDS);
         try (Parsley parsley = Parsley.start(config("ccs", "only"), definition("cc-single"))) {
-            ProcessStatus.State immediately = parsley.status().get("cc").state();
-            System.out.println("STATE IMMEDIATELY AFTER start(): " + immediately);
-            assertEquals(ProcessStatus.State.REBALANCING, immediately,
-                    "start returns once the host has been started, which is its rebalance; the Javadoc says so");
+            ProcessStatus immediately = parsley.status().get("cc");
+            assertNotEquals(ProcessStatus.State.STOPPED, immediately.state(),
+                    "start returns into a live host, never a stopped one");
+            assertTrue(immediately.refusalReason().isEmpty(),
+                    "nothing has been refused at start: " + immediately.failureDetail());
+            assertTrue(parsley.healthy(), "the process is running or rebalancing immediately after start");
         }
     }
 
@@ -83,7 +92,8 @@ class ConcurrentColdStartIntegrationTest {
      * Eight concurrent cold starts of two instances each. The collision window is the
      * milliseconds between one instance's member leaving and the other's Streams join, so
      * it is probabilistic: before D108 it killed one instance's client in three of eight
-     * rounds here. Every instance must now come up healthy.
+     * rounds here. Every instance must now come up running; a start that hangs or a client
+     * still rebalancing when the settle window closes counts as a failure of that round.
      */
     @Test
     void twoInstancesColdStartingTogetherBothComeUpHealthy() throws Exception {
@@ -115,7 +125,9 @@ class ConcurrentColdStartIntegrationTest {
             }
             try {
                 for (int i = 0; i < 2; i++) {
-                    if (startFailures[i] != null) {
+                    if (threads[i].isAlive()) {
+                        failures.add("round " + round + " instance " + i + " start did not return within 120 s");
+                    } else if (startFailures[i] != null) {
                         failures.add("round " + round + " instance " + i + " start threw: " + startFailures[i]);
                     }
                 }
@@ -142,10 +154,10 @@ class ConcurrentColdStartIntegrationTest {
                         continue;
                     }
                     ProcessStatus status = instances[i].status().get("cc");
-                    if (!instances[i].healthy()) {
-                        failures.add("round " + round + " instance " + i + " unhealthy: state=" + status.state()
-                                + " refusal=" + status.refusalReason() + " detail=" + status.failureDetail()
-                                .map(d -> d.length() > 300 ? d.substring(0, 300) : d));
+                    if (status.state() != ProcessStatus.State.RUNNING) {
+                        failures.add("round " + round + " instance " + i + " not running after the settle window:"
+                                + " state=" + status.state() + " refusal=" + status.refusalReason() + " detail="
+                                + status.failureDetail().map(d -> d.length() > 300 ? d.substring(0, 300) : d));
                     }
                 }
             } finally {
@@ -156,8 +168,6 @@ class ConcurrentColdStartIntegrationTest {
                 }
             }
         }
-        System.out.println("CONCURRENT COLD START: " + failures.size() + " failure(s) in " + rounds + " rounds");
-        failures.forEach(f -> System.out.println("  " + f));
-        assertTrue(failures.isEmpty(), "a concurrent cold start must leave every instance healthy: " + failures);
+        assertTrue(failures.isEmpty(), "a concurrent cold start must leave every instance running: " + failures);
     }
 }

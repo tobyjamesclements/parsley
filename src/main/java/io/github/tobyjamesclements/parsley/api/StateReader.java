@@ -22,7 +22,12 @@ public interface StateReader {
      * @param <K>   key type
      * @param <V>   value type
      * @return the stored value, or {@code null} when the key is absent
-     * @throws IllegalArgumentException if the process did not declare {@code store}
+     * @throws IllegalArgumentException if {@code store} or {@code key} is null
+     * @throws io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException if
+     *         {@code store} is not the instance the process declared
+     *         ({@code STATE_ACCESS_TO_UNDECLARED_STORE}), or the key or the stored value
+     *         cannot be coded by the declared serdes; the refusal is latched, so the step
+     *         fails even if the handler catches it
      */
     <K, V> V get(Store<K, V> store, K key);
 }

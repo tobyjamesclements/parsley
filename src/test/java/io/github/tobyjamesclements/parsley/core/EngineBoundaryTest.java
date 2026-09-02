@@ -102,7 +102,7 @@ class EngineBoundaryTest {
             assertEquals(Causes.of(Map.of(C1, 100L)), next.causes(), "restored causes intact");
             restarted.markDelivered(C2, position);
         }
-        assertEquals(0, restarted.heldCountTotal());
+        assertEquals(0, restarted.heldCountTotal(), "every restored hold must have been delivered");
     }
 
     /**
@@ -124,7 +124,7 @@ class EngineBoundaryTest {
         assertEquals(ProcessEngine.ReceiveOutcome.ACCEPTED, engine.onReceive(plain(C1, 0, "A")),
                 "position 0 must not be dropped as covered by a -1 coverage");
         DeliverableMessage a = engine.nextDeliverable().orElseThrow();
-        assertEquals(C1, a.channel());
+        assertEquals(C1, a.channel(), "the sole deliverable must be the held message on C1");
         engine.markDelivered(C1, 0);
         DeliverableMessage b = engine.nextDeliverable().orElseThrow();
         assertEquals(C2, b.channel(), "the effect delivers once position 0 is delivered");
@@ -154,7 +154,8 @@ class EngineBoundaryTest {
         ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
                 () -> tighter.onReceive(new ReceivedMessage(C1, 0, 0, "A".getBytes(), "A".getBytes(),
                         List.of(new HeaderKV(CausesCodec.HEADER_KEY, exact)))));
-        assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
+        assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason(),
+                "one byte past the budget must refuse with the budget's own reason");
     }
 
     /**
@@ -230,7 +231,8 @@ class EngineBoundaryTest {
                 () -> engine.onReceive(new ReceivedMessage(C2, 0, 0, "h".getBytes(), "h".getBytes(),
                         List.of(new HeaderKV(CausesCodec.HEADER_KEY, forged.array())))),
                 "a position no channel can assign must be refused at receipt");
-        assertEquals(ParsleyFailClosedException.Reason.UNDECODABLE_METADATA, e.reason());
+        assertEquals(ParsleyFailClosedException.Reason.UNDECODABLE_METADATA, e.reason(),
+                "a forged header is refused as undecodable metadata");
         assertTrue(e.getMessage().contains("beyond any position a channel can assign"), e.getMessage());
         assertTrue(engine.frontierSnapshot().isEmpty(), "the refused pair must not enter the frontier");
 
@@ -243,7 +245,30 @@ class EngineBoundaryTest {
         ParsleyFailClosedException restore = assertThrows(ParsleyFailClosedException.class,
                 () -> new ProcessEngine("p", BOTH, store),
                 "a restored delivered past at the sentinel must refuse rather than mark a live channel deleted");
-        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, restore.reason());
+        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, restore.reason(),
+                "untrusted ordering state is refused as an unknown state format");
         assertTrue(restore.getMessage().contains("delivered past names position"), restore.getMessage());
+    }
+
+    /**
+     * A negative position in a restored frontier row is refused at restore, before it can
+     * be re-expressed. Receipt has always refused negative positions, so such a row can only
+     * be corrupt store state; and since the emission path encodes the engine's frontier map
+     * directly (D102), restore is the one point between the store and the wire where the
+     * value is checked — left in place, every emission would carry a header downstream
+     * readers refuse as undecodable, blaming the sender's metadata for this process's state.
+     */
+    @Test
+    void aNegativeRestoredFrontierRowIsRefusedBeforeItCanBeReExpressed() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        store.put(StoreCodec.versionKey(), new byte[] {StoreCodec.STORE_FORMAT_VERSION});
+        store.put(StoreCodec.channelKey(StoreCodec.TAG_FRONTIER, C1), StoreCodec.encodeLong(-1L));
+        ParsleyFailClosedException restore = assertThrows(ParsleyFailClosedException.class,
+                () -> new ProcessEngine("p", BOTH, store),
+                "a negative restored frontier position must refuse rather than reach the wire");
+        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, restore.reason(),
+                "corrupt ordering state is refused as an unknown state format");
+        assertTrue(restore.getMessage().contains("frontier names position -1"), restore.getMessage());
+        assertTrue(restore.getMessage().contains("corrupt ordering state"), restore.getMessage());
     }
 }

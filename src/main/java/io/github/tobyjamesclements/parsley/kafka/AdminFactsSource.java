@@ -569,12 +569,36 @@ class AdminFactsSource implements FactsSource {
         try {
             var consumer = probeConsumer();
             consumer.assign(toProbe.keySet());
+            // A partition paused in an earlier round keeps that state across assign().
+            consumer.resume(consumer.paused());
             for (var entry : fedByPartition.entrySet()) {
                 consumer.seek(entry.getKey(), entry.getValue() + 1);
             }
             Set<TopicPartition> unresolved = new HashSet<>(toProbe.keySet());
             for (int attempt = 0; attempt < 4 && !unresolved.isEmpty(); attempt++) {
-                var polled = consumer.poll(java.time.Duration.ofMillis(250));
+                org.apache.kafka.clients.consumer.ConsumerRecords<byte[], byte[]> polled;
+                try {
+                    polled = consumer.poll(java.time.Duration.ofMillis(250));
+                } catch (org.apache.kafka.clients.consumer.OffsetOutOfRangeException e) {
+                    // One hint lies below its channel's log start: the round's log-start fact
+                    // is what refuses that (D104); the other channels still settle.
+                    LOG.warn("{}: probe of {} lies below the log start; the log-start fact governs it", groupId,
+                            e.partitions());
+                    consumer.pause(e.partitions());
+                    unresolved.removeAll(e.partitions());
+                    continue;
+                } catch (org.apache.kafka.common.errors.TopicAuthorizationException e) {
+                    Set<TopicPartition> denied = new HashSet<>();
+                    for (TopicPartition tp : unresolved) {
+                        if (e.unauthorizedTopics().contains(tp.topic())) {
+                            denied.add(tp);
+                        }
+                    }
+                    LOG.warn("{}: probe of {} denied; the other channels still settle", groupId, denied);
+                    consumer.pause(denied);
+                    unresolved.removeAll(denied);
+                    continue;
+                }
                 for (TopicPartition tp : java.util.List.copyOf(unresolved)) {
                     long fed = fedByPartition.get(tp);
                     var records = polled.records(tp);
@@ -592,9 +616,9 @@ class AdminFactsSource implements FactsSource {
             closeProbe();
             return;
         } catch (RuntimeException e) {
+            // What settled before the failure is applied below; the rest retries next round.
             LOG.warn("{}: probe of {} failed; retrying next round", groupId, toProbe.keySet(), e);
             closeProbe();
-            return;
         }
         if (probed.isEmpty()) {
             return;

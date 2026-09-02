@@ -169,7 +169,7 @@ class SabotageMetaTest {
                 "the sabotage must disarm the refusal, or the oracle assertion below tests nothing");
 
         // Re-pinned from seed 65 when D104 biased the sweep's truncation events toward held
-        // channels; seeds 17, 101 and 112 catch this mode under the current generator.
+        // channels; 13 of 300 seeds catch this mode under the current generator, 17 the first.
         List<String> violations = Scenario.run(17, SabotageMode.IGNORE_RECREATION).violations();
         assertTrue(violations.stream().anyMatch(v -> v.startsWith("Assumption 2")),
                 () -> "seed 17 must catch the engine running across a recreation, got: " + violations);
@@ -247,19 +247,21 @@ class SabotageMetaTest {
     /** Random sweep catches broken engines with margin. */
     @Test
     void randomSweepCatchesBrokenEnginesWithMargin() {
+        // Half of the catches measured over these 120 seeds after D104 biased truncation
+        // toward held channels and D106 decorrelated timestamps (D43's rule; counts in D112).
         Map<SabotageMode, Integer> floors = new EnumMap<>(SabotageMode.class);
-        floors.put(SabotageMode.IGNORE_CAUSES, 16);
-        floors.put(SabotageMode.NO_FIFO, 9);
-        floors.put(SabotageMode.REDELIVER_REFEEDS, 40);
-        floors.put(SabotageMode.UNDECODABLE_AS_ABSENT, 37);
-        floors.put(SabotageMode.SKIP_RECEIPT_MERGE, 36);
-        floors.put(SabotageMode.DROP_HELD, 28);
-        floors.put(SabotageMode.IGNORE_TRUNCATION, 19);
-        floors.put(SabotageMode.IGNORE_REMOVED_CHANNELS, 17);
-        floors.put(SabotageMode.SILENT_DROP, 22);
-        floors.put(SabotageMode.OVEREXPRESS, 46);
-        // DELIVER_PAST_DEAD_HOLDS has no floor: calibration found 0 catches in 300 seeds.
-        // Its oracle evidence is the deterministic inversion scenario above.
+        floors.put(SabotageMode.IGNORE_CAUSES, 29);
+        floors.put(SabotageMode.NO_FIFO, 5);
+        floors.put(SabotageMode.REDELIVER_REFEEDS, 28);
+        floors.put(SabotageMode.UNDECODABLE_AS_ABSENT, 39);
+        floors.put(SabotageMode.SKIP_RECEIPT_MERGE, 28);
+        floors.put(SabotageMode.DROP_HELD, 37);
+        floors.put(SabotageMode.IGNORE_TRUNCATION, 25);
+        floors.put(SabotageMode.IGNORE_REMOVED_CHANNELS, 16);
+        floors.put(SabotageMode.SILENT_DROP, 15);
+        floors.put(SabotageMode.OVEREXPRESS, 41);
+        // DELIVER_PAST_DEAD_HOLDS and TREAT_COVERED_FEED_AS_REPLAY have no floor: calibration
+        // found 0 catches in 300 seeds for each. Their oracle evidence is deterministic.
         floors.forEach((mode, floor) -> {
             long caught = LongStream.rangeClosed(1, 120)
                     .filter(seed -> !Scenario.run(seed, mode).clean())
@@ -272,7 +274,7 @@ class SabotageMetaTest {
                 .filter(seed -> !Scenario.run(seed, SabotageMode.IGNORE_RECREATION).clean())
                 .count();
         assertTrue(recreationCaught >= 6, "sabotage mode IGNORE_RECREATION caught by only " + recreationCaught
-                + " of 300 seeds (floor 6, half of the calibrated 12): the sweep's margin for this mode has collapsed");
+                + " of 300 seeds (floor 6, half of the calibrated 13): the sweep's margin for this mode has collapsed");
     }
 
     /**

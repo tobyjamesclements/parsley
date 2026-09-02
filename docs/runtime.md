@@ -7,8 +7,8 @@ process's Kafka Streams application has been started — that is, into its first
 A refusal the bootstrap can see is thrown from the call; one raised inside task
 initialisation on the host's threads surfaces through `Parsley.status()`.
 
-1. Resolves topic identities through the admin client, and fails where a received topic is
-   missing.
+1. Resolves topic identities through the admin client, and fails where any declared topic,
+   received or sent, is missing.
 2. Reads the group's committed positions. For received partitions with none, it pre-commits
    the declared initial position, taking earliest as the log start and latest as the end.
    The commit goes through a generation-fenced group membership rather than an admin

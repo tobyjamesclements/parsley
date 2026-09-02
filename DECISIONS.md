@@ -3939,11 +3939,13 @@ Three rules in `ProcessEngine`, each pinned.
 2. **A flush writes what arrived since the last one.** Holds enter an `unpersisted` queue on
    receipt; `flushHolds` drains that queue and never walks the buffers. A hold delivered
    before its first flush is marked `removed` and skipped, so it is never written. Pinned by
-   `#aHoldDeliveredBeforeItsFirstFlushIsNeverWrittenToTheStore` and by the suite's one
-   wall-clock bound, `#flushingAfterEveryReceiptStaysCheapWhileTheBufferDeepens`: 50,000
+   `#aHoldDeliveredBeforeItsFirstFlushIsNeverWrittenToTheStore` and by one of the suite's two
+   wall-clock bounds (the other, `ProbeIdleChannelCostIntegrationTest`, times a real broker's
+   probe under D107), `#flushingAfterEveryReceiptStaysCheapWhileTheBufferDeepens`: 50,000
    receipt-and-flush cycles under five seconds, where the walk spent about twenty seconds in
    that shape alone. The margin is an order of magnitude each way, which is why a timing
-   bound is acceptable here and nowhere else in the suite.
+   bound is acceptable at these two sites and
+   nowhere else in the suite.
 3. **Encode once per frontier change.** The encoded frontier is cached and dropped at the
    frontier's mutation sites — merge on receipt, merge on delivery, prune on facts — and
    `CausesCodec.encode` gained a package-private overload over the engine's own sorted map so
@@ -4206,6 +4208,10 @@ and by the catalogue sweeps in `CausesCodecTest` and `CausalPastMalformationTest
 
 One more vector in the battery and one more restore-time scan condition. A message carrying
 the position is refused where before it was absorbed; only an untruthful sender can carry it.
+The restore-time check also refuses a negative row, which receipt has always refused and so can
+only be corruption; it has to, because D102's emission path encodes the engine's frontier map
+directly and no longer passes through `Causes.of`, so restore is the one point between the
+store and the wire where a stored position is validated (`EngineBoundaryTest#aNegativeRestoredFrontierRowIsRefusedBeforeItCanBeReExpressed`).
 
 **Specification gap**
 
@@ -4266,7 +4272,7 @@ ignores. The simulator's timestamps are now arbitrary-looking numbers in journal
 
 None.
 
-### D107 — A facts round's tail is watched time; the probe is batched over the channels held heads wait on; the seed round does not probe (corrects D88's spelling and D35's cost claim)
+### D107 — A facts round's tail is watched time; the probe is batched over the channels held heads wait on; the seed round does not probe (implements D88's spelling, whose pin did not cover the round tail; corrects D35's cost claim)
 
 **Context**
 
@@ -4372,11 +4378,16 @@ after which the join proceeds. For the join that still meets a member — the ch
 join are not atomic — the uncaught-exception handler recognises the protocol conflict and
 replaces the stream thread rather than shutting the client down: the refused thread held no
 task and did nothing that needs undoing, and its replacement joins after the member has
-left. Everything else the handler sees still shuts the client down. Pinned by
+left. Everything else the handler sees still shuts the client down, and so does the collision itself
+once it can no longer be another instance's member: a refused join is replaced only within twice
+the bootstrap member's session timeout of the start, after which a member speaking another
+protocol under this application id is persistent and the client stops with
+`SUBSTRATE_MISCONFIGURED`, naming the conflict, rather than replacing its thread forever. Pinned by
 `ConcurrentColdStartIntegrationTest#twoInstancesColdStartingTogetherBothComeUpHealthy` —
 eight two-instance cold starts, every instance healthy, where three of eight died before —
-and its sibling `#startReturnsBeforeTheProcessIsRunning`, which pins what `start()`
-actually returns into (D109).
+and its sibling `#startReturnsWithoutWaitingForTheProcessToRun`, which pins what `start()`
+actually returns into (D109); `StreamsJoinCollisionTest` pins both mechanisms deterministically
+over their seams, since the broker test's collision window is probabilistic.
 
 **Alternatives**
 
@@ -4427,8 +4438,8 @@ with its remedy — before merging, so D55's preference keeps them over later tr
 transient, since a restart resolves them (D59). Pinned by `SubstrateDetectedStopStatusTest`.
 The Javadoc on `Parsley.start` and `ParsleyRuntime.start` now says the call returns once
 each application has been started and that initialisation-time refusals surface through
-`status()`; `ConcurrentColdStartIntegrationTest#startReturnsBeforeTheProcessIsRunning` pins
-the state a caller finds immediately after. `admin.close` takes the same thirty-second
+`status()`; `ConcurrentColdStartIntegrationTest#startReturnsWithoutWaitingForTheProcessToRun` pins
+that the state a caller finds immediately after is a live one, rebalancing or running. `admin.close` takes the same thirty-second
 bound as the streams close, the probe consumer closes with five seconds, and the facts
 source's close waits five seconds for its lock and otherwise marks itself closed and
 abandons the round, whose own interrupt handling closes the probe.
@@ -4532,7 +4543,7 @@ timestamps because they make replays nondeterministic; it did not consider a tim
 application chooses as a function of delivered data, which is as deterministic as the effect
 it belongs to.
 
-Third, four Javadocs described something other than the code. `StateReader` said reads were
+Third, five Javadocs described something other than the code. `StateReader` said reads were
 "scoped to the key range of the step in progress"; they are served from the shard of each
 store owned by the delivering task, so a key is found only if the delivering topic was keyed
 so that the same partitioner put it on that partition, and nothing said so. `Channel#startingAt`
@@ -4613,8 +4624,12 @@ suite on Java 21 and 25.
 **Cost**
 
 Two methods on `Parsley` and one more component on `Emission`, both to be defended. The
-operations page and the corrected Javadocs are claims about the runtime that must be kept true
-as it changes; `EVIDENCE.md` names the pins that catch the executable ones.
+four-argument `Emission` constructor keeps every existing construction compiling, but a record
+pattern written against 0.2.0's four components — `case Emission(var c, var k, var v, var h)`
+— no longer compiles and must name the fifth; the same holds for `ProcessStatus` since D103.
+Both are source breaks for 0.3.0 and belong in its release note. The operations page and the
+corrected Javadocs are claims about the runtime that must be kept true as it changes;
+`EVIDENCE.md` names the pins that catch the executable ones.
 
 **Specification gap**
 
@@ -4669,10 +4684,17 @@ of 300), and it joins `DELIVER_PAST_DEAD_HOLDS` as a deterministically evidenced
 
 **Alternatives**
 
-* Re-basing every sweep floor while the sabotage table was open. The trial measured that D43's
-  recorded counts no longer describe the generator (D104's truncation bias and D106's
-  timestamp decorrelation both moved them). Deferred: floors are re-based from a fresh
-  300-seed calibration after the generator settles, not from counts taken mid-change.
+* Leaving the sweep floors as D43 calibrated them. The generator changed twice on this branch
+  (D104's truncation bias toward held channels, D106's timestamp decorrelation), and D43's
+  rule is that any generator change re-measures and re-sets the floors at half the count.
+  Measured over the sweep's 120 seeds after both changes, catches were: IGNORE_CAUSES 59,
+  NO_FIFO 10, REDELIVER_REFEEDS 57, UNDECODABLE_AS_ABSENT 79, SKIP_RECEIPT_MERGE 57,
+  DROP_HELD 75, IGNORE_TRUNCATION 50, IGNORE_REMOVED_CHANNELS 32, SILENT_DROP 30,
+  OVEREXPRESS 82; over 300 seeds IGNORE_RECREATION 13, and DELIVER_PAST_DEAD_HOLDS and
+  TREAT_COVERED_FEED_AS_REPLAY 0. The floors are re-set to half of each. IGNORE_TRUNCATION
+  rose from D43's 35 to 50, which is what D104's bias was for; NO_FIFO fell from 17 to 10,
+  since truncation events now displace some of the interleavings that caught it, and its
+  floor of 5 records that margin honestly rather than the stale 9 it passed by one seed.
 * Extracting `refusePositionsDiscardedUnread` to a package-private seam instead of reflecting
   on it. Not taken here: D92 reserves seam extraction for methods with more than one pin, and
   the test names the method by string so a rename fails it loudly.

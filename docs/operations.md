@@ -27,7 +27,8 @@ uses the admin client and two plain consumers: describing topics by name and by 
 the earliest offsets under `read_committed`, listing the group's committed offsets, and — at
 start when initial positions are missing — joining the group as a short-lived bootstrap
 member to commit them under the group's generation fence. A facts round also assigns a
-groupless consumer to the partitions a held head waits on and polls once. The ACLs those need
+groupless consumer to the partitions a held head waits on and polls a few times, a second at
+most. The ACLs those need
 are Describe on every declared topic and on the group, Read on the group and on the received
 topics, and whatever Streams itself needs to create and write its changelogs. A Describe
 denial is treated as denial, never as a topic's deletion.

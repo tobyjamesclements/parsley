@@ -63,6 +63,11 @@ public final class CausesCodec {
         return encodedSize(causes.byChannel());
     }
 
+    /**
+     * The encoded size of a frontier given as its sorted map, without building a
+     * {@link Causes}: the engine keeps its frontier as this map and asks for the width on
+     * every merge (D98), so the value object's copy would be paid per record for nothing.
+     */
     static int encodedSize(SortedMap<ChannelId, Long> byChannel) {
         int size = 1 + unsignedVarintSize(topicCount(byChannel));
         UUID currentTopic = null;

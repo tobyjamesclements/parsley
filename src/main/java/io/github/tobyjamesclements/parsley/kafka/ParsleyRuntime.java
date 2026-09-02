@@ -149,8 +149,15 @@ public final class ParsleyRuntime implements AutoCloseable {
                         ProcessTopology.build(definition, topics, factsSource, config.factsInterval(),
                                 runtime.factsExecutor, config.metadataBudgetBytes(), diagnostics),
                         streamsProperties(config, applicationId));
+                java.time.Duration memberBound = bootstrapMemberSessionTimeout(clientPropsFor(config));
+                // A refused join is replaced only while another instance's bootstrap member can
+                // still be lingering: twice its session timeout from here covers the pre-start
+                // wait below and one ungraceful exit. Past that, a member speaking another
+                // protocol under this application id is persistent, and the client stops with
+                // that diagnosis rather than replacing its thread forever (D108).
+                long collisionDeadline = System.nanoTime() + 2 * memberBound.toNanos();
                 kafkaStreams.setUncaughtExceptionHandler(exception -> {
-                    if (isBootstrapMemberCollision(exception)) {
+                    if (shouldReplaceThread(exception, System.nanoTime(), collisionDeadline)) {
                         // Another instance's bootstrap member is still in the group under the
                         // consumer protocol, so this thread's join was refused. That member
                         // leaves within milliseconds of committing; a replacement thread joins
@@ -160,7 +167,9 @@ public final class ParsleyRuntime implements AutoCloseable {
                                 + " replacing the stream thread to join again", definition.name());
                         return StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse.REPLACE_THREAD;
                     }
-                    runtime.recordFailure(definition.name(), exception);
+                    runtime.recordFailure(definition.name(), isBootstrapMemberCollision(exception)
+                            ? persistentProtocolConflict(applicationId, memberBound.multipliedBy(2), exception)
+                            : exception);
                     return StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse.SHUTDOWN_CLIENT;
                 });
                 kafkaStreams.setStateListener((newState, oldState) -> {
@@ -170,7 +179,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                 });
                 runtime.streams.add(kafkaStreams);
                 runtime.streamsByProcess.put(definition.name(), kafkaStreams);
-                runtime.awaitBootstrapMembersGone(applicationId, streamsSessionTimeout(clientPropsFor(config)));
+                runtime.awaitBootstrapMembersGone(applicationId, memberBound);
             }
             runtime.streams.forEach(KafkaStreams::start);
             return runtime;
@@ -203,6 +212,45 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     /**
+     * Whether a stream thread's failure is a collision worth replacing the thread for: the
+     * protocol conflict of {@link #isBootstrapMemberCollision}, seen before the deadline by
+     * which every other instance's bootstrap member must have left (D108). A conflict past
+     * the deadline is persistent, and the client stops with its diagnosis instead.
+     */
+    static boolean shouldReplaceThread(Throwable exception, long nowNanos, long deadlineNanos) {
+        return isBootstrapMemberCollision(exception) && nowNanos - deadlineNanos < 0;
+    }
+
+    /**
+     * The diagnosis for a group join still refused as a protocol conflict once no bootstrap
+     * member of another instance can remain: a member speaking another group protocol sits
+     * in the group under this application id — a foreign consumer configured with it, or a
+     * bootstrap member of an instance that never left — and the substrate, not the process,
+     * must be corrected (D108).
+     */
+    static ParsleyFailClosedException persistentProtocolConflict(String applicationId, java.time.Duration window,
+                                                                 Throwable cause) {
+        return new ParsleyFailClosedException(ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
+                applicationId + ": the group join has been refused as a protocol conflict for longer than " + window
+                        + ", so a member speaking another group protocol persists in this group: a consumer"
+                        + " configured with this application id as its group, or another instance's bootstrap"
+                        + " member that never left. Remove it, then restart this instance.", cause);
+    }
+
+    /**
+     * The session timeout the bootstrap member joins with (D48): the configured consumer
+     * session timeout in any Streams spelling, else the committer's ten-second default. An
+     * ungraceful bootstrap exit holds the group for exactly this long, which is what bounds
+     * both the pre-start wait and the window in which a refused join is replaced (D108).
+     */
+    static java.time.Duration bootstrapMemberSessionTimeout(Map<String, Object> clientProps) {
+        java.util.OptionalLong configured = GroupMembershipCommitter.configuredSessionTimeoutMillis(clientProps);
+        return configured.isEmpty()
+                ? java.time.Duration.ofSeconds(10)
+                : java.time.Duration.ofMillis(configured.getAsLong());
+    }
+
+    /**
      * Waits, bounded, until no bootstrap member of another instance sits in the group
      * before this instance's Kafka Streams joins it (D108). Two instances cold-starting
      * together each join as a bootstrap member to commit initial positions; a Streams join
@@ -212,30 +260,52 @@ public final class ParsleyRuntime implements AutoCloseable {
      * bounds this wait, after which the join proceeds and a refused thread is replaced.
      */
     private void awaitBootstrapMembersGone(String applicationId, java.time.Duration bound) {
-        long deadline = System.nanoTime() + bound.toNanos();
+        boolean gone = awaitMembersGone(
+                () -> admin.describeConsumerGroups(List.of(applicationId)).describedGroups()
+                        .get(applicationId).get(TIMEOUT_SECONDS, TimeUnit.SECONDS).members().stream()
+                        .anyMatch(member -> member.clientId().startsWith(GroupMembershipCommitter.CLIENT_ID_PREFIX)),
+                System.nanoTime() + bound.toNanos(),
+                System::nanoTime,
+                millis -> {
+                    try {
+                        Thread.sleep(millis);
+                        return true;
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                });
+        if (!gone) {
+            LOG.warn("{}: another instance's bootstrap member is still in the group after {}; starting"
+                    + " anyway, a refused join replaces its thread", applicationId, bound);
+        }
+    }
+
+    /**
+     * The wait of {@link #awaitBootstrapMembersGone} over its seams: polls {@code memberPresent}
+     * every hundred milliseconds until it answers false, and returns true; returns false once
+     * {@code nanoTime} passes {@code deadlineNanos} with the member still present. A describe
+     * that fails is not evidence either way, and an interrupted sleep ends the wait; both
+     * return true, since the join itself is guarded by the thread replacement.
+     */
+    static boolean awaitMembersGone(java.util.concurrent.Callable<Boolean> memberPresent, long deadlineNanos,
+                                    java.util.function.LongSupplier nanoTime,
+                                    java.util.function.LongPredicate sleepMillis) {
         while (true) {
             boolean present;
             try {
-                present = admin.describeConsumerGroups(List.of(applicationId)).describedGroups()
-                        .get(applicationId).get(TIMEOUT_SECONDS, TimeUnit.SECONDS).members().stream()
-                        .anyMatch(member -> member.clientId().startsWith(GroupMembershipCommitter.CLIENT_ID_PREFIX));
+                present = memberPresent.call();
             } catch (Exception e) {
-                // Not evidence either way; the join itself is guarded by the thread replacement.
-                return;
+                return true;
             }
             if (!present) {
-                return;
+                return true;
             }
-            if (System.nanoTime() - deadline > 0) {
-                LOG.warn("{}: another instance's bootstrap member is still in the group after {}; starting"
-                        + " anyway, a refused join replaces its thread", applicationId, bound);
-                return;
+            if (nanoTime.getAsLong() - deadlineNanos > 0) {
+                return false;
             }
-            try {
-                Thread.sleep(100);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
+            if (!sleepMillis.test(100)) {
+                return true;
             }
         }
     }
