@@ -49,3 +49,6 @@ replay_pid*
 # Agent tool state: machine-specific, never tracked. The tracked guidance is AGENTS.md.
 .claude/
 /parsley.iml
+
+# Python bytecode caches from the scripts
+__pycache__/
