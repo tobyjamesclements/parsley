@@ -362,7 +362,8 @@ public final class ProcessEngine {
                                 + " on a channel recorded as no longer existing");
             }
             Long floor = sessionFloor.get(channel);
-            if (floor == null || message.position() > floor) {
+            if ((floor == null || message.position() > floor)
+                    && !sabotage.has(Sabotage.Mode.TREAT_COVERED_FEED_AS_REPLAY)) {
                 // Not a feed-order violation: in-execution order is checked against
                 // fedThisExecution above. This position was covered by a read-position
                 // report, so the report and the feed contradict each other.

@@ -4619,3 +4619,68 @@ as it changes; `EVIDENCE.md` names the pins that catch the executable ones.
 **Specification gap**
 
 None. The spec is silent on timestamps beyond Structural 7, which this respects.
+
+### D112 — Five pins a mutation trial showed the suite lacked, and the sabotage mode D91 recorded as missing
+
+**Context**
+
+A review pass deleted or inverted one guard at a time and ran the fast suites. Five
+mutations stayed green. Deleting the pre-feed facts apply in `ParsleyProcessor#process` — the
+three lines that apply a round the facts thread has already deposited before the next record
+is fed — left 88 kafka unit tests green, although without it a received topic's recreation
+reported by a completed gather is acted on only at the next punctuation, so for up to one
+facts interval records of the new incarnation are fed, delivered and committed under the old
+identity, which D44 says affirmative evidence must stop at once; only the punctuator path was
+pinned. Changing D74's `offset - 1 > covered` to `offset > covered` in
+`refusePositionsDiscardedUnread` — which refuses every legitimate expiry restart at exactly the
+covered boundary with a destructive remedy — survived the kafka fast set, because the one pin
+uses a wide gap and needs a broker. Taking `frontierSizeRemove`'s varint delta from the wrong
+side of the count survived 431 core tests: the bookkeeping changes only when a prune shrinks a
+topic group from 129 through 127 partitions, and `frontierBytesAgreesWithTheEncodedHeader`
+crosses that boundary upward only; the drift is one byte per crossing for the process's
+lifetime, so the O(1) budget gate and `frontierBytes()` part from the header emitted.
+Disabling the delivered-past prune in `onFacts` survived every core test: its one consequence
+is that an aged-out past resurfaces as a join clamp when its channel joins the received set,
+writing a coverage record for a channel this process never read, which D74's start-time check
+then refuses as positions discarded unread. And the equal-position re-feed below the session
+floor — D67 gap 3's other side — was pinned above the floor only (D106), so weakening the
+in-execution check to strict-less-than there degraded to a silent replay drop with no test
+red. D91 had separately recorded that the sabotage sweep has no mode for the silent-drop
+direction of `COVERED_POSITION_FED`.
+
+**Decision**
+
+Each gap is closed by the test the trial wrote, red under the mutation and green on the
+tree: `ProcessorRevivalTest#aDepositedRoundIsAppliedBeforeTheNextRecordIsFed` (a freeing
+report deposited before a record releases the hold ahead of it, and a deposited recreation
+refuses the next record as `CHANNEL_IDENTITY_CHANGED`);
+`BootstrapPreCheckTest#reEstablishedPositionAtExactlyTheCoveredBoundaryStartsAndOnePastItRefuses`
+(coverage written by a real engine over `MemoryOrderingStore`; covered + 1 starts, covered + 2
+refuses); `ProcessEngineTest#frontierBytesTracksTheEncodedHeaderWhenAPruneShrinksAGroupAcrossTheVarintWidthBoundary`;
+`ProcessEngineTest#aPrunedDeliveredPastEntryDoesNotBecomeCoverageWhenItsChannelJoins`; and
+`ProcessEngineTest#feedingTheSamePositionTwiceInOneExecutionFailsClosedAsOutOfOrderOnBothSidesOfTheSessionFloor`.
+The `TREAT_COVERED_FEED_AS_REPLAY` sabotage mode disarms only the refusal's covered branch
+into `DUPLICATE_DROPPED`; `SabotageMetaTest#treatingACoveredFeedAsAReplayIsCaught` stages the
+honest and sabotaged engines over the same report-then-feed contradiction. The mode carries no
+sweep floor, for the reason D91 gave: the harness derives every read-position report from a
+process's own progress, so no random seed reaches a successor-ahead report (calibrated at 0
+of 300), and it joins `DELIVER_PAST_DEAD_HOLDS` as a deterministically evidenced mode
+(`docs/verification.md`). No production code changed beyond the mode's one guard.
+
+**Alternatives**
+
+* Re-basing every sweep floor while the sabotage table was open. The trial measured that D43's
+  recorded counts no longer describe the generator (D104's truncation bias and D106's
+  timestamp decorrelation both moved them). Deferred: floors are re-based from a fresh
+  300-seed calibration after the generator settles, not from counts taken mid-change.
+* Extracting `refusePositionsDiscardedUnread` to a package-private seam instead of reflecting
+  on it. Not taken here: D92 reserves seam extraction for methods with more than one pin, and
+  the test names the method by string so a rename fails it loudly.
+
+**Cost**
+
+Six tests. The reflective pin binds a private method's name and signature.
+
+**Specification gap**
+
+None.

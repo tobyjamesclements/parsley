@@ -859,4 +859,99 @@ class ProcessEngineTest {
         assertTrue(elapsedMillis < 5_000,
                 "50,000 receipt-and-flush cycles took " + elapsedMillis + " ms; a flush must not scan the buffer");
     }
+
+    /**
+     * The in-execution feed-order check binds at equality, not only on regression. The same
+     * position fed twice within one execution is the shape a recreated topic's records take
+     * when they arrive under the old channel's identity, and it must fail loudly as a
+     * feed-order breach on both sides of the session floor: above the floor a check weakened
+     * to strict-less-than would fall through to the covered-position branch and misname the
+     * condition (SPEC Operational 6); below the floor it would drop the second feed silently
+     * as a sanctioned replay (D67 gap 3).
+     */
+    @Test
+    void feedingTheSamePositionTwiceInOneExecutionFailsClosedAsOutOfOrderOnBothSidesOfTheSessionFloor() {
+        MemoryOrderingStore fresh = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, fresh);
+        engine.onReceive(plain(C1, 5, "M"));
+        ParsleyFailClosedException above = assertThrows(ParsleyFailClosedException.class,
+                () -> engine.onReceive(plain(C1, 5, "M")),
+                "the same position fed twice above the session floor must fail closed");
+        assertEquals(ParsleyFailClosedException.Reason.OUT_OF_ORDER_FEED, above.reason(),
+                "a same-position re-feed is a feed-order breach, not a report/feed contradiction");
+
+        MemoryOrderingStore committed = new MemoryOrderingStore();
+        ProcessEngine first = new ProcessEngine("p", BOTH, committed);
+        first.onReceive(plain(C1, 5, "M"));
+        first.markDelivered(C1, 5);
+        first.flushHolds();
+        committed.commit();
+        ProcessEngine restarted = new ProcessEngine("p", BOTH, committed);
+        assertEquals(ProcessEngine.ReceiveOutcome.DUPLICATE_DROPPED, restarted.onReceive(plain(C1, 3, "M3")),
+                "staging: the first re-feed below the session floor is a sanctioned replay");
+        ParsleyFailClosedException below = assertThrows(ParsleyFailClosedException.class,
+                () -> restarted.onReceive(plain(C1, 3, "M3")),
+                "the same position fed twice below the session floor must fail closed, not drop silently");
+        assertEquals(ParsleyFailClosedException.Reason.OUT_OF_ORDER_FEED, below.reason(),
+                "the second feed of one position is a feed-order breach whatever the session floor says");
+    }
+
+    /**
+     * A delivered-past entry that facts pruned below its channel's earliest retained position
+     * must not resurface as a join clamp. Were it kept, the channel joining the received set
+     * would have its fed-up-to advanced to the stale past, leaving a coverage record for a
+     * channel this process never read; D74's start-time check then refuses a legitimate
+     * expiry restart on that channel as positions discarded unread. Coverage is the fed-up-to
+     * record alone, and a joined-never-read channel must leave none.
+     */
+    @Test
+    void aPrunedDeliveredPastEntryDoesNotBecomeCoverageWhenItsChannelJoins() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine first = new ProcessEngine("p", Map.of(C1, "c1"), store);
+        first.onReceive(caused(C1, 0, "A", Map.of(C2, 5L)));
+        first.markDelivered(C1, 0);
+        first.onFacts(new PositionFacts(Map.of(), Map.of(C2, 100L), Set.of()));
+        first.flushHolds();
+        store.commit();
+
+        ProcessEngine joined = new ProcessEngine("p", BOTH, store);
+        assertEquals(java.util.OptionalLong.empty(), joined.fedUpTo(C2),
+                "a channel whose delivered past aged out must join with no clamp");
+        Map<byte[], byte[]> image = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
+        store.scanPrefix(new byte[0], image::put);
+        assertEquals(Map.of(C1, 0L), OrderingStateInspector.coveredPositions(image),
+                "the joined channel must leave no fed-up-to record: a start-time coverage check would"
+                        + " otherwise refuse its re-established position as discarded unread (D74)");
+    }
+
+    /**
+     * The incrementally maintained frontier width must track the encoded header when a prune
+     * shrinks a topic group back across the varint-width boundary: removing partitions from a
+     * group of 129 through 128 to 127 narrows the partition-count varint from two bytes to
+     * one, and {@link #frontierBytesAgreesWithTheEncodedHeader} only ever crosses that
+     * boundary upwards. A delta taken from the wrong side of the count leaves frontierBytes
+     * one byte off the header the process emits, and the O(1) budget gate then refuses one
+     * byte early or late, a drift that compounds with every crossing.
+     */
+    @Test
+    void frontierBytesTracksTheEncodedHeaderWhenAPruneShrinksAGroupAcrossTheVarintWidthBoundary() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        UUID wideTopic = new UUID(43, 1);
+        java.util.TreeMap<ChannelId, Long> wide = new java.util.TreeMap<>();
+        for (int partition = 0; partition < 129; partition++) {
+            wide.put(new ChannelId(wideTopic, partition), 1L);
+        }
+        engine.onReceive(caused(C1, 0, "A", wide));
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "with a 129-partition group, the partition count two varint bytes wide");
+
+        for (int remaining = 128; remaining >= 126; remaining--) {
+            engine.onFacts(new PositionFacts(Map.of(), Map.of(), Set.of(new ChannelId(wideTopic, remaining))));
+            assertEquals(remaining, engine.frontierSize(),
+                    "staging: the pruned partition must actually leave the frontier");
+            assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                    "after shrinking the group to " + remaining + " partitions");
+        }
+    }
 }

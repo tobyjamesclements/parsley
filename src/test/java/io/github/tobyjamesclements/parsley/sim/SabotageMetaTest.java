@@ -7,10 +7,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.LongStream;
 
+import io.github.tobyjamesclements.parsley.core.ChannelId;
+import io.github.tobyjamesclements.parsley.core.EngineTestFactory;
 import io.github.tobyjamesclements.parsley.core.EngineTestFactory.SabotageMode;
+import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.PositionFacts;
+import io.github.tobyjamesclements.parsley.core.ProcessEngine;
 import io.github.tobyjamesclements.parsley.sim.TargetedScenarioTest.Rig;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -266,5 +273,37 @@ class SabotageMetaTest {
                 .count();
         assertTrue(recreationCaught >= 6, "sabotage mode IGNORE_RECREATION caught by only " + recreationCaught
                 + " of 300 seeds (floor 6, half of the calibrated 12): the sweep's margin for this mode has collapsed");
+    }
+
+    /**
+     * Silently dropping a feed at a report-covered position is caught. The mode disarms the
+     * refusal's silent-drop direction, which the random sweep cannot reach (D91: the harness
+     * derives read-position reports from a process's own progress, so a successor-ahead
+     * report never arises), so the evidence runs directly over {@link ProcessEngine}, the way
+     * {@code SupersessionTest} stages the honest refusal: the same shape that makes the honest
+     * engine refuse makes the sabotaged one drop the feed as a replay, which is what turns
+     * {@code ProcessEngineTest#feedAtAReportCoveredPositionFailsClosedAsCoveredPositionFed}
+     * red. This mode carries no sweep floor.
+     */
+    @Test
+    void treatingACoveredFeedAsAReplayIsCaught() {
+        ChannelId c1 = new ChannelId(new java.util.UUID(12, 1), 0);
+        Map<ChannelId, String> received = Map.of(c1, "c1");
+        for (SabotageMode mode : List.of(SabotageMode.NONE, SabotageMode.TREAT_COVERED_FEED_AS_REPLAY)) {
+            ProcessEngine engine = EngineTestFactory.create("p", received, new MemoryOrderingStore(), mode);
+            engine.onReceive(EngineTestFactory.plain(c1, 2, "A"));
+            engine.markDelivered(c1, 2);
+            engine.onFacts(new PositionFacts(Map.of(c1, 10L), Map.of(), java.util.Set.of()));
+            if (mode == SabotageMode.NONE) {
+                ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+                        () -> engine.onReceive(EngineTestFactory.plain(c1, 7, "M")),
+                        "the honest engine refuses a feed the report already covered");
+                assertEquals(ParsleyFailClosedException.Reason.COVERED_POSITION_FED, e.reason());
+            } else {
+                assertEquals(ProcessEngine.ReceiveOutcome.DUPLICATE_DROPPED,
+                        assertDoesNotThrow(() -> engine.onReceive(EngineTestFactory.plain(c1, 7, "M"))),
+                        "the sabotage must disarm the refusal into a silent drop, or the pin tests nothing");
+            }
+        }
     }
 }

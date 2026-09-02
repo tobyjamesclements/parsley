@@ -49,7 +49,10 @@ record Sabotage(Set<Mode> modes) {
         IGNORE_RECREATION,
 
         /** Settle a dead channel while messages from it remain held. */
-        DELIVER_PAST_DEAD_HOLDS
+        DELIVER_PAST_DEAD_HOLDS,
+
+        /** Drop a feed at a report-covered position as a replay instead of refusing it. */
+        TREAT_COVERED_FEED_AS_REPLAY
     }
 
     /** No faults enabled. */
