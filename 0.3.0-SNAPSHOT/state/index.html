@@ -608,6 +608,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Memory
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#isolation-from-application-state" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -670,6 +681,8 @@
   
     
     
+      
+        
       
         
       
@@ -761,6 +774,34 @@
     
   
     Runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
   
 
     
@@ -883,6 +924,8 @@
       
         
       
+        
+      
     
     
     
@@ -941,6 +984,34 @@
     
   
     Verification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../decisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
   
 
     
@@ -1060,6 +1131,16 @@ messages across a restart, even though Streams commits read positions past recor
 buffered rather than delivered.</p>
 <p>A held message is restored with its key, value, headers and timestamp exactly as received.
 Null keys, null values and null header values are each distinguished from empty ones.</p>
+<h2 id="memory">Memory</h2>
+<p>The delivery decision reads the head of each channel's hold-back buffer and nothing behind
+it, so that is all the engine keeps decoded. A held message's decoded form — causes, key,
+value and headers — is in memory only until it is persisted at step end, and again once it
+reaches the head of its buffer, when it is read back from the store. Everything in between
+is a skeleton of channel, position and timestamp. A buffer that deepens behind a lagging
+cause therefore costs the heap a few tens of bytes per held message, however wide the
+frontier each carries, and a flush at step end writes the holds taken in since the previous
+flush rather than scanning the buffer. A restart decodes every held entry once, to refuse
+corruption before delivering anything, and retains the skeletons.</p>
 <p>The delivered causal past is stored separately from the frontier. The frontier governs what a
 process may express on its sends. The delivered past governs what a channel joining the
 received set later may deliver, by clamping it above effects already delivered while that

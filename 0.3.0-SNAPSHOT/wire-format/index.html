@@ -686,6 +686,8 @@
       
         
       
+        
+      
     
     
     
@@ -772,6 +774,34 @@
     
   
     Runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
   
 
     
@@ -894,6 +924,8 @@
       
         
       
+        
+      
     
     
     
@@ -952,6 +984,34 @@
     
   
     Verification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../decisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
   
 
     
@@ -1075,6 +1135,11 @@ as <code>05</code>, two spellings for one value that the padding rule alone cann
    ever produced such a group, because writers only express channels the substrate named —
    D83 records the reasoning.)</li>
 <li><code>position</code> is non-negative.</li>
+<li><code>position</code> is below 2⁶³ − 1. No log reaches that many records, so no genuine cause can
+   name it, and an implementation may keep it as an in-band marker of its own — this one
+   records a deleted channel with it. (A reader-side tightening in the manner of
+   constraint 5: no conforming writer has ever produced such a pair; D105 records the
+   reasoning.)</li>
 </ol>
 <h2 id="meaning">Meaning</h2>
 <p>Each pair, with its group's topic ID, expresses causes on one channel as the entry

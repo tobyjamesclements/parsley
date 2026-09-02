@@ -679,6 +679,8 @@
       
         
       
+        
+      
     
     
     
@@ -765,6 +767,34 @@
     
   
     Runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
   
 
     
@@ -887,6 +917,8 @@
       
         
       
+        
+      
     
     
     
@@ -945,6 +977,34 @@
     
   
     Verification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="decisions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
   
 
     
@@ -1049,11 +1109,14 @@ timeout, and a held message is released only by evidence.</p>
 <a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="p">.</span><span class="na">build</span><span class="p">();</span>
 <a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a>
 <a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="k">try</span><span class="w"> </span><span class="p">(</span><span class="n">Parsley</span><span class="w"> </span><span class="n">parsley</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Parsley</span><span class="p">.</span><span class="na">start</span><span class="p">(</span><span class="n">config</span><span class="p">,</span><span class="w"> </span><span class="n">shipper</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="c1">// runs until closed</span>
+<a id="__codelineno-0-18" name="__codelineno-0-18" href="#__codelineno-0-18"></a><span class="w">    </span><span class="n">parsley</span><span class="p">.</span><span class="na">awaitStopped</span><span class="p">();</span><span class="w"> </span><span class="c1">// returns when a process stops, or when another thread closes</span>
 <a id="__codelineno-0-19" name="__codelineno-0-19" href="#__codelineno-0-19"></a><span class="p">}</span>
 </code></pre></div>
 <p>A handler receives the delivered message and a read view of state, and returns what it
-changes. It is given no producer, no timer and no clock.</p>
+changes. It is given no producer, no timer and no clock. <code>Parsley.start</code> returns once each
+process has been started; <code>awaitStopped</code> is what keeps the application up, and
+<code>status()</code> says what each process holds and why, or why it stopped
+(<a href="runtime/#observing-a-process">Runtime</a>).</p>
 <h2 id="getting-it">Getting it</h2>
 <p>Parsley is published to
 <a href="https://central.sonatype.com/artifact/io.github.tobyjamesclements/parsley">Maven Central</a>.
@@ -1103,6 +1166,10 @@ Pick the release unless you are tracking unreleased work.</p>
 <tr>
 <td><a href="runtime/">Runtime</a></td>
 <td>Wiring into Kafka Streams</td>
+</tr>
+<tr>
+<td><a href="operations/">Operations</a></td>
+<td>Names, prerequisites, scaling, resets and sizing</td>
 </tr>
 <tr>
 <td><a href="session/">Session consistency</a></td>

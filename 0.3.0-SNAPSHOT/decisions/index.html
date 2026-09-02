@@ -1,0 +1,1737 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Causal delivery order for Kafka stream processing">
+      
+      
+      
+      
+        <link rel="prev" href="../verification/">
+      
+      
+        <link rel="next" href="../api/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Decisions - Parsley</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="light-green">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#decisions-index" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Parsley" class="md-header__button md-logo" aria-label="Parsley" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Parsley
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Decisions
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="green" data-md-color-accent="light-green"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="green" data-md-color-accent="light-green"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/tobyjamesclements/parsley" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    tobyjamesclements/parsley
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href=".." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../model/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Protocol
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../failing-closed/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Operation
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../session/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Patterns
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../verification/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+  
+
+<nav class="md-nav md-nav--primary md-nav--lifted md-nav--integrated" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Parsley" class="md-nav__button md-logo" aria-label="Parsley" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Parsley
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/tobyjamesclements/parsley" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    tobyjamesclements/parsley
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protocol
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Protocol
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../delivery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Delivery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../state/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    State
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../wire-format/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Wire format
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../failing-closed/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Failing closed
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runtime/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runtime
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Patterns
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Patterns
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../session/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Session consistency
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../verification/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Verification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Decisions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#at-a-glance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        At a glance
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="decisions-index">Decisions index</h1>
+<p><code>DECISIONS.md</code> in the repository is append-only: a record that a later record supersedes,
+corrects or extends keeps its original text. This page, generated from the log at every
+docs build, lists each record with the later records that cite it and the relation their
+wording names, so a reader can tell what still stands before relying on it. A citation
+is a pointer to read, not a verdict; a record cited by nothing later is, as far as the
+log knows, current.</p>
+<table>
+<thead>
+<tr>
+<th>Record</th>
+<th>Decision</th>
+<th>Cited by later records</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L37">D1</a></td>
+<td>One Kafka Streams application per declared process</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L62">D2</a></td>
+<td>A channel is identified by (topic ID, partition)</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L591">D21</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L713">D26</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L883">D33</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L89">D3</a></td>
+<td>Causal metadata wire format: one reserved header, strict canonical binary</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3320">D94</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3535">D98</a> (supersedes)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L125">D4</a></td>
+<td>Dependencies are summarized as one maximum position per channel</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1546">D52</a> (corrects)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L156">D5</a></td>
+<td>Deliverability: settled frontier from fed-or-never plus the hold-back buffer</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3890">D102</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4077">D104</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L186">D6</a></td>
+<td>The host's read-position report is the feed itself plus committed group offsets</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L713">D26</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L932">D35</a> (corrects)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L225">D7</a></td>
+<td>An internal wall-clock punctuator ingests facts</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L571">D20</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1213">D44</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L259">D8</a></td>
+<td>Failing closed stops the whole process, by exception</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3320">D94</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L295">D9</a></td>
+<td><code>auto.offset.reset=none</code>, with initial positions pre-committed while the group is empty</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L689">D25</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L713">D26</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2420">D74</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2521">D76</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4077">D104</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4416">D109</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L328">D10</a></td>
+<td>Re-feeds below the session floor are dropped; contradictions within an execution fail closed</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L689">D25</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L713">D26</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L967">D36</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1298">D45</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2612">D78</a> (narrows), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3184">D91</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L356">D11</a></td>
+<td>Parsley owns the KafkaStreams lifecycle; nothing weaker is constructible</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4523">D111</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L380">D12</a></td>
+<td>The seam: <code>Effects handle(Delivery, StateReader)</code>; reads live, writes returned</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L713">D26</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1774">D60</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L409">D13</a></td>
+<td>An application payload its own serde cannot decode fails the step</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1827">D62</a> (implements), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2725">D81</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L431">D14</a></td>
+<td>Application stores are byte stores; serdes apply at the seam; changelog-name serde scoping</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L453">D15</a></td>
+<td>Emissions inherit the delivered message's timestamp and default partitioning</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4523">D111</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L476">D16</a></td>
+<td>Deterministic drain: channels in total order, to fixpoint</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L500">D17</a></td>
+<td>Ordering state: one reserved store; held bodies persisted only if still held at step end</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1704">D57</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3890">D102</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4221">D106</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4468">D110</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L528">D18</a></td>
+<td>Reserved prefixes: <code>parsley.</code> for headers, <code>__parsley.</code> for stores</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1673">D56</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L549">D19</a></td>
+<td>Toolchain: Kafka clients/Streams 3.9.1, Java 21, Maven, JUnit 5</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1704">D57</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2086">D69</a> (supersedes), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2137">D70</a> (supersedes)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L571">D20</a></td>
+<td>The facts interval is configurable, one second by default</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L591">D21</a></td>
+<td>A deleted topic settles its remaining positions; dead incarnations are vacuous</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L713">D26</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1326">D46</a> (corrects), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3271">D93</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4165">D105</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L619">D22</a></td>
+<td>Log starts are attributed to a topic ID only under a describe-after-query identity check</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L713">D26</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1486">D50</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2645">D79</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4275">D107</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L642">D23</a></td>
+<td>Self-dependency is impossible by construction; adversarial self-deps hold forever</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L713">D26</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4165">D105</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L667">D24</a></td>
+<td>A step is the host's transaction; several deliveries may share one step</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L689">D25</a></td>
+<td>Structural 16 mechanics: refusal by held-scan; leave/rejoin by retained state</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2420">D74</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4221">D106</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L713">D26</a></td>
+<td>Assumptions taken, and what breaks if one proves false</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1326">D46</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2612">D78</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4077">D104</a> (corrects)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L744">D27</a></td>
+<td>Naming: <code>candidate.parsley:parsley</code>, packages <code>candidate.parsley.*</code></td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1886">D64</a> (corrects)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L764">D28</a></td>
+<td>Emissions always carry the causes header, even when empty</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L784">D29</a></td>
+<td>Null keys and values bypass serdes; tombstones pass through</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L805">D30</a></td>
+<td>Diagnostics: the decision unit reports its blockers</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4001">D103</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L825">D31</a></td>
+<td>A joining channel starts above the delivered causal past</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1091">D41</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1133">D42</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2420">D74</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3890">D102</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4165">D105</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4221">D106</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L857">D32</a></td>
+<td>A channel is declared dead only after consecutive confirming rounds</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1068">D40</a> (corrects), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1213">D44</a> (supersedes)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L883">D33</a></td>
+<td>Topic names are bound to channel identity in ordering state; recreation refuses</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L967">D36</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1213">D44</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1368">D47</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2521">D76</a> (reverses)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L913">D34</a></td>
+<td>No deliveries from within processor initialisation</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L932">D35</a></td>
+<td>A read_committed probe settles trailing never-yielding runs; corrects D6</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2612">D78</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4275">D107</a> (corrects)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L967">D36</a></td>
+<td>When prior state exists, missing group offsets restart from earliest</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1398">D48</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2420">D74</a> (corrects), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4523">D111</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L993">D37</a></td>
+<td>Exception handlers are unoverridable configuration</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1518">D51</a> (extends), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2692">D80</a> (extends)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1017">D38</a></td>
+<td>The runtime refuses stranded held messages by reading the changelog</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1704">D57</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1043">D39</a></td>
+<td>Received topics may have unequal partition counts</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1068">D40</a></td>
+<td>Correction to D32's blast-radius claim</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1213">D44</a> (corrects), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2483">D75</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1091">D41</a></td>
+<td>The simulation oracle observes the feed; owed delivery is excused only by ground-truth delivered past</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1133">D42</a></td>
+<td>The oracle bounds expression from above, judged at send time</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1166">D43</a></td>
+<td>The generator reaches refusals; the harness survives them; catch margins are asserted per mode</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4638">D112</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1213">D44</a></td>
+<td>Channel death needs corroboration; recreation is affirmative; the debounce is time-based</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1486">D50</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2483">D75</a> (corrects), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2612">D78</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2758">D82</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2842">D84</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2887">D85</a> (extends), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3109">D89</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4638">D112</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1298">D45</a></td>
+<td>An in-execution feed regression fails closed, wherever it lies relative to the session floor</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2576">D77</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1326">D46</a></td>
+<td>A dead channel with undelivered held messages fails the process closed; corrects D21</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4077">D104</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1368">D47</a></td>
+<td>The bootstrap scan diagnoses identity change before judging removal</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1398">D48</a></td>
+<td>Initial positions are committed through group membership, never by admin alteration</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1486">D50</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2645">D79</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2692">D80</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2944">D86</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4354">D108</a> (closes)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1446">D49</a></td>
+<td>A task-width change against prior state is refused at start; names the Streams width validation</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1748">D59</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1486">D50</a></td>
+<td>Test seams for the bootstrap and facts source: real broker, phase hooks, injected clock, overridable describe</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1518">D51</a></td>
+<td>Client interceptors and the timestamp extractor join the unoverridable set; extends D37</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2692">D80</a> (extends)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1546">D52</a></td>
+<td>A metadata budget in bytes, enforced on receipt and on emission; corrects D4's attribution</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2483">D75</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3271">D93</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3535">D98</a> (supersedes)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1587">D53</a></td>
+<td>Frontier size is logged every facts round and surfaced at 80% of budget</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3149">D90</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4001">D103</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1609">D54</a></td>
+<td>Position facts are gathered on one background thread; applied on the stream thread</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2420">D74</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4275">D107</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1647">D55</a></td>
+<td>Per-process status: state plus refusal reason, readable programmatically</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1748">D59</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2241">D72</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2277">D73</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2576">D77</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3227">D92</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4001">D103</a> (resolves), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4416">D109</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4523">D111</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1673">D56</a></td>
+<td>The seam's header view is application headers only; the reserved refusal names its reason</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2277">D73</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2986">D87</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1704">D57</a></td>
+<td>The ordering store's changelog requests logging and compaction explicitly</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4468">D110</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1727">D58</a></td>
+<td>Declared topic names must stay clear of the runtime's namespace</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1748">D59</a></td>
+<td>Partition expansion is handled by restart; mid-run it gets a parsley diagnosis</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4416">D109</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1774">D60</a></td>
+<td>StateReader keeps point lookups only; enumeration stays out of v1</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1799">D61</a></td>
+<td>Naming: the wrong-edit hazard is fixed; mechanical enforcement is deferred, recorded as a deviation</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1827">D62</a></td>
+<td>Emissions are matched to the declared send set by topic name; the emission's Channel supplies the serdes</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2277">D73</a> (supersedes)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1861">D63</a></td>
+<td>close() releases every resource, each step isolated and bounded</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4416">D109</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1886">D64</a></td>
+<td>Real coordinates: <code>io.github.tobyjamesclements:parsley</code>, packages <code>io.github.tobyjamesclements.parsley.*</code> (corrects D27)</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3649">D99</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1923">D65</a></td>
+<td>The mutation gate's skip flag is bound to a declared property</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1987">D67</a> (supersedes)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1947">D66</a></td>
+<td>The mutation gate covers the core and the API, not the Kafka adapter</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1987">D67</a> (supersedes)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L1987">D67</a></td>
+<td>No mutation gate; the three gaps it found are recorded here instead (supersedes D65, D66)</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4221">D106</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4638">D112</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2047">D68</a></td>
+<td><code>kafka-metadata:test</code> dropped; the rest of the broker test stack is load-bearing</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2086">D69</a></td>
+<td>Kafka 3.9.2 (supersedes D19's version pin)</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2137">D70</a> (supersedes)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2137">D70</a></td>
+<td>Kafka 4.3.1 (supersedes D69 and D19's pin)</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2194">D71</a> (amends)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2194">D71</a></td>
+<td>Avro dropped from the test dependencies (amends D70)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2241">D72</a></td>
+<td>Names applied at vendoring (implements ASSESSMENT §5.2's decide-now)</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2576">D77</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2277">D73</a></td>
+<td>The api/ surface validates at declaration; the send seam resolves the declared channel by name (supersedes D62's serde-supply and duplicate-sends choices; resolves ASSESSMENT §1.14 and §1.15's send-set bullet)</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2725">D81</a> (extends)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2420">D74</a></td>
+<td>Re-established read positions are checked against durable coverage; corrects D36's "never lossy"</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4077">D104</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4165">D105</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4638">D112</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2483">D75</a></td>
+<td>A nameless topic id is never confirmed dead; corrects D44's four-fold window</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2842">D84</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2887">D85</a> (extends), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3109">D89</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2521">D76</a></td>
+<td>Lost ordering state under surviving Streams offsets refuses at start</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2645">D79</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2758">D82</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2842">D84</a> (extends), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3890">D102</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2576">D77</a></td>
+<td>A report/feed contradiction has its own reason; OUT_OF_ORDER_FEED is feed order alone</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2612">D78</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3184">D91</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3271">D93</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4001">D103</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4221">D106</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2612">D78</a></td>
+<td>Compacted received topics are an Assumption 10 reliance; the probe residual is recorded</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2645">D79</a></td>
+<td>Read-path hardenings: stable bootstrap reads, true-end changelog scan, offsets inside the confirmed window</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2944">D86</a> (extends), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3227">D92</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2692">D80</a></td>
+<td>The membership protocol joins the unoverridable set; extends D37/D51, and the promised revisit</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2725">D81</a></td>
+<td>Seam and runtime diagnoses name their conditions; extends D73's taxonomy</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3227">D92</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3320">D94</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3366">D95</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3535">D98</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2758">D82</a></td>
+<td>Hand-built consumers are pinned against mutating the cluster</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3036">D88</a> (corrects), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3227">D92</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2800">D83</a></td>
+<td>The reserved zero topic ID is undecodable metadata; the facts round tolerates unanswerable ids</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3036">D88</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3227">D92</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3366">D95</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4165">D105</a> (extends), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4710">D113</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2842">D84</a></td>
+<td>Prior state is keyed on ordering records, and prior-state describes are corroborated; extends D76</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3036">D88</a> (corrects), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3423">D96</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3890">D102</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4710">D113</a> (extends)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2887">D85</a></td>
+<td>Verdict windows require observed continuity; recreation is debounced; contradicted verdicts are rescinded (extends D44/D75)</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3036">D88</a> (corrects)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2944">D86</a></td>
+<td>A partially-covering stable listing is retried before the group join; extends D79</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3227">D92</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3423">D96</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3473">D97</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L2986">D87</a></td>
+<td>Seam and configuration minors from the kafka-layer audit, in one sweep</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3036">D88</a> (corrects), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3366">D95</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3036">D88</a></td>
+<td>The audit fixes, reviewed adversarially; corrections to D82, D84, D85 and D87</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3423">D96</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4165">D105</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4275">D107</a> (implements)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3109">D89</a></td>
+<td>The eviction horizon is pinned by scripted-round evidence; name learning extracted as a seam</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3366">D95</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3473">D97</a> (corrects)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3149">D90</a></td>
+<td>The 80%-of-budget warning is pinned through a latch seam plus one stderr-capture wiring test</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3473">D97</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3184">D91</a></td>
+<td>Mid-run supersession is pinned structurally over ProcessEngine, not through the sim harness</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4638">D112</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3227">D92</a></td>
+<td>ParsleyRuntime's diagnosis, changelog-read and identity-floor behaviours get unit seams; pins issue #95's gaps E–G</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3366">D95</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3423">D96</a> (extends), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3473">D97</a> (corrects), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4638">D112</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3271">D93</a></td>
+<td>The engine's error sites are pinned at reason-and-message level; the per-message budget gate is discriminated by raw length</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3535">D98</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3320">D94</a></td>
+<td>Codec refusal diagnoses are pinned message-level; the position floor is pinned at the value objects</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3730">D100</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3366">D95</a></td>
+<td>The processor's refusal sites, the bootstrap join wait and the facts round's abort paths get direct pins</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3473">D97</a> (corrects)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3423">D96</a></td>
+<td>Start-path refusal decisions are pinned through scripted functional seams; extends D92 into the determination and recheck loops</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3473">D97</a> (corrects)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3473">D97</a></td>
+<td>Review corrections to the D89–D96 pins: two trials that did not discriminate, seam waits parameterized, wiring gaps closed, two claims narrowed (corrects D89, D92, D95, D96)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3535">D98</a></td>
+<td>Causes wire format: entries grouped by topic id, varint structural fields, fixed-width positions (supersedes D3's value grammar and D52's affine-size check)</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3649">D99</a> (retires), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3805">D101</a> (supersedes), <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3890">D102</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4221">D106</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3649">D99</a></td>
+<td>Issue #96's session companion lands as its own package, <code>session</code>, over the public surface</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3730">D100</a> (extends)</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3730">D100</a></td>
+<td>Review hardenings to the session companion: compile-checked coverage exhaustiveness, identity merges, and shared fences (extends D99)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3805">D101</a></td>
+<td>The grouped grammar releases as version byte <code>0x01</code> (supersedes D98's renumbering rejection)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L3890">D102</a></td>
+<td>Hold-back memory is bounded by the heads, a flush costs the holds it writes, and the emission header is encoded once per frontier change</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4165">D105</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4221">D106</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4468">D110</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4001">D103</a></td>
+<td>Each task publishes its delivery state, and <code>status()</code> carries it (fulfils D53's promise)</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4275">D107</a>, <a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4523">D111</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4077">D104</a></td>
+<td>Retention crossing a held message fails the holder closed; the log-start check runs against the settled position (corrects D26's Assumption 10 line; the retention dual of D46)</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4638">D112</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4165">D105</a></td>
+<td>The reserved maximum position is undecodable metadata and untrusted state (wire-format constraint 7; extends D83)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4221">D106</a></td>
+<td>Review pins over the core: D67's gaps closed, the emission header pinned byte for byte, the simulator's timestamps decorrelated from positions</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4638">D112</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4275">D107</a></td>
+<td>A facts round's tail is watched time; the probe is batched over the channels held heads wait on; the seed round does not probe (implements D88's spelling, whose pin did not cover the round tail; corrects D35's cost claim)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4354">D108</a></td>
+<td>A concurrent cold start waits for other instances' bootstrap members and replaces a refused stream thread (closes D48's residual S1)</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4416">D109</a></td>
+<td>Substrate-detected stops that recur identically carry their reason; <code>start()</code> says what it returns into; <code>close()</code> is bounded on every leg</td>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4523">D111</a></td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4468">D110</a></td>
+<td>The ordering store is cached, and the bootstrap view keeps a held message's presence rather than its body</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4523">D111</a></td>
+<td>The runtime can be waited on, an emission may carry its own timestamp, and the seam's documentation says what the code does</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4638">D112</a></td>
+<td>Five pins a mutation trial showed the suite lacked, and the sabotage mode D91 recorded as missing</td>
+<td>—</td>
+</tr>
+<tr>
+<td><a href="https://github.com/tobyjamesclements/parsley/blob/e39ee90c5b1a89a0a19afe25ae1e4f252856d847/DECISIONS.md#L4710">D113</a></td>
+<td>Declared-topic resolution corroborates an unknown-topic answer before refusing (extends D84)</td>
+<td>—</td>
+</tr>
+</tbody>
+</table>
+<h2 id="at-a-glance">At a glance</h2>
+<p>113 records. Named as superseded or reversed by a later record: D3, D19, D32, D33, D52, D62, D65, D66, D69, D98. Named as corrected, refuted or amended in part: D4, D6, D21, D26, D27, D35, D36, D40, D44, D70, D82, D84, D85, D87, D89, D92, D95, D96. Every other citation is an extension or a reference; read the citing record to see which.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../verification/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Verification">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Verification
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../api/" class="md-footer__link md-footer__link--next" aria-label="Next: API">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                API
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.indexes", "navigation.top", "navigation.footer", "toc.integrate", "search.highlight", "content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
