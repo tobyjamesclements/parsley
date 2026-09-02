@@ -3886,3 +3886,864 @@ record and the refusal pins rather than by never reusing a pre-release byte.
 None. Structural 5 requires a documented, stable, distinguishable representation; the
 representation is unchanged and its version byte is release-frozen from here. The
 specification is version-neutral, as D98 recorded.
+
+### D102 — Hold-back memory is bounded by the heads, a flush costs the holds it writes, and the emission header is encoded once per frontier change
+
+**Context**
+
+D17 persists held bodies at step end, and D5's decision reads only the head of each channel's
+buffer; the engine nonetheless kept more in memory, and did more work per record, than either
+needed — and the cost fell exactly where a hold-back buffer earns its keep, behind a lagging
+cause. Measured against the built classes with a two-channel engine, a 200-entry frontier
+per header (ten topics of twenty partitions, a modest topology) and a cause that never
+settles:
+
+* Every `Hold` retained its decoded `Causes` for as long as it was held — about 93 bytes per
+  frontier entry per held message on the heap, 18.7 KB at 200 entries and 96 KB at 1,000 —
+  so 40,000 held messages retained 750 MB and 400,000 exhausted a 6 GB heap. The restore path
+  decoded every held blob into memory the same way, so a restart paid it again before
+  delivering anything. Only the head of each buffer is ever offered to
+  `Deliverability.decide`; the decoded form of everything behind it was dead weight.
+* `flushHolds()` walked every buffer looking for unpersisted holds on every call, and
+  `ParsleyProcessor.process` calls it after every record: 246 µs per call at 10,000 held,
+  4.4 ms at 100,000. Per-record cost grew linearly with hold-back depth, so throughput
+  collapsed as the buffer deepened — the moment it most needs to drain.
+* `causesHeaderForEmission()` copied the frontier into a fresh `Causes` and re-encoded it per
+  emission: 35 µs at 200 entries, 288 µs at 2,000, paid for each message a step sends
+  although the frontier changes at most once per delivery.
+
+None of this touches the specification — the decision unit, the wire format and every refusal
+are unchanged — but Operational 2 asks that work outside delivering be bounded, and a
+per-record walk of the buffer is the opposite.
+
+**Decision**
+
+Three rules in `ProcessEngine`, each pinned.
+
+1. **Decoded only where read.** A hold's decoded form — causes, key, value, headers — is in
+   memory in exactly two cases: the hold is not yet persisted, or it is the head of its
+   channel's buffer. A flush drops the decoded form of every hold it writes except a head; a
+   restore decodes each blob to refuse corruption at start, as before, and keeps only the
+   skeleton (channel, position, timestamp); a hold is decoded from the store when it reaches
+   the head (`load`), and delivery reads it from there. `causes == null` is the one spelling
+   of "not in memory", and the four fields load and drop together. Memory is O(held)
+   skeletons plus O(channels) decoded messages. A hold whose store entry is missing when
+   loaded refuses as `UNKNOWN_ORDERING_STATE_FORMAT` rather than delivering nothing: the
+   buffer and the store contradict each other. Pinned by
+   `ProcessEngineTest#onlyTheHeadOfEachBufferKeepsItsDecodedFormOnceFlushed` (counts decoded
+   holds across flush, restart, first decision and head turnover through the package-private
+   `decodedHoldCount()`), `#aHoldReloadedFromTheStoreReachesLogicWithItsCausesIntact` (key,
+   value, headers and causes byte for byte through the reload path, and the reloaded causes
+   still entering the delivered past that clamps a joining channel — D31) and
+   `#aHeldMessageMissingFromTheStoreRefusesRatherThanDeliveringNothing`.
+2. **A flush writes what arrived since the last one.** Holds enter an `unpersisted` queue on
+   receipt; `flushHolds` drains that queue and never walks the buffers. A hold delivered
+   before its first flush is marked `removed` and skipped, so it is never written. Pinned by
+   `#aHoldDeliveredBeforeItsFirstFlushIsNeverWrittenToTheStore` and by one of the suite's two
+   wall-clock bounds (the other, `ProbeIdleChannelCostIntegrationTest`, times a real broker's
+   probe under D107), `#flushingAfterEveryReceiptStaysCheapWhileTheBufferDeepens`: 50,000
+   receipt-and-flush cycles under five seconds, where the walk spent about twenty seconds in
+   that shape alone. The margin is an order of magnitude each way, which is why a timing
+   bound is acceptable at these two sites and
+   nowhere else in the suite.
+3. **Encode once per frontier change.** The encoded frontier is cached and dropped at the
+   frontier's mutation sites — merge on receipt, merge on delivery, prune on facts — and
+   `CausesCodec.encode` gained a package-private overload over the engine's own sorted map so
+   no `Causes` copy is made. Every emission receives its own copy of the bytes. The
+   `OVEREXPRESS` sabotage keeps its uncached path. Pinned by
+   `#theEmissionHeaderIsReusedUntilTheFrontierChangesAndHandedOutAsACopy`, which walks each
+   mutation site and re-checks the cached width against `frontierBytes()` (D98's counter).
+
+Measured after: a flush with nothing new costs 0.3 µs at 100,000 held (was 4.4 ms); the
+engine's own retention for 400,000 held messages behind a head sits inside the harness's
+25 MB measurement noise, where 40,000 retained 750 MB before; an emission at 200 entries
+costs 4.8 µs (was 35), at 2,000 entries 47 µs (was 288). The per-record cost that remains
+is the header decode and merge, linear in the frontier (about 40 µs at 200 entries, 320 µs at
+1,000), which is the price of the frontier itself rather than of the buffer.
+
+**Alternatives**
+
+* Keeping the buffer itself in the store, with only a per-channel head and count in memory —
+  O(channels) memory regardless of depth. Rejected for now: it needs a scan that can stop at
+  the first key, and `OrderingStore.scanPrefix` visits every entry, so it is a contract
+  change every host implements; the head-only rule takes most of the gain (a skeleton is
+  tens of bytes against tens of kilobytes) without touching the seam. It is the next step if
+  hold-back depths in the millions turn out to be a real deployment shape.
+* Dropping the head's decoded form too, reloading it on every decision. Rejected: the
+  processor decides every blocked head after every record, so each record would pay one
+  store read and one decode per blocked channel — a per-record cost proportional to the
+  frontier, bought back from the buffer.
+* Skipping the blob decode at restore and validating lazily on reaching the head. Rejected:
+  it moves a corrupt-state stop from start to mid-run, against the posture of D76 and D84
+  that state which cannot be trusted refuses before delivering; the decode's cost at restore
+  is I/O-bound and unchanged, only the retention goes.
+* A dirty flag per hold with the buffer walk kept. Rejected: it is the walk that costs, not
+  the flag.
+* Handing out the cached header array itself rather than a copy. Rejected: a Kafka
+  `RecordHeader` keeps the reference, and bytes handed to the host should not be the engine's
+  cache.
+* Avoiding the `Causes` copy without caching the encoding. Rejected as half the gain: a step
+  delivering one message and emitting several would still encode several times.
+
+**Cost**
+
+A hold that becomes head after a flush costs one store read and one blob decode, once,
+where it was in memory before — the price of not holding every decoded frontier.
+`markDelivered` on a persisted hold likewise loads its causes before deleting the entry. The
+`Hold` skeleton grows by a channel reference and a flag. The timing bound in the suite is a
+deliberate exception to its otherwise clock-free evidence, and its Javadoc says so.
+
+**Specification gap**
+
+None. These are economies inside the ordering state Structural 8 already keeps where
+application state cannot alter it.
+
+### D103 — Each task publishes its delivery state, and `status()` carries it (fulfils D53's promise)
+
+**Context**
+
+Operational 1 asks that the public API say, per process, whether it has stopped delivering
+and why; Operational 5 asks that the size of each process's causal metadata be observable in
+operation. D55 gave `status()` the lifecycle state and the refusal reason. D53 logged the
+frontier size each facts round and promised that "the status surface will carry the same
+numbers when it lands"; D55 landed without them, and ASSESSMENT §2.5 stayed half resolved.
+The larger gap was the case Operational 1 is really about: a process that has not stopped
+but is not delivering either. A held message is the protocol doing its job, and the
+diagnosis — which cause, on which channel, at which position, against which settled
+position — has existed inside the engine as `Deliverability.Held` since D30, reachable only
+by a debugger. An operator whose process "looks stuck" had logs at DEBUG level and no
+question they could ask the running process.
+
+**Decision**
+
+A new public record, `TaskStatus`, and a fifth component on `ProcessStatus`, `tasks`. Each
+task of a process — partition *i* of every received topic — publishes, on its own stream
+thread, once per facts interval and at initialisation: the frontier's channel count and
+encoded width (D53's numbers), the total held, and for every channel with held messages its
+topic, partition, count, head position and the head's outstanding blockers, each blocker
+named by topic and partition with the position required and the position settled, exactly as
+`Deliverability.decide` reports them; plus how long ago broker facts were last applied, so a
+starved facts source is visible as a growing age. The engine gained two read-only
+inspections for this, `headPosition` and `headVerdict`, the latter returning the same verdict
+`nextDeliverable` acts on. A task retires its entry when it closes, so a task reassigned
+elsewhere never lingers. `ParsleyRuntime.status()` merges the live entries in partition
+order. The four-component `ProcessStatus` constructor remains, reporting no task detail, so
+nothing that built one breaks; supervisors keying on `refusalReason` (D77) are unaffected.
+
+Pinned by `TopologyWiringTest#taskStatusNamesWhatIsHeldAndWhichCauseItWaitsFor` (a held
+effect appears with its head position, its blocker's topic, partition, required and settled
+positions, and the frontier width equal to the encoded header; the entry empties when facts
+release the hold and disappears when the task closes),
+`ApiValidationTest#nullStatusComponentsAreRefusedAtConstruction` (the new records refuse
+nulls and negative counts; the four-component form reports no tasks), and on the real host by
+`EndToEndIntegrationTest#heldMessageSurvivesAStateDirWipeByChangelogRestore`, which now waits
+for `status()` to name the held message and the cause it waits for before wiping state.
+
+**Alternatives**
+
+* Kafka Streams metrics (gauges through `StreamsMetrics`) instead of, or as well as, the
+  status surface. Rejected for now: the public `StreamsMetrics` API offers sensors for
+  latency, rate and totals but no gauge, and a gauge needs the internal
+  `StreamsMetricsImpl`; the status surface is pull-based and host-neutral, and an
+  application can export it to any registry. A metrics bridge is a reasonable later addition
+  once the numbers have a public shape, which this record gives them.
+* Publishing on every record rather than every facts interval. Rejected: naming the
+  blockers costs one decision per held channel, which per record would double the decision
+  work of a drain; per interval it is invisible, and a diagnosis one second old is a
+  diagnosis.
+* Computing the snapshot on the caller's thread from the engine. Rejected: the engine is
+  not thread-safe and is owned by its stream thread (Structural 1's locality is per task);
+  crossing threads to read it would need a lock on the hot path.
+* Naming blockers by `ChannelId` rather than topic name. Rejected: an operator reads topic
+  names; every blocker the decision reports is on a received channel, whose name the task
+  resolved at start, so the name is always available and is what a runbook can act on.
+* Keeping `ProcessStatus` as it was and adding `Parsley.diagnostics()`. Rejected: D53
+  promised the numbers on the status surface, and one call is what an operator reaches for;
+  the compatibility constructor keeps the addition source-compatible for anyone constructing
+  the record.
+
+**Cost**
+
+A public record added to the API surface, and one more component on `ProcessStatus`; the
+snapshot is a few allocations per task per facts interval. `docs/failing-closed.md` and
+`docs/runtime.md` describe the surface. `EVIDENCE.md` gains an Operational section with this
+record's tests under its rows 1 and 5.
+
+**Specification gap**
+
+None. Operational 1 and 5 are met more fully; nothing in the spec fixes the shape of the
+surface, which is why it is recorded here.
+
+### D104 — Retention crossing a held message fails the holder closed; the log-start check runs against the settled position (corrects D26's Assumption 10 line; the retention dual of D46)
+
+**Context**
+
+The engine's mid-run truncation check (D9's defence in depth for Safety 8) compared a
+channel's earliest retained position against `fedUpTo`, the fed-or-never coverage. A held
+message has already advanced `fedUpTo` past itself, so retention that discards a message
+this process received but has not delivered passed the check: log start equals the held
+position plus one, which is exactly `fedUpTo + 1`. Nothing else noticed. Every upstream
+process that had delivered that message pruned it from its frontier on its next facts round,
+as Structural 13 permits — its position was below the log start — so their later sends
+expressed nothing about it, and the holder delivered those sends past the held message once
+its other causes settled: an effect before its cause, a Safety 1 inversion, with no refusal
+anywhere. The review that found it built the interleaving as a scenario and the oracle's
+pair check flagged the inversion once the held cause finally delivered.
+
+D46 closed the same hole for deletion, and its argument transfers verbatim: once senders may
+legally have pruned a message this process still owes, no local rule can order later
+arrivals against it, and the only sound choice is to stop. D26's line for Assumption 10 —
+that the Safety 8 machinery turns a retention breach into a fail-closed stop rather than a
+misdelivery — was true for the fed case and false for the held one. The random sweep was
+structurally blind: truncation events targeted committed read positions with no bias toward
+channels anything was held from, the Safety 8 obligation judged coverage from the read
+position, and `SimProcess#settledCauses` excused a truncated cause at delivery time even
+when the delivering process itself still held it.
+
+**Decision**
+
+The log-start check runs against the settled position (D5): while messages are held on a
+channel, the earliest retained position crossing the head of the hold-back buffer refuses
+with `POSITIONS_DISCARDED_UNREAD`, naming the held position and the reason its place in
+causal order cannot be preserved; with nothing held the check is the fed-based one it always
+was, since the two coincide there. Retention up to exactly the held message discards nothing
+owed and is not refused. The refusal recurs on restart while the condition holds, as D46's
+does, and its remedy is the same deliberate reset.
+
+The harness now reaches the shape. `truncateEvent` is biased toward channels a running
+process holds from, as `killEvent` already was, and has a shape that truncates to exactly one
+past a reader's oldest held message; a quiescence obligation fails any running process still
+holding a message below its channel's earliest retained position without a recorded refusal;
+and `settledCauses` no longer excuses a cause the delivering process itself holds, so the
+delivery-time Safety 1 check sees the inversion the pair check could only see after the held
+cause delivered.
+
+Pinned by `TargetedScenarioTest#retentionDiscardingAHeldMessageFailsTheHolderClosed` (the
+holder refuses at its facts round, names the held position, has delivered nothing past it,
+and the oracle is clean), `#retentionUpToExactlyTheHeldMessageIsRetention` (the boundary:
+no spurious refusal), and
+`SabotageMetaTest#deliveringPastARetentionDiscardedHoldInvertsCausalOrderAndTheOracleSeesIt`
+(with `IGNORE_TRUNCATION` disarming the check, the same rig delivers the effect past its held
+cause and both oracle checks flag it — the proof the pins are load-bearing).
+
+**Alternatives**
+
+* Keeping the fed-based check and relying on Assumption 10. Rejected: an assumption whose
+  breach the implementation can detect must fail closed (SPEC Host obligations preamble,
+  Safety 9's pattern), D26 claimed it already did, and the alternative is a silent causal
+  inversion — the one outcome AGENTS.md's first rule forbids.
+* Holding every later arrival behind the discarded message forever instead of stopping.
+  Rejected, as D46 rejected it: the process cannot tell which later arrivals depend on the
+  discarded message, so it would be holding on a guess, and a growing buffer with no
+  diagnosis is worse than a named stop.
+* Refusing at the sender's prune instead of the holder's facts round. Rejected: the sender
+  cannot know who holds; Structural 13 obliges it to prune; and the holder is the process
+  whose delivery order is at stake.
+* Checking at start only (D74's coverage check). Insufficient: the hazard arises mid-run
+  and the start-time check reads `fedUpTo` rows, which have the same blind spot.
+
+**Cost**
+
+A deployment whose retention does not cover hold-back time now stops where it used to
+misdeliver. That is the correct trade, and the diagnosis says what to raise. The facts-round
+window D46 has — an effect arriving between the sender's prune and the holder's next round —
+remains, with the same bound (one facts interval plus gather latency) and the same recorded
+status. `docs/failing-closed.md` and `docs/model.md` describe the condition; `EVIDENCE.md`
+rows Safety 1, Safety 8 and Structural 13 name the pins.
+
+**Specification gap**
+
+Yes, and worth recording in the spec's own terms. Safety 8 binds only the "read position",
+which under Host obligation 2 a held message has already advanced past; Safety 9 gives
+deletion an explicit duty while retention has none; Structural 13's "exactly when" a cause
+can no longer matter is true only under Assumptions 10 and 17; and the Liveness premises do
+not name retention covering hold-back. A Safety 8 clause of the form "a received but
+undelivered message whose position falls below the channel's earliest retained position is
+such a resumption, and an implementation MUST fail closed rather than deliver past it" would
+say what this record implements.
+
+### D105 — The reserved maximum position is undecodable metadata and untrusted state (wire-format constraint 7; extends D83)
+
+**Context**
+
+D21 uses `Long.MAX_VALUE` in `fedUpTo` as the in-band marker of a received channel whose
+topic is confirmed deleted, and D74 already guards that sentinel in the bootstrap's
+arithmetic. Nothing kept a header position out of the same slot. A message whose header
+named `(c, Long.MAX_VALUE)` decoded cleanly — positions were only required to be
+non-negative — and, delivered while `c` lay outside the received set (vacuous under
+Liveness 4), put the value into the delivered past. When `c` later joined, D31's clamp copied
+it into `fedUpTo(c)`, and every feed on the live channel was then refused as a feed "on a
+channel recorded as no longer existing", recurring on every restart: an Assumption 13 breach
+diagnosed as a topic deletion, the misnaming Operational 6 forbids. Any other unassignable
+position (say 2⁶²) took the same path and silently dropped every future message on the joined
+channel as covered. The review pinned the shape with a test that failed on the tree.
+
+**Decision**
+
+A position of `Long.MAX_VALUE` is undecodable: `CausesCodec.decode` refuses it as "beyond any
+position a channel can assign", `Causes.of` refuses it at the value-object floor so no encoder
+can spell it, and the shared malformation battery gains the vector (family `max-position`),
+which both decoders sweep. `docs/wire-format.md` records it as constraint 7, a reader-side
+tightening in the manner of constraint 5: no conforming writer ever produced such a pair. For
+state persisted before the refusal existed, a restored frontier or delivered-past row at the
+sentinel refuses as `UNKNOWN_ORDERING_STATE_FORMAT`, on D88's rule that state which cannot be
+trusted stops the process before it re-expresses anything. Pinned by
+`EngineBoundaryTest#aHeaderPositionAtLongMaxValueIsRefusedBeforeItCanReachTheFedToEndSentinel`
+and by the catalogue sweeps in `CausesCodecTest` and `CausalPastMalformationTest`.
+
+**Alternatives**
+
+* Taking the sentinel out of band (a set of dead channels beside `fedUpTo`). Rejected for
+  now: it changes the persisted meaning of a `fedUpTo` row that existing stores carry, so it
+  needs a store-format version and a migration for a value the substrate cannot produce.
+* Bounding positions at receipt against the channel's end offset, which would also catch
+  positions below the maximum that no log has reached. Recorded as the stronger follow-up:
+  it needs end-offset facts the facts round does not yet carry, and it is a liveness matter
+  (a forged position holds downstream until the log grows past it) where this record's
+  shape was a misdiagnosis.
+* Clamping the value to the highest assigned position. Rejected on D23's grounds: a clamp
+  launders input; a refusal names it.
+
+**Cost**
+
+One more vector in the battery and one more restore-time scan condition. A message carrying
+the position is refused where before it was absorbed; only an untruthful sender can carry it.
+The restore-time check also refuses a negative row, which receipt has always refused and so can
+only be corruption; it has to, because D102's emission path encodes the engine's frontier map
+directly and no longer passes through `Causes.of`, so restore is the one point between the
+store and the wire where a stored position is validated (`EngineBoundaryTest#aNegativeRestoredFrontierRowIsRefusedBeforeItCanBeReExpressed`).
+
+**Specification gap**
+
+None. Structural 12 forbids a sender expressing an unassigned position; this closes the
+receiver side for the one value the implementation itself reserves.
+
+### D106 — Review pins over the core: D67's gaps closed, the emission header pinned byte for byte, the simulator's timestamps decorrelated from positions
+
+**Context**
+
+A line-by-line review of the core under this tree's own evidence standard found pins the
+suite lacked and one call it did not need. D67 had recorded three gaps from the removed
+mutation gate; gap 2 (two `parsley.causes` headers) was closed since, the other two were
+open. The engine's emission header was pinned by length only: a position-only raise changes
+bytes and no size, so a stale cached header — the exact failure D102's cache could
+introduce — was visible to no unit test, only to the random sweep through the oracle. And the
+simulator aliased every message's timestamp to its position, so an engine reading one for the
+other, anywhere from the store encoding to the decision Structural 7 forbids from reading
+timestamps at all, would have passed every run.
+
+**Decision**
+
+* D67 gap 1: the own-position `mergeDeliveredPast(channel, position)` in `markDelivered` is
+  deleted. For a received channel `fedUpTo` was advanced at receipt, is never pruned and is
+  retained across leave and rejoin (D25), and the join clamp is a maximum over `fedUpTo` and
+  the delivered past, so the delivered position could never raise it: the call was redundant,
+  which is why D67 found the suite green without it. The delivered past now records only the
+  causes of delivered messages, which is the entry the D31 pins cover; the Javadoc says so.
+* D67 gap 3: `EngineBoundaryTest#equalPositionRefeedOfAHeldNotDeliveredMessageFailsClosedAsOutOfOrderFeed`
+  pins the `position <= fedBefore` boundary at reason level — weakened to `<`, the equal
+  re-feed falls to the covered-position branch and blames a report that never existed
+  (D77's boundary, Operational 6), which the type-only assertion could not see.
+* `EngineBoundaryTest#emissionHeaderIsByteExactAfterEveryFrontierMutationKind` compares the
+  emission header byte for byte with a fresh encoding after a new channel, a position-only
+  raise, a delivery merge, a prune, a restore and a raise on a restored frontier; D102's
+  cache is what it guards. The same class pins holds spanning several flushes (D17's rule
+  that a same-step delivery never touches the store, and restore order and fidelity across
+  flush boundaries), the `nextRead = 0` coverage floor, and the inclusive budget gates D98's
+  cost note describes.
+* `Instance` in the simulator carries a timestamp derived from its uid, never equal to its
+  position; the fidelity assertion compares against it. `EngineTestFactory.plain` keeps the
+  alias for unit tests that never read the timestamp.
+
+**Alternatives**
+
+* Keeping the redundant merge as defence in depth. Rejected: a write that can change no
+  outcome is a claim the suite cannot check, and D67 recorded exactly that as the hazard.
+* Pinning the header through the sweep alone. Rejected: 209 of 300 seeds went red under the
+  stale-header mutation, but only through the oracle, after the fact, with no unit test
+  naming the property.
+
+**Cost**
+
+One fewer delivered-past row per delivering channel in existing changelogs, which restore
+ignores. The simulator's timestamps are now arbitrary-looking numbers in journals.
+
+**Specification gap**
+
+None.
+
+### D107 — A facts round's tail is watched time; the probe is batched over the channels held heads wait on; the seed round does not probe (implements D88's spelling, whose pin did not cover the round tail; corrects D35's cost claim)
+
+**Context**
+
+D88 spelled the confirmation window's continuity on blind time: the interval that restarts a
+dead or recreated verdict's window runs from the previous round's last observation to the
+next round's first question, and time a round spends inside its own queries is watched. The
+implementation stamped "last observation" at classification, right after the by-name
+describes, before the earliest-offset wait, the committed-offsets fetch, the confirming
+describe and the trailing-run probes. Everything after that stamp was charged to the next
+round as blind time. The probe cost a second per idle channel — four polls of 250 ms, each
+blocking its full timeout when nothing arrives, one channel at a time — and the processor
+hinted every received channel of a task whenever it held anything, so a task holding across
+three received channels had a three-second tail on every round: at the window's three-second
+floor, every round restarted the window and no death or recreation was ever confirmed while
+the task held. That is exactly the state in which the verdict matters: a received topic
+deleted with nothing held from it while a held message on another channel waits on it. The
+review reproduced it against scripted rounds, and measured the per-channel probe cost against
+the embedded broker (three idle channels, 3.07 s; eight, 8.03 s; unaffected by
+`fetch.max.wait.ms`). D35's "up to one short poll per blocked channel" understated the cost
+by four, and its per-channel serialisation multiplied it by the task count on the runtime's
+one facts thread.
+
+**Decision**
+
+Three changes in the facts path.
+
+1. **Round-end stamp.** Every window a round observed is stamped again when the round ends,
+   after the probes; maturity is still judged at classification, so a single long round
+   cannot mature a window it opened. Pinned by `FactsRoundTailContinuityTest`: a
+   three-second tail confirms on the second back-to-back round where it used to confirm
+   never, a two-second tail on the third; and the remaining limit is pinned rather than
+   assumed away — sibling rounds on the shared thread that together exceed the window still
+   restart it (`#siblingRoundsLongerThanTheWindowStillRestartIt`), which the coalesced
+   per-process round below is the follow-up for.
+2. **Batched probe.** Every hinted partition is assigned to the probe consumer at once, each
+   sought to the position above its hint, and one bounded poll loop resolves each partition
+   by the offset of its first record or by its position advancing past an aborted run. A
+   round's probe costs one loop however many channels are hinted. `max.poll.records=1` goes,
+   since the batch wants one record per partition per poll; `max.partition.fetch.bytes` is
+   bounded at 16 KiB so a batched fetch over many partitions stays small, the broker still
+   returning a first batch larger than that (KIP-74). Pinned against the embedded broker by
+   `ProbeIdleChannelCostIntegrationTest#idleHintedChannelsAreProbedTogetherWithinOnePollLoop`
+   (three and eight idle channels each resolve in under two seconds).
+3. **Hints name only what a held head waits on.** The processor hints the blocker channels
+   of its held heads — from the same verdict the status surface reports (D103) — and never a
+   channel that itself holds messages, whose settled position is its head whatever the broker
+   says above it, nor an idle channel nothing waits on. The seed round at task initialisation
+   carries no hints at all, so initialisation never probes on the stream thread; facts are
+   lower bounds, and the first background round probes one interval later. Pinned by
+   `TopologyWiringTest#probeHintsNameOnlyTheChannelsAHeldHeadWaitsOn`.
+
+**Alternatives**
+
+* A probe budget per round (D88's open item). Subsumed: batching makes the probe's cost one
+  loop, and blocker-only hints remove the channels a budget would have had to ration.
+* Confirming verdicts on the classification stamp alone, with the probes moved before it.
+  Rejected: the offset wait and the confirming describe would still sit after it, and the
+  D22 identity window fixes their order.
+* Lowering `fetch.max.wait.ms` on the probe consumer. Measured to change nothing: a poll with
+  no records blocks for its own timeout, not the fetch's.
+* Coalescing rounds to one per process per interval, shared by its tasks with per-task
+  incarnation checks, and a facts thread per process. Recorded as the follow-up that closes
+  the sibling-round limit above and D54's per-task launch: every fact is a per-channel lower
+  bound and an engine consumes only its own channels' facts, so a shared round is sound; it
+  is a larger change to the launch and apply paths than this record takes.
+
+**Cost**
+
+A probe now reads at most 16 KiB per partition per fetch. A held message whose cause sits
+above a trailing aborted run settles one facts interval later after a restart than before,
+since the seed does not probe. The window's continuity now depends on the round tail only
+through sibling rounds, which the pinned limit states.
+
+**Specification gap**
+
+None. Liveness 3 and Host obligation 2 are met with the latency the interval promises rather
+than the latency the task count imposed.
+
+### D108 — A concurrent cold start waits for other instances' bootstrap members and replaces a refused stream thread (closes D48's residual S1)
+
+**Context**
+
+D48 commits initial positions through a group membership, so a stale bootstrap is
+generation-fenced, and recorded as residual S1 that several instances cold-starting together
+could fail one instance's Kafka Streams client: each joins the group as a bootstrap member
+under the consumer protocol, and a Streams join that reaches the coordinator while another
+instance's member is still present is refused as a protocol conflict, which the consumer
+treats as fatal — the stream thread dies, the runtime shuts the client down, and `status()`
+reports it stopped with no refusal reason, after `start()` returned a handle. D48 sized the
+window as "the seconds of a bootstrap with missing offsets" and left recovery to a
+supervisor. The review reproduced it against the embedded broker in three of eight
+two-instance cold starts: the window is the milliseconds between one member's leave and the
+other's Streams join, and every fresh deployment of more than one instance opens it.
+
+**Decision**
+
+Two mechanisms, keeping D48's fence untouched. The bootstrap member carries a recognisable
+client id (`parsley-bootstrap-` and a random suffix), and before starting Kafka Streams the
+runtime waits, bounded by the committer's session timeout, until the group description shows
+no such member from any instance: members leave within milliseconds of committing, so the
+wait is usually nothing, and an ungraceful exit holds its membership for at most the timeout,
+after which the join proceeds. For the join that still meets a member — the check and the
+join are not atomic — the uncaught-exception handler recognises the protocol conflict and
+replaces the stream thread rather than shutting the client down: the refused thread held no
+task and did nothing that needs undoing, and its replacement joins after the member has
+left. Everything else the handler sees still shuts the client down, and so does the collision itself
+once it can no longer be another instance's member: a refused join is replaced only within twice
+the bootstrap member's session timeout of the start, after which a member speaking another
+protocol under this application id is persistent and the client stops with
+`SUBSTRATE_MISCONFIGURED`, naming the conflict, rather than replacing its thread forever. Pinned by
+`ConcurrentColdStartIntegrationTest#twoInstancesColdStartingTogetherBothComeUpHealthy` —
+eight two-instance cold starts, every instance healthy, where three of eight died before —
+and its sibling `#startReturnsWithoutWaitingForTheProcessToRun`, which pins what `start()`
+actually returns into (D109); `StreamsJoinCollisionTest` pins both mechanisms deterministically
+over their seams, since the broker test's collision window is probabilistic.
+
+**Alternatives**
+
+* A supervisor restart, as D48 left it. Rejected: the stop was undiagnosed, and the
+  deployment shapes that open the window — a rolling deployment, an autoscaler — are the
+  routine ones.
+* Retrying `KafkaStreams.start` from the runtime after the fatal join. Rejected: the client
+  is already shut down by then; replacing the thread keeps the client and its state
+  directory.
+* A different bootstrap protocol so the joins do not conflict. Rejected: the committer is a
+  plain consumer because that is what carries the generation fence (D48), and Streams does
+  not admit a foreign member under its own protocol.
+* Waiting for the group to be empty rather than free of bootstrap members. Rejected: a live
+  sibling's Streams members are the ordinary steady state of a scale-out.
+
+**Cost**
+
+One group describe per process per start, and a wait of at most the committer session
+timeout when another instance's member exits ungracefully. A replaced thread is one WARN line.
+
+**Specification gap**
+
+None. Fault model 2's arbitrary pauses were always met by the fence; this record is about not
+dying at the join.
+
+### D109 — Substrate-detected stops that recur identically carry their reason; `start()` says what it returns into; `close()` is bounded on every leg
+
+**Context**
+
+Three operational findings of the review, each small. `recordFailure` classified the
+consumer's `OffsetOutOfRangeException` under `auto.offset.reset=none` — the consumer-level
+half of Safety 8 (D9) — and the changelog's `RecordTooLargeException` for a log line, but
+stored the bare client exception, so `status()` reported them with no `refusalReason`: a
+supervisor keyed on D55's `stoppedDeliberately()` read a stop that recurs identically on every
+restart as a transient and restarted forever. `Parsley.start`'s Javadoc promised to return
+"once each is running or has been refused", but the host's `start()` returns at the start of
+its rebalance, and refusals raised inside task initialisation surface only through
+`status()`. And D63 bounded the streams close at thirty seconds while `admin.close()` waited
+`Long.MAX_VALUE`, the facts source's close blocked without bound on its round lock, and the
+probe consumer closed with the client default.
+
+**Decision**
+
+`recordFailure` wraps the two conditions that recur identically as refusals — the offset
+range as `POSITIONS_DISCARDED_UNREAD`, the record limit as `SUBSTRATE_MISCONFIGURED`, each
+with its remedy — before merging, so D55's preference keeps them over later transients and
+`status()` names them; a partition-shape change and a missing committed position stay
+transient, since a restart resolves them (D59). Pinned by `SubstrateDetectedStopStatusTest`.
+The Javadoc on `Parsley.start` and `ParsleyRuntime.start` now says the call returns once
+each application has been started and that initialisation-time refusals surface through
+`status()`; `ConcurrentColdStartIntegrationTest#startReturnsWithoutWaitingForTheProcessToRun` pins
+that the state a caller finds immediately after is a live one, rebalancing or running. `admin.close` takes the same thirty-second
+bound as the streams close, the probe consumer closes with five seconds, and the facts
+source's close waits five seconds for its lock and otherwise marks itself closed and
+abandons the round, whose own interrupt handling closes the probe.
+
+**Alternatives**
+
+* Blocking `start()` until every task is running or refused, through a state listener with a
+  bounded wait. Recorded as a reasonable later addition; a rebalance can legitimately take
+  long, and the bootstrap already refuses every condition it can see before the host starts,
+  so the truthful contract was the smaller change.
+* New reasons for the shape change and the missing position. Rejected: a reason is the
+  signal that a restart will not help, and for those two it will.
+* Closing the streams applications in parallel under one shared deadline. Not taken here;
+  the sequential worst case is the process count times thirty seconds, which D63's bound
+  already implies.
+
+**Cost**
+
+`failureDetail` for the two wrapped conditions now reads the refusal's diagnosis with the
+client exception beneath it. `EVIDENCE.md`'s Operational rows 1 and 3 name the pins.
+
+**Specification gap**
+
+None.
+
+### D110 — The ordering store is cached, and the bootstrap view keeps a held message's presence rather than its body
+
+**Context**
+
+Two measurements from the review's performance lens. First, the ordering store was built
+with logging and compaction (D57) but without the host's write cache, so every `put` was one
+RocksDB write and one changelog record. A received record merges its whole frontier — one
+put per channel whose position advanced — and every delivery merges the same channels into
+the delivered past; in a flowing pipeline, where upstream positions advance on every message,
+that is about two writes per frontier channel per record: 402 puts at a 200-entry frontier,
+some 15 KB of changelog per 1 KB record, a store-side ceiling near a thousand records a
+second per task. Second, at every start the runtime read the ordering changelog end to end
+into a map holding every live value, held blobs included, to answer which channels hold
+something and how far each was covered — about 12 KB per held message on the heap at a
+200-entry frontier, so a hold-back backlog of a hundred thousand messages cost over a
+gigabyte before any task existed, and a large backlog failed `start()` with an
+`OutOfMemoryError` exactly when the process most needed to restart.
+
+**Decision**
+
+The ordering store builder adds `withCachingEnabled()`. The cache keeps the latest value per
+key and writes it through at commit, so writes per commit interval are bounded by the keys
+touched rather than by records times channels; reads and range scans go through the cache;
+a delete is written through as a tombstone; and under exactly-once the flush precedes the
+transaction commit, so what a step persists is unchanged (D17). Held blobs pass through the
+cache and evict under `statestore.cache.max.bytes` as any value does. Pinned by
+`OrderingStoreCachingTest`, which walks the built store's wrapper chain for the caching and
+changelogging layers. The bootstrap read keeps, for a held message's key, an empty presence
+marker in place of its body — a tombstone still clears it — since the view's readers test
+presence and never content; pinned by
+`ChangelogReadStallTest#heldMessageBodiesAreKeptAsPresenceMarkersNotRetained`.
+
+**Alternatives**
+
+* Leaving caching to the operator through `streamsProperty`. Rejected: the store is
+  parsley's, the write pattern is parsley's, and an uncached ordering store is a cost no
+  application would choose.
+* Deduplicating writes inside the engine instead. Rejected: the engine would be
+  re-implementing the host's cache, and the host's flushes at commit are what tie the
+  writes to the step.
+* Streaming the bootstrap read without a map at all. Not needed once held bodies are
+  markers: what remains is one small entry per live key.
+
+**Cost**
+
+Memory per instance for the cache, shared with any application stores that enable it, sized
+by `statestore.cache.max.bytes`. The bootstrap view no longer carries held bodies, which
+nothing read. The engine constructor still decodes every held blob at restore to refuse
+corruption early (D102); a length-only validator would cut that allocation further and is
+recorded as a follow-up.
+
+**Specification gap**
+
+None.
+
+### D111 — The runtime can be waited on, an emission may carry its own timestamp, and the seam's documentation says what the code does
+
+**Context**
+
+A review of the public surface against the runtime behind it found four places where the
+seam's contract was missing or false.
+
+First, there was no way to wait on a running `Parsley`. `start` returns as soon as each
+process's Kafka Streams application has been started, so the canonical example in `AGENTS.md`
+and `docs/index.md` — `try (Parsley p = Parsley.start(...)) { // runs until closed }` —
+started every process and closed it in the same instant; an application copying it ran for
+about one rebalance. Every real `main` had to hand-roll a latch, a shutdown hook and a polling
+loop over `status()`, and nothing in the documentation showed that shape.
+
+Second, an emission always carried the delivered message's timestamp (D15) with no way to
+give it another. Along a causal chain of k hops every message carries the origin's time:
+time-based retention is measured from the record timestamp, so an emission that answers a
+message older than the sent topic's retention can be discarded on arrival, and downstream
+event-time windows see the origin's time rather than the emission's. D15 rejected wall-clock
+timestamps because they make replays nondeterministic; it did not consider a timestamp the
+application chooses as a function of delivered data, which is as deterministic as the effect
+it belongs to.
+
+Third, five Javadocs described something other than the code. `StateReader` said reads were
+"scoped to the key range of the step in progress"; they are served from the shard of each
+store owned by the delivering task, so a key is found only if the delivering topic was keyed
+so that the same partitioner put it on that partition, and nothing said so. `Channel#startingAt`
+said the position "has no effect on a process resuming from committed state", which contradicts
+D36: a channel added later to a process with prior state begins at `EARLIEST` whatever was
+declared. `Store` did not say the seam matches stores by instance, so a second `Store.of` for
+the same name is refused at the first access as if undeclared. `Handler` did not say what a
+throwing handler means — the process stops, restarts into the same message and stops again,
+because nothing is ever skipped — or how to continue past an application failure. And
+`Parsley#start` claimed to return "once each is running or has been refused" when it returns
+at the beginning of the first rebalance and starts nothing if any process is refused.
+
+Fourth, the documentation around the code. There was no operations page: the consumer groups,
+changelog and bootstrap client names, the admin and consumer calls the runtime makes and the
+ACLs they need, the topic prerequisites and the meaning of each refusal an operator meets
+were scattered across decisions or absent. The README described the library as "A Java
+library for Kafka Streams applications" and pinned a test count that was wrong at the next
+commit; `AGENTS.md` pinned the same count; `docs/llms.txt` omitted the `slf4j-api` dependency;
+the decision records were not published on the site; and CI ran only on Java 25 although the
+library declares 21 as its floor, so "Java 21 or newer" was inferred from a `--release` build
+rather than tested.
+
+**Decision**
+
+`Parsley` gains `awaitStopped()` and `awaitStopped(Duration)`: a blocking join that returns
+when any process stops — deliberately, to preserve the guarantee, or otherwise — or when
+another thread calls `close()`. It is implemented with one latch per runtime, counted down by
+the uncaught-exception handler, by a state listener on each Streams application entering
+`ERROR` or `NOT_RUNNING`, and by `close()`. The return is the moment to read `status()`; the
+method does not say why the wait ended, because `status()` already does and a second surface
+for the same fact would be one more to defend (Structural 9). Pinned by `AwaitStoppedTest`:
+the wait elapses while nothing has stopped, a process failure ends it, and closing ends it.
+The canonical example is now `try (Parsley p = Parsley.start(...)) { p.awaitStopped(); }`,
+and `docs/runtime.md` shows the shutdown-hook pairing.
+
+`Effects.Emission` gains an `OptionalLong timestamp`; empty inherits the delivered message's
+timestamp as before, so D15's default stands and its four-argument shape remains as a
+constructor. `Effects.Builder#send` gains overloads taking a `long` timestamp, with and without
+headers. A negative timestamp is refused at construction
+(`ApiValidationTest#negativeOrNullEmissionTimestampsAreRefusedAtConstruction`); the processor
+forwards the given timestamp or the delivered one
+(`TopologyWiringTest#anEmissionInheritsTheDeliveredTimestampUnlessGivenItsOwn`). The Javadoc
+says to derive it from delivered data and never from a clock, for the reason D15 gave. The
+protocol reads no timestamp (Structural 7), so the choice cannot touch deliverability.
+
+The five Javadocs above now describe the code: `StateReader` explains task-partition sharding
+and that a self-channel is a repartition, `Channel#startingAt` states D36, `Store` states
+instance identity, `Handler` states the throwing contract and the dead-letter shape, and
+`Parsley#start` states its all-or-nothing, returns-at-rebalance contract and its
+`IllegalStateException` arm. `docs/runtime.md` carries the same in "Keys, partitions and
+state", and `docs/failing-closed.md` the application-failure paragraph.
+
+`docs/operations.md` is the operations page: names, calls and ACLs, prerequisites, what
+`status()` shows, the refusals and their remedies. The README states what the library is and
+no longer pins a count; `AGENTS.md` names the count at the decision that last changed it;
+`docs/llms.txt` lists every runtime dependency and the new page; the decision records are
+published on the site by `scripts/build-decisions-index.py` at pages build; and CI runs the
+suite on Java 21 and 25.
+
+**Alternatives**
+
+* A listener or callback surface for stops. D55 declined it as a surface to defend, and that
+  stands: `awaitStopped` is a join, not a subscription; it delivers no event and carries no
+  payload.
+* Exposing the `KafkaStreams` handles so an application can register its own state listener.
+  Rejected by D11, which still holds.
+* A wait that ends only on a deliberate stop, letting transient failures pass. Rejected: the
+  application cannot tell the two apart without `status()`, and any stop is the moment to look;
+  a wait that outlived a process stopped by the consumer would hide exactly the stops D109
+  made readable.
+* A `Clock` or `Instant` handed to handlers for emission timestamps. Rejected on D15's ground:
+  a timestamp the runtime supplies from a clock differs on replay, and the effects of a
+  re-invoked handler must be identical.
+* A header the application sets in place of a record timestamp. Rejected: retention and
+  event-time windows read the record timestamp, not headers, which is the whole reason to want
+  one.
+
+**Cost**
+
+Two methods on `Parsley` and one more component on `Emission`, both to be defended. The
+four-argument `Emission` constructor keeps every existing construction compiling, but a record
+pattern written against 0.2.0's four components — `case Emission(var c, var k, var v, var h)`
+— no longer compiles and must name the fifth; the same holds for `ProcessStatus` since D103.
+Both are source breaks for 0.3.0 and belong in its release note. The operations page and the
+corrected Javadocs are claims about the runtime that must be kept true as it changes;
+`EVIDENCE.md` names the pins that catch the executable ones.
+
+**Specification gap**
+
+None. The spec is silent on timestamps beyond Structural 7, which this respects.
+
+### D112 — Five pins a mutation trial showed the suite lacked, and the sabotage mode D91 recorded as missing
+
+**Context**
+
+A review pass deleted or inverted one guard at a time and ran the fast suites. Five
+mutations stayed green. Deleting the pre-feed facts apply in `ParsleyProcessor#process` — the
+three lines that apply a round the facts thread has already deposited before the next record
+is fed — left 88 kafka unit tests green, although without it a received topic's recreation
+reported by a completed gather is acted on only at the next punctuation, so for up to one
+facts interval records of the new incarnation are fed, delivered and committed under the old
+identity, which D44 says affirmative evidence must stop at once; only the punctuator path was
+pinned. Changing D74's `offset - 1 > covered` to `offset > covered` in
+`refusePositionsDiscardedUnread` — which refuses every legitimate expiry restart at exactly the
+covered boundary with a destructive remedy — survived the kafka fast set, because the one pin
+uses a wide gap and needs a broker. Taking `frontierSizeRemove`'s varint delta from the wrong
+side of the count survived 431 core tests: the bookkeeping changes only when a prune shrinks a
+topic group from 129 through 127 partitions, and `frontierBytesAgreesWithTheEncodedHeader`
+crosses that boundary upward only; the drift is one byte per crossing for the process's
+lifetime, so the O(1) budget gate and `frontierBytes()` part from the header emitted.
+Disabling the delivered-past prune in `onFacts` survived every core test: its one consequence
+is that an aged-out past resurfaces as a join clamp when its channel joins the received set,
+writing a coverage record for a channel this process never read, which D74's start-time check
+then refuses as positions discarded unread. And the equal-position re-feed below the session
+floor — D67 gap 3's other side — was pinned above the floor only (D106), so weakening the
+in-execution check to strict-less-than there degraded to a silent replay drop with no test
+red. D91 had separately recorded that the sabotage sweep has no mode for the silent-drop
+direction of `COVERED_POSITION_FED`.
+
+**Decision**
+
+Each gap is closed by the test the trial wrote, red under the mutation and green on the
+tree: `ProcessorRevivalTest#aDepositedRoundIsAppliedBeforeTheNextRecordIsFed` (a freeing
+report deposited before a record releases the hold ahead of it, and a deposited recreation
+refuses the next record as `CHANNEL_IDENTITY_CHANGED`);
+`BootstrapPreCheckTest#reEstablishedPositionAtExactlyTheCoveredBoundaryStartsAndOnePastItRefuses`
+(coverage written by a real engine over `MemoryOrderingStore`; covered + 1 starts, covered + 2
+refuses); `ProcessEngineTest#frontierBytesTracksTheEncodedHeaderWhenAPruneShrinksAGroupAcrossTheVarintWidthBoundary`;
+`ProcessEngineTest#aPrunedDeliveredPastEntryDoesNotBecomeCoverageWhenItsChannelJoins`; and
+`ProcessEngineTest#feedingTheSamePositionTwiceInOneExecutionFailsClosedAsOutOfOrderOnBothSidesOfTheSessionFloor`.
+The `TREAT_COVERED_FEED_AS_REPLAY` sabotage mode disarms only the refusal's covered branch
+into `DUPLICATE_DROPPED`; `SabotageMetaTest#treatingACoveredFeedAsAReplayIsCaught` stages the
+honest and sabotaged engines over the same report-then-feed contradiction. The mode carries no
+sweep floor, for the reason D91 gave: the harness derives every read-position report from a
+process's own progress, so no random seed reaches a successor-ahead report (calibrated at 0
+of 300), and it joins `DELIVER_PAST_DEAD_HOLDS` as a deterministically evidenced mode
+(`docs/verification.md`). No production code changed beyond the mode's one guard.
+
+**Alternatives**
+
+* Leaving the sweep floors as D43 calibrated them. The generator changed twice on this branch
+  (D104's truncation bias toward held channels, D106's timestamp decorrelation), and D43's
+  rule is that any generator change re-measures and re-sets the floors at half the count.
+  Measured over the sweep's 120 seeds after both changes, catches were: IGNORE_CAUSES 59,
+  NO_FIFO 10, REDELIVER_REFEEDS 57, UNDECODABLE_AS_ABSENT 79, SKIP_RECEIPT_MERGE 57,
+  DROP_HELD 75, IGNORE_TRUNCATION 50, IGNORE_REMOVED_CHANNELS 32, SILENT_DROP 30,
+  OVEREXPRESS 82; over 300 seeds IGNORE_RECREATION 13, and DELIVER_PAST_DEAD_HOLDS and
+  TREAT_COVERED_FEED_AS_REPLAY 0. The floors are re-set to half of each. IGNORE_TRUNCATION
+  rose from D43's 35 to 50, which is what D104's bias was for; NO_FIFO fell from 17 to 10,
+  since truncation events now displace some of the interleavings that caught it, and its
+  floor of 5 records that margin honestly rather than the stale 9 it passed by one seed.
+* Extracting `refusePositionsDiscardedUnread` to a package-private seam instead of reflecting
+  on it. Not taken here: D92 reserves seam extraction for methods with more than one pin, and
+  the test names the method by string so a rename fails it loudly.
+
+**Cost**
+
+Six tests. The reflective pin binds a private method's name and signature.
+
+**Specification gap**
+
+None.
+
+### D113 — Declared-topic resolution corroborates an unknown-topic answer before refusing (extends D84)
+
+**Context**
+
+A CI run of this branch failed on one leg with `declared topics could not be resolved;
+refusing to start` for a topic the test had created a moment earlier. The describe that
+resolves declared topics is served from one broker's metadata view, which can lag the
+controller's creation of a topic; a single stale "unknown topic" answer refused the start.
+D84 already refuses to conclude the ordering changelog's absence from one such answer, for
+the same reason, and demands three consistent unknown answers half a second apart. Declared
+topics had no such tolerance: the one describe either resolved or refused.
+
+**Decision**
+
+`resolveTopicsCorroborated` retries a describe that fails with `UnknownTopicOrPartitionException`
+twice more, half a second apart, and refuses only on the third consistent answer, with the
+same diagnosis and cause as before. Any other failure refuses at once, since nothing about
+it is a matter of corroboration, and a refusal from the identity floor (D83) passes through
+untouched. Pinned by `DeclaredTopicResolutionTest`: a lagging answer is retried and the topic
+resolves once described; three unknown answers refuse naming the missing topic after exactly
+three describes; a generic failure refuses after one; the identity refusal is neither retried
+nor rewrapped. `BootstrapIntegrationTest#aDeclaredTopicThatDoesNotExistRefusesToStartNamingTheResolutionFailure`
+still pins the refusal on a real broker.
+
+**Alternatives**
+
+* Waiting in the test after creating the topic. Rejected: the race is the runtime's, not the
+  test's. An application that creates its topics and starts is the ordinary first deployment,
+  and it should not refuse on a broker whose metadata is a moment behind.
+* Retrying every describe failure. Rejected for the reason D84 gave: a timeout or an outage
+  retried three times is a slower version of the same refusal, and it must not be mistaken
+  for a matter of corroboration.
+
+**Cost**
+
+A genuinely missing topic is refused one second later than before.
+
+**Specification gap**
+
+None.

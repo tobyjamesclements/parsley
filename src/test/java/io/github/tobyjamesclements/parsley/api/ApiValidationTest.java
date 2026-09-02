@@ -623,6 +623,23 @@ class ApiValidationTest {
                 "a sub-millisecond interval cannot be scheduled and must fail here, not on the stream thread");
     }
 
+    /** A negative or null emission timestamp is refused at construction. */
+    @Test
+    void negativeOrNullEmissionTimestampsAreRefusedAtConstruction() {
+        Channel<String, String> out = channel("out");
+        assertThrows(IllegalArgumentException.class,
+                () -> Effects.builder().send(out, "k", "v", -1L),
+                "a negative timestamp cannot be a record timestamp");
+        assertThrows(IllegalArgumentException.class,
+                () -> new Effects.Emission<>(out, "k", "v", java.util.List.of(), null),
+                "absence is expressed through the empty OptionalLong, never through null");
+        assertEquals(java.util.OptionalLong.empty(),
+                Effects.builder().send(out, "k", "v").build().emissions().get(0).timestamp(),
+                "an emission without a timestamp inherits the delivered one");
+        assertEquals(java.util.OptionalLong.of(7L),
+                Effects.builder().send(out, "k", "v", 7L).build().emissions().get(0).timestamp());
+    }
+
     /** Null status components are refused at construction. */
     @Test
     void nullStatusComponentsAreRefusedAtConstruction() {
@@ -630,6 +647,26 @@ class ApiValidationTest {
                 () -> new ProcessStatus(null, ProcessStatus.State.RUNNING,
                         java.util.Optional.empty(), java.util.Optional.empty()),
                 "absence is expressed through the empty Optionals, never through null");
+        assertThrows(IllegalArgumentException.class,
+                () -> new ProcessStatus("p", ProcessStatus.State.RUNNING,
+                        java.util.Optional.empty(), java.util.Optional.empty(), null),
+                "no task detail is the empty list, never null");
+        assertEquals(java.util.List.of(),
+                new ProcessStatus("p", ProcessStatus.State.RUNNING,
+                        java.util.Optional.empty(), java.util.Optional.empty()).tasks(),
+                "the four-component form reports no task detail");
+        assertThrows(IllegalArgumentException.class,
+                () -> new TaskStatus(0, 0, 0, 0, null, java.util.Optional.empty()),
+                "a task status refuses null held channels");
+        assertThrows(IllegalArgumentException.class,
+                () -> new TaskStatus(0, 0, -1, 0, java.util.List.of(), java.util.Optional.empty()),
+                "a task status refuses a negative count");
+        assertThrows(IllegalArgumentException.class,
+                () -> new TaskStatus.Blocker(null, 0, 1L, java.util.OptionalLong.empty()),
+                "a blocker refuses a null topic");
+        assertThrows(IllegalArgumentException.class,
+                () -> new TaskStatus.HeldChannel("t", 0, 1, 0L, null),
+                "a held channel refuses null blockers");
     }
 
     /** A null config is refused by start with a message. */

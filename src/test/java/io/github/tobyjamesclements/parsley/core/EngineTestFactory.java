@@ -21,7 +21,8 @@ public final class EngineTestFactory {
         SILENT_DROP,
         OVEREXPRESS,
         IGNORE_RECREATION,
-        DELIVER_PAST_DEAD_HOLDS
+        DELIVER_PAST_DEAD_HOLDS,
+        TREAT_COVERED_FEED_AS_REPLAY
     }
 
     private EngineTestFactory() {

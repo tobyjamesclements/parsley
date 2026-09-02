@@ -42,6 +42,11 @@ jobs:
       - name: Generate llms-full.txt
         run: python3 scripts/build-llms-full.py .
 
+      - name: Generate the decisions index
+        run: python3 scripts/build-decisions-index.py .
+        env:
+          PARSLEY_DOCS_REF: ${{ github.sha }}
+
       - name: Install MkDocs + mike
         run: pip install mkdocs-material mike
 

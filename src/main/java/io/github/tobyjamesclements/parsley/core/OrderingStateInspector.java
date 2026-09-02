@@ -24,6 +24,18 @@ public final class OrderingStateInspector {
     }
 
     /**
+     * Whether a key is a held message's, by its tag and shape. A host reading ordering
+     * state for its start-time checks needs to know that a hold exists, never what it
+     * carries, so it can keep a marker in place of the body (D110).
+     *
+     * @param key a key from the ordering state
+     * @return {@code true} when the key is a held message's
+     */
+    public static boolean isHeldKey(byte[] key) {
+        return key.length == 1 + ChannelId.ENCODED_LENGTH + Long.BYTES && key[0] == StoreCodec.TAG_HELD;
+    }
+
+    /**
      * Finds the channels holding undelivered messages.
      *
      * @param latestPerKey the ordering state, as the latest value per key
@@ -32,8 +44,7 @@ public final class OrderingStateInspector {
     public static Set<ChannelId> heldChannels(Map<byte[], byte[]> latestPerKey) {
         Set<ChannelId> channels = new TreeSet<>();
         latestPerKey.forEach((key, value) -> {
-            if (value != null && key.length == 1 + ChannelId.ENCODED_LENGTH + Long.BYTES
-                    && key[0] == StoreCodec.TAG_HELD) {
+            if (value != null && isHeldKey(key)) {
                 channels.add(StoreCodec.channelOfHeldKey(key));
             }
         });

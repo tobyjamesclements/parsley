@@ -19,11 +19,19 @@ public final class Instance {
     final List<HeaderKV> headers;
     final Causes meta;
     final Set<Instance> trueCauses;
+    /**
+     * The message timestamp the substrate hands the engine. Deliberately not the position:
+     * an engine that read a timestamp where it should read a position — in the store's held
+     * encoding, in a restore, or in the decision, which Structural 7 forbids from consulting
+     * timestamps at all — would pass every run in which the two coincide.
+     */
+    final long timestamp;
 
     Instance(ChannelId channel, long position, String uid, byte[] key, byte[] value,
              List<HeaderKV> headers, Causes meta, Set<Instance> trueCauses) {
         this.channel = channel;
         this.position = position;
+        this.timestamp = 1_000_000_000L + (uid.hashCode() & 0xFFFF) * 1_000L + (position * 7L) % 1_000L;
         this.uid = uid;
         this.key = key;
         this.value = value;

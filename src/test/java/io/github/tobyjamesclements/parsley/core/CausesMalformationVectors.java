@@ -58,6 +58,10 @@ public final class CausesMalformationVectors {
         negativePosition.put((byte) 1);
         negativePosition.putLong(1).putLong(1).put((byte) 1).put((byte) 0).putLong(-5);
 
+        ByteBuffer maxPosition = header(1 + 1 + 16 + 1 + 9);
+        maxPosition.put((byte) 1);
+        maxPosition.putLong(1).putLong(1).put((byte) 1).put((byte) 0).putLong(Long.MAX_VALUE);
+
         ByteBuffer zeroTopicId = header(1 + 1 + 16 + 1 + 9);
         zeroTopicId.put((byte) 1);
         zeroTopicId.putLong(0).putLong(0).put((byte) 1).put((byte) 0).putLong(7);
@@ -151,6 +155,7 @@ public final class CausesMalformationVectors {
                 new Vector("truncation", "below the version byte", new byte[0], "truncated causes header"),
                 new Vector("trailing", "one surplus byte", java.util.Arrays.copyOf(twoChannels, twoChannels.length + 1), "trailing bytes"),
                 new Vector("negative-position", "position -5", negativePosition.array(), "negative position"),
+                new Vector("max-position", "position 2^63-1", maxPosition.array(), "beyond any position"),
                 new Vector("zero-topic-id", "reserved zero id", zeroTopicId.array(), "zero topic id"),
                 new Vector("topic-order", "topics descending", topicsDescending.array(), "topics not strictly ascending"),
                 new Vector("topic-order", "topic duplicated", topicsDuplicate.array(), "topics not strictly ascending"),

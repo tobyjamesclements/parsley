@@ -65,6 +65,11 @@ Every constraint below is mandatory. Violating any one makes the value undecodab
    ever produced such a group, because writers only express channels the substrate named —
    D83 records the reasoning.)
 6. `position` is non-negative.
+7. `position` is below 2⁶³ − 1. No log reaches that many records, so no genuine cause can
+   name it, and an implementation may keep it as an in-band marker of its own — this one
+   records a deleted channel with it. (A reader-side tightening in the manner of
+   constraint 5: no conforming writer has ever produced such a pair; D105 records the
+   reasoning.)
 
 ## Meaning
 

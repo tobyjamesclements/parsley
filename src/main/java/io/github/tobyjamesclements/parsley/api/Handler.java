@@ -10,6 +10,11 @@ package io.github.tobyjamesclements.parsley.api;
  * <p>Implementations must be pure functions of their arguments. The runtime may invoke a
  * handler again for the same message after a failure, and the effects must be identical.
  *
+ * <p>A handler that throws fails its step: the process stops, and on restart it is fed the
+ * same message and fails again. Parsley never skips a message. To continue past an
+ * application failure, catch it and return effects that record it deterministically — for
+ * example an emission to a declared dead-letter channel.
+ *
  * @param <K> delivered key type
  * @param <V> delivered value type
  * @see Effects

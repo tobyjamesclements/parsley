@@ -11,7 +11,9 @@ import java.util.UUID;
 import io.github.tobyjamesclements.parsley.sim.MemoryOrderingStore;
 
 import static io.github.tobyjamesclements.parsley.core.EngineTestFactory.plain;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -677,5 +679,282 @@ class ProcessEngineTest {
         assertEquals(1, engine.heldCountTotal(), "only the staging message may be held");
         assertEquals(Causes.of(Map.of(f1, 5L, f2, 9L)), engine.frontierSnapshot(),
                 "the refused message must not have advanced the frontier");
+    }
+
+    /**
+     * Only the head of each channel's hold-back buffer keeps its decoded form once flushed:
+     * the delivery decision reads the head and nothing else, so everything behind it lives
+     * in the store until it reaches the head (D102). A restart keeps nothing decoded until
+     * a head is first offered to the decision.
+     */
+    @Test
+    void onlyTheHeadOfEachBufferKeepsItsDecodedFormOnceFlushed() {
+        ChannelId c3 = new ChannelId(new UUID(9, 3), 0);
+        Map<ChannelId, String> three = Map.of(C1, "c1", C2, "c2", c3, "c3");
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", three, store);
+        for (int i = 0; i < 5; i++) {
+            engine.onReceive(caused(C2, i, "b" + i, Map.of(c3, 100L)));
+        }
+        for (int i = 0; i < 3; i++) {
+            engine.onReceive(caused(C1, i, "a" + i, Map.of(c3, 200L)));
+        }
+        assertEquals(8, engine.decodedHoldCount(), "an unflushed hold is still in memory");
+
+        engine.flushHolds();
+        assertEquals(2, engine.decodedHoldCount(),
+                "after a flush only the head of each buffer keeps its decoded form");
+
+        store.commit();
+        ProcessEngine restarted = new ProcessEngine("p", three, store);
+        assertEquals(0, restarted.decodedHoldCount(), "a restart restores skeletons, not decoded messages");
+        assertTrue(restarted.nextDeliverable().isEmpty(), "both heads are blocked");
+        assertEquals(2, restarted.decodedHoldCount(),
+                "offering the heads to the decision decodes exactly the heads");
+
+        restarted.onFacts(new PositionFacts(Map.of(c3, 101L), Map.of(), Set.of()));
+        Optional<DeliverableMessage> next = restarted.nextDeliverable();
+        assertTrue(next.isPresent(), "C2's head is released once c3 settles past its cause");
+        assertEquals(C2, next.get().channel(), "the head of C2 must be offered next");
+        restarted.markDelivered(C2, 0);
+        assertTrue(restarted.nextDeliverable().isPresent(), "the next hold on C2 becomes the head");
+        assertEquals(2, restarted.decodedHoldCount(),
+                "a hold decodes on reaching the head, and the delivered one is gone");
+    }
+
+    /**
+     * A hold reloaded from the store — after a flush and a restart — reaches logic with the
+     * key, value, headers and causes it arrived with, and its causes still enter the
+     * delivered causal past, which a later-joining channel is clamped above (D31, D102).
+     */
+    @Test
+    void aHoldReloadedFromTheStoreReachesLogicWithItsCausesIntact() {
+        ChannelId foreign = new ChannelId(new UUID(9, 3), 0);
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        ReceivedMessage received = caused(C2, 4, "B", Map.of(C1, 3L, foreign, 9L));
+        engine.onReceive(received);
+        engine.flushHolds();
+        store.commit();
+
+        ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
+        restarted.onFacts(new PositionFacts(Map.of(C1, 4L), Map.of(), Set.of()));
+        Optional<DeliverableMessage> next = restarted.nextDeliverable();
+        assertTrue(next.isPresent(), "the cause settled, so the reloaded hold is deliverable");
+        DeliverableMessage message = next.get();
+        assertArrayEquals(received.key(), message.key(), "key reloaded byte for byte");
+        assertArrayEquals(received.value(), message.value(), "value reloaded byte for byte");
+        assertEquals(received.headers().size(), message.headers().size(), "headers reloaded");
+        assertArrayEquals(received.headers().get(0).value(), message.headers().get(0).value(),
+                "the causes header reloaded byte for byte");
+        assertEquals(Causes.of(Map.of(C1, 3L, foreign, 9L)), message.causes(), "causes reloaded");
+        restarted.markDelivered(C2, 4);
+        restarted.flushHolds();
+        store.commit();
+
+        ProcessEngine joined = new ProcessEngine("p", Map.of(C1, "c1", C2, "c2", foreign, "f"), store);
+        assertEquals(9L, joined.fedUpTo(foreign).orElseThrow(),
+                "the reloaded causes entered the delivered past, which clamps the joining channel");
+    }
+
+    /**
+     * A hold delivered in the step that received it is never written to the store: it left
+     * its buffer before the flush, and the flush must skip it rather than resurrect it as a
+     * held message a restart would deliver again (D102).
+     */
+    @Test
+    void aHoldDeliveredBeforeItsFirstFlushIsNeverWrittenToTheStore() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        engine.onReceive(plain(C1, 2, "A"));
+        engine.markDelivered(C1, 2);
+        engine.flushHolds();
+        java.util.List<Long> heldPositions = new java.util.ArrayList<>();
+        store.scanPrefix(StoreCodec.heldPrefix(C1), (key, value) -> heldPositions.add(StoreCodec.positionOfHeldKey(key)));
+        assertEquals(java.util.List.of(), heldPositions, "a delivered hold must not be persisted by a later flush");
+        store.commit();
+        assertEquals(0, new ProcessEngine("p", BOTH, store).heldCountTotal(), "nothing is restored as held");
+    }
+
+    /**
+     * A hold whose store entry has vanished refuses rather than delivering an empty message
+     * or skipping it: the buffer and the store contradict each other, which is ordering
+     * state that cannot be trusted (D102).
+     */
+    @Test
+    void aHeldMessageMissingFromTheStoreRefusesRatherThanDeliveringNothing() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        engine.onReceive(caused(C2, 0, "B", Map.of(C1, 3L)));
+        engine.flushHolds();
+        store.commit();
+
+        ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
+        store.delete(StoreCodec.heldKey(C2, 0));
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class, restarted::nextDeliverable,
+                "a hold absent from the store must stop the process");
+        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason(),
+                "a hold whose blob is absent from the store is refused as an unknown state format");
+        assertTrue(e.getMessage().contains("absent from the store"), e.getMessage());
+    }
+
+    /**
+     * The encoded frontier is computed once per change and handed out as a copy: two
+     * emissions in one step share the encoding, an emission's bytes are the caller's to
+     * alter, and every frontier mutation site — merge on receipt, merge on delivery, prune
+     * on facts — produces a fresh encoding (D102).
+     */
+    @Test
+    void theEmissionHeaderIsReusedUntilTheFrontierChangesAndHandedOutAsACopy() throws Exception {
+        ChannelId foreign = new ChannelId(new UUID(9, 3), 0);
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        engine.onReceive(caused(C2, 7, "B", Map.of(C1, 3L, foreign, 5L)));
+        byte[] first = engine.causesHeaderForEmission();
+        byte[] second = engine.causesHeaderForEmission();
+        assertArrayEquals(first, second, "an unchanged frontier encodes identically");
+        assertNotSame(first, second, "each emission receives its own array");
+        first[first.length - 1] ^= 0x7F;
+        assertArrayEquals(second, engine.causesHeaderForEmission(), "altering a handed-out copy leaves the engine's encoding intact");
+
+        engine.onReceive(caused(C2, 8, "C", Map.of(foreign, 6L)));
+        assertEquals(Causes.of(Map.of(C1, 3L, foreign, 6L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+                "a receipt that raises a cause re-encodes");
+
+        engine.onReceive(plain(C1, 3, "A"));
+        engine.markDelivered(C1, 3);
+        assertEquals(Causes.of(Map.of(C1, 3L, foreign, 6L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+                "a delivery at the position already expressed changes nothing");
+        engine.onReceive(plain(C1, 4, "A2"));
+        engine.markDelivered(C1, 4);
+        assertEquals(Causes.of(Map.of(C1, 4L, foreign, 6L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+                "a delivery past the expressed position re-encodes");
+
+        engine.onFacts(new PositionFacts(Map.of(), Map.of(foreign, 7L), Set.of()));
+        assertEquals(Causes.of(Map.of(C1, 4L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+                "a prune re-encodes without the pruned channel");
+        assertEquals(engine.frontierBytes(), engine.causesHeaderForEmission().length,
+                "the incremental width agrees with the cached encoding after every mutation");
+    }
+
+    /**
+     * Flushing after every receipt stays cheap while the buffer deepens: a flush writes the
+     * holds taken in since the previous flush and never scans the buffer (D102). This is
+     * one of the suite's two wall-clock bounds (the other, in
+     * {@code ProbeIdleChannelCostIntegrationTest}, times a real broker's probe), chosen
+     * with a wide margin: 50,000 receipts each
+     * followed by a flush complete in well under a second here, where a flush that scanned
+     * every hold would spend on the order of twenty seconds in the scan alone.
+     */
+    @Test
+    void flushingAfterEveryReceiptStaysCheapWhileTheBufferDeepens() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        byte[] header = CausesCodec.encode(Causes.of(Map.of(C1, 1_000_000L)));
+        List<HeaderKV> headers = List.of(new HeaderKV(CausesCodec.HEADER_KEY, header));
+        long started = System.nanoTime();
+        for (int i = 0; i < 50_000; i++) {
+            engine.onReceive(new ReceivedMessage(C2, i, i, null, null, headers));
+            engine.flushHolds();
+        }
+        long elapsedMillis = (System.nanoTime() - started) / 1_000_000;
+        assertEquals(50_000, engine.heldCount(C2), "every receipt is held behind the unsatisfied cause");
+        assertTrue(elapsedMillis < 5_000,
+                "50,000 receipt-and-flush cycles took " + elapsedMillis + " ms; a flush must not scan the buffer");
+    }
+
+    /**
+     * The in-execution feed-order check binds at equality, not only on regression. The same
+     * position fed twice within one execution is the shape a recreated topic's records take
+     * when they arrive under the old channel's identity, and it must fail loudly as a
+     * feed-order breach on both sides of the session floor: above the floor a check weakened
+     * to strict-less-than would fall through to the covered-position branch and misname the
+     * condition (SPEC Operational 6); below the floor it would drop the second feed silently
+     * as a sanctioned replay (D67 gap 3).
+     */
+    @Test
+    void feedingTheSamePositionTwiceInOneExecutionFailsClosedAsOutOfOrderOnBothSidesOfTheSessionFloor() {
+        MemoryOrderingStore fresh = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, fresh);
+        engine.onReceive(plain(C1, 5, "M"));
+        ParsleyFailClosedException above = assertThrows(ParsleyFailClosedException.class,
+                () -> engine.onReceive(plain(C1, 5, "M")),
+                "the same position fed twice above the session floor must fail closed");
+        assertEquals(ParsleyFailClosedException.Reason.OUT_OF_ORDER_FEED, above.reason(),
+                "a same-position re-feed is a feed-order breach, not a report/feed contradiction");
+
+        MemoryOrderingStore committed = new MemoryOrderingStore();
+        ProcessEngine first = new ProcessEngine("p", BOTH, committed);
+        first.onReceive(plain(C1, 5, "M"));
+        first.markDelivered(C1, 5);
+        first.flushHolds();
+        committed.commit();
+        ProcessEngine restarted = new ProcessEngine("p", BOTH, committed);
+        assertEquals(ProcessEngine.ReceiveOutcome.DUPLICATE_DROPPED, restarted.onReceive(plain(C1, 3, "M3")),
+                "staging: the first re-feed below the session floor is a sanctioned replay");
+        ParsleyFailClosedException below = assertThrows(ParsleyFailClosedException.class,
+                () -> restarted.onReceive(plain(C1, 3, "M3")),
+                "the same position fed twice below the session floor must fail closed, not drop silently");
+        assertEquals(ParsleyFailClosedException.Reason.OUT_OF_ORDER_FEED, below.reason(),
+                "the second feed of one position is a feed-order breach whatever the session floor says");
+    }
+
+    /**
+     * A delivered-past entry that facts pruned below its channel's earliest retained position
+     * must not resurface as a join clamp. Were it kept, the channel joining the received set
+     * would have its fed-up-to advanced to the stale past, leaving a coverage record for a
+     * channel this process never read; D74's start-time check then refuses a legitimate
+     * expiry restart on that channel as positions discarded unread. Coverage is the fed-up-to
+     * record alone, and a joined-never-read channel must leave none.
+     */
+    @Test
+    void aPrunedDeliveredPastEntryDoesNotBecomeCoverageWhenItsChannelJoins() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine first = new ProcessEngine("p", Map.of(C1, "c1"), store);
+        first.onReceive(caused(C1, 0, "A", Map.of(C2, 5L)));
+        first.markDelivered(C1, 0);
+        first.onFacts(new PositionFacts(Map.of(), Map.of(C2, 100L), Set.of()));
+        first.flushHolds();
+        store.commit();
+
+        ProcessEngine joined = new ProcessEngine("p", BOTH, store);
+        assertEquals(java.util.OptionalLong.empty(), joined.fedUpTo(C2),
+                "a channel whose delivered past aged out must join with no clamp");
+        Map<byte[], byte[]> image = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
+        store.scanPrefix(new byte[0], image::put);
+        assertEquals(Map.of(C1, 0L), OrderingStateInspector.coveredPositions(image),
+                "the joined channel must leave no fed-up-to record: a start-time coverage check would"
+                        + " otherwise refuse its re-established position as discarded unread (D74)");
+    }
+
+    /**
+     * The incrementally maintained frontier width must track the encoded header when a prune
+     * shrinks a topic group back across the varint-width boundary: removing partitions from a
+     * group of 129 through 128 to 127 narrows the partition-count varint from two bytes to
+     * one, and {@link #frontierBytesAgreesWithTheEncodedHeader} only ever crosses that
+     * boundary upwards. A delta taken from the wrong side of the count leaves frontierBytes
+     * one byte off the header the process emits, and the O(1) budget gate then refuses one
+     * byte early or late, a drift that compounds with every crossing.
+     */
+    @Test
+    void frontierBytesTracksTheEncodedHeaderWhenAPruneShrinksAGroupAcrossTheVarintWidthBoundary() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        UUID wideTopic = new UUID(43, 1);
+        java.util.TreeMap<ChannelId, Long> wide = new java.util.TreeMap<>();
+        for (int partition = 0; partition < 129; partition++) {
+            wide.put(new ChannelId(wideTopic, partition), 1L);
+        }
+        engine.onReceive(caused(C1, 0, "A", wide));
+        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                "with a 129-partition group, the partition count two varint bytes wide");
+
+        for (int remaining = 128; remaining >= 126; remaining--) {
+            engine.onFacts(new PositionFacts(Map.of(), Map.of(), Set.of(new ChannelId(wideTopic, remaining))));
+            assertEquals(remaining, engine.frontierSize(),
+                    "staging: the pruned partition must actually leave the frontier");
+            assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+                    "after shrinking the group to " + remaining + " partitions");
+        }
     }
 }

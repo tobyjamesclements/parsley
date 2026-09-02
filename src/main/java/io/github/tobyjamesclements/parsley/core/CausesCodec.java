@@ -2,8 +2,8 @@ package io.github.tobyjamesclements.parsley.core;
 
 import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
-import java.util.List;
 import java.util.Map;
+import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.UUID;
 
@@ -60,10 +60,19 @@ public final class CausesCodec {
      * @return the byte count {@link #encode(Causes)} produces for it
      */
     static int encodedSize(Causes causes) {
-        int size = 1 + unsignedVarintSize(topicCount(causes));
+        return encodedSize(causes.byChannel());
+    }
+
+    /**
+     * The encoded size of a frontier given as its sorted map, without building a
+     * {@link Causes}: the engine keeps its frontier as this map and asks for the width on
+     * every merge (D98), so the value object's copy would be paid per record for nothing.
+     */
+    static int encodedSize(SortedMap<ChannelId, Long> byChannel) {
+        int size = 1 + unsignedVarintSize(topicCount(byChannel));
         UUID currentTopic = null;
         int partitions = 0;
-        for (ChannelId channel : causes.byChannel().keySet()) {
+        for (ChannelId channel : byChannel.keySet()) {
             if (!channel.topicId().equals(currentTopic)) {
                 if (currentTopic != null) {
                     size += unsignedVarintSize(partitions);
@@ -92,33 +101,56 @@ public final class CausesCodec {
      * @return the header value
      */
     public static byte[] encode(Causes causes) {
-        ByteBuffer buffer = ByteBuffer.allocate(encodedSize(causes));
+        return encode(causes.byChannel());
+    }
+
+    /**
+     * Encodes a frontier held as a map in {@link ChannelId} order — the engine's own
+     * frontier, without copying it into a {@link Causes} first (D102). The map must be
+     * sorted by the channel's natural order, which is the order every group and pair is
+     * written in.
+     *
+     * @param byChannel per channel, the highest causal position, in {@link ChannelId} order
+     * @return the header value
+     */
+    static byte[] encode(SortedMap<ChannelId, Long> byChannel) {
+        ByteBuffer buffer = ByteBuffer.allocate(encodedSize(byChannel));
         buffer.put(FORMAT_VERSION);
-        List<Map.Entry<ChannelId, Long>> entries = List.copyOf(causes.byChannel().entrySet());
-        writeUnsignedVarint(buffer, topicCount(causes));
-        int i = 0;
-        while (i < entries.size()) {
-            UUID topicId = entries.get(i).getKey().topicId();
-            int end = i;
-            while (end < entries.size() && entries.get(end).getKey().topicId().equals(topicId)) {
-                end++;
+        writeUnsignedVarint(buffer, topicCount(byChannel));
+        // One pass to size each topic's group, one to write it: the partition count
+        // precedes its pairs, and a sorted map yields each topic's partitions together.
+        int[] groupSizes = new int[topicCount(byChannel)];
+        int group = -1;
+        UUID currentTopic = null;
+        for (ChannelId channel : byChannel.keySet()) {
+            if (!channel.topicId().equals(currentTopic)) {
+                currentTopic = channel.topicId();
+                group++;
             }
-            buffer.putLong(topicId.getMostSignificantBits());
-            buffer.putLong(topicId.getLeastSignificantBits());
-            writeUnsignedVarint(buffer, end - i);
-            for (; i < end; i++) {
-                writeUnsignedVarint(buffer, entries.get(i).getKey().partition());
-                buffer.putLong(entries.get(i).getValue());
+            groupSizes[group]++;
+        }
+        group = -1;
+        currentTopic = null;
+        for (Map.Entry<ChannelId, Long> entry : byChannel.entrySet()) {
+            ChannelId channel = entry.getKey();
+            if (!channel.topicId().equals(currentTopic)) {
+                currentTopic = channel.topicId();
+                group++;
+                buffer.putLong(currentTopic.getMostSignificantBits());
+                buffer.putLong(currentTopic.getLeastSignificantBits());
+                writeUnsignedVarint(buffer, groupSizes[group]);
             }
+            writeUnsignedVarint(buffer, channel.partition());
+            buffer.putLong(entry.getValue());
         }
         return buffer.array();
     }
 
     /** The one spelling of "entries with equal topic id form one group": distinct topics, in order. */
-    private static int topicCount(Causes causes) {
+    private static int topicCount(SortedMap<ChannelId, Long> byChannel) {
         int topics = 0;
         UUID currentTopic = null;
-        for (ChannelId channel : causes.byChannel().keySet()) {
+        for (ChannelId channel : byChannel.keySet()) {
             if (!channel.topicId().equals(currentTopic)) {
                 currentTopic = channel.topicId();
                 topics++;
@@ -154,10 +186,10 @@ public final class CausesCodec {
      * @param headerValue the header value, which may be {@code null}
      * @return the frontier
      * @throws UndecodableMetadataException if the value is null, carries an unknown version,
-     *         is truncated, miscounts its groups or pairs, names a negative position, the
-     *         reserved zero topic ID or a topic with zero partitions, lists topics or
-     *         partitions out of strictly ascending order, or spells a varint non-minimally
-     *         or beyond the non-negative int range
+     *         is truncated, miscounts its groups or pairs, names a negative position or the
+     *         reserved maximum one, the reserved zero topic ID or a topic with zero
+     *         partitions, lists topics or partitions out of strictly ascending order, or
+     *         spells a varint non-minimally or beyond the non-negative int range
      */
     public static Causes decode(byte[] headerValue) throws UndecodableMetadataException {
         if (headerValue == null) {
@@ -212,6 +244,14 @@ public final class CausesCodec {
                 long position = buffer.getLong();
                 if (position < 0) {
                     throw new UndecodableMetadataException("negative position " + position + " on " + channel);
+                }
+                // No log reaches 2^63 - 1 records, so no genuine cause can name it, and the
+                // engine keeps that value as its in-band fed-to-end marker: absorbed from a
+                // header it would masquerade as a channel's deletion once it reached fedUpTo
+                // (wire-format.md constraint 7, D105).
+                if (position == Long.MAX_VALUE) {
+                    throw new UndecodableMetadataException("position " + position + " on " + channel
+                            + " is beyond any position a channel can assign");
                 }
                 byChannel.put(channel, position);
             }

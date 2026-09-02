@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
 # Build the docs site the way .github/workflows/pages.yml builds it, so a broken site
-# surfaces here rather than after a push. MkDocs needs two generated inputs that are not in
-# the tree — the Javadoc staged into docs/javadoc, and llms-full.txt concatenated from llms.txt —
-# so running mkdocs alone tests something the workflow never builds. This runs all three
-# steps, and builds strictly, which turns any MkDocs warning into a failure.
+# surfaces here rather than after a push. MkDocs needs three generated inputs that are not in
+# the tree — the Javadoc staged into docs/javadoc, llms-full.txt concatenated from llms.txt,
+# and decisions.md indexed from DECISIONS.md — so running mkdocs alone tests something the
+# workflow never builds. This runs every step, and builds strictly, which turns any MkDocs
+# warning into a failure.
 #
 # The toolchain is not a build dependency of the library and is not pinned here for the same
 # reason the workflow does not pin it: both take whatever `pip install mkdocs-material mike`
@@ -47,6 +48,9 @@ fi
 
 echo "==> Generating docs/llms-full.txt"
 python3 scripts/build-llms-full.py .
+
+echo "==> Generating docs/decisions.md"
+PARSLEY_DOCS_REF="$(git rev-parse HEAD)" python3 scripts/build-decisions-index.py .
 
 if [ "$serve" = true ]; then
     exec .venv/bin/mkdocs serve --strict

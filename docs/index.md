@@ -42,12 +42,15 @@ var shipper = ProcessDefinition.named("shipper")
     .build();
 
 try (Parsley parsley = Parsley.start(config, shipper)) {
-    // runs until closed
+    parsley.awaitStopped(); // returns when a process stops, or when another thread closes
 }
 ```
 
 A handler receives the delivered message and a read view of state, and returns what it
-changes. It is given no producer, no timer and no clock.
+changes. It is given no producer, no timer and no clock. `Parsley.start` returns once each
+process has been started; `awaitStopped` is what keeps the application up, and
+`status()` says what each process holds and why, or why it stopped
+([Runtime](runtime.md#observing-a-process)).
 
 ## Getting it
 
@@ -86,6 +89,7 @@ Pick the release unless you are tracking unreleased work.
 | [State](state.md) | Ordering state, persistence and recovery |
 | [Failing closed](failing-closed.md) | What stops a process, and why the blast radius is the process |
 | [Runtime](runtime.md) | Wiring into Kafka Streams |
+| [Operations](operations.md) | Names, prerequisites, scaling, resets and sizing |
 | [Session consistency](session.md) | Carrying the causal frontier past the last consumer, out to clients |
 | [Wire format](wire-format.md) | The frozen on-wire definition of causal metadata |
 | [Verification](verification.md) | How the guarantee is tested |

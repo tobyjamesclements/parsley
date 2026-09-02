@@ -68,6 +68,10 @@ public final class ParsleyRuntime implements AutoCloseable {
             new java.util.concurrent.ConcurrentHashMap<>();
     private final List<KafkaStreams> streams = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final List<AdminFactsSource> factsSources = new java.util.concurrent.CopyOnWriteArrayList<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, ProcessDiagnostics> diagnosticsByProcess =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    /** Counted down when any process stops or this runtime closes (D111). */
+    private final java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(1);
 
     private final java.util.concurrent.ExecutorService factsExecutor =
             java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
@@ -85,6 +89,12 @@ public final class ParsleyRuntime implements AutoCloseable {
 
     /**
      * Resolves topics, builds a topology per process, and starts each one.
+     *
+     * <p>Returns once every process's Kafka Streams application has been started; the
+     * host then rebalances and initialises tasks on its own threads, so a refusal raised
+     * inside task initialisation — restored state that cannot be trusted, a channel gone
+     * while messages remain held — surfaces through {@link #status()} rather than from
+     * this call, which throws only for what the bootstrap itself can see.
      *
      * @param config      broker connection, identity and metadata budget
      * @param definitions the processes to run, with distinct names
@@ -133,22 +143,170 @@ public final class ParsleyRuntime implements AutoCloseable {
                         Math.max(config.factsInterval().toMillis() * 3, 3_000L),
                         () -> (System.nanoTime() - factsClockOrigin) / 1_000_000L);
                 runtime.factsSources.add(factsSource);
+                ProcessDiagnostics diagnostics = new ProcessDiagnostics();
+                runtime.diagnosticsByProcess.put(definition.name(), diagnostics);
                 KafkaStreams kafkaStreams = new KafkaStreams(
                         ProcessTopology.build(definition, topics, factsSource, config.factsInterval(),
-                                runtime.factsExecutor, config.metadataBudgetBytes()),
+                                runtime.factsExecutor, config.metadataBudgetBytes(), diagnostics),
                         streamsProperties(config, applicationId));
+                java.time.Duration memberBound = bootstrapMemberSessionTimeout(clientPropsFor(config));
+                // A refused join is replaced only while another instance's bootstrap member can
+                // still be lingering: twice its session timeout from here covers the pre-start
+                // wait below and one ungraceful exit. Past that, a member speaking another
+                // protocol under this application id is persistent, and the client stops with
+                // that diagnosis rather than replacing its thread forever (D108).
+                long collisionDeadline = System.nanoTime() + 2 * memberBound.toNanos();
                 kafkaStreams.setUncaughtExceptionHandler(exception -> {
-                    runtime.recordFailure(definition.name(), exception);
+                    if (shouldReplaceThread(exception, System.nanoTime(), collisionDeadline)) {
+                        // Another instance's bootstrap member is still in the group under the
+                        // consumer protocol, so this thread's join was refused. That member
+                        // leaves within milliseconds of committing; a replacement thread joins
+                        // after it, and nothing this thread did needs undoing — it never held a
+                        // task (D108).
+                        LOG.warn("process {}: the group join met another instance's bootstrap member;"
+                                + " replacing the stream thread to join again", definition.name());
+                        return StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse.REPLACE_THREAD;
+                    }
+                    runtime.recordFailure(definition.name(), isBootstrapMemberCollision(exception)
+                            ? persistentProtocolConflict(applicationId, memberBound.multipliedBy(2), exception)
+                            : exception);
                     return StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse.SHUTDOWN_CLIENT;
+                });
+                kafkaStreams.setStateListener((newState, oldState) -> {
+                    if (newState == KafkaStreams.State.ERROR || newState == KafkaStreams.State.NOT_RUNNING) {
+                        runtime.stopped.countDown();
+                    }
                 });
                 runtime.streams.add(kafkaStreams);
                 runtime.streamsByProcess.put(definition.name(), kafkaStreams);
+                runtime.awaitBootstrapMembersGone(applicationId, memberBound);
             }
             runtime.streams.forEach(KafkaStreams::start);
             return runtime;
         } catch (RuntimeException e) {
             runtime.close();
             throw e;
+        }
+    }
+
+    private static Map<String, Object> clientPropsFor(ParsleyConfig config) {
+        Map<String, Object> props = new HashMap<>(config.extraProperties());
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers());
+        return props;
+    }
+
+    /**
+     * Whether a stream thread's failure is the group-protocol collision a concurrent
+     * bootstrap of another instance provokes (D48's residual S1, closed by D108): the
+     * consumer refuses to join a group whose members speak another protocol, and treats
+     * that as fatal.
+     */
+    static boolean isBootstrapMemberCollision(Throwable exception) {
+        Throwable cause = exception;
+        for (int depth = 0; cause != null && depth < 64; depth++, cause = cause.getCause()) {
+            if (cause instanceof org.apache.kafka.common.errors.InconsistentGroupProtocolException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Whether a stream thread's failure is a collision worth replacing the thread for: the
+     * protocol conflict of {@link #isBootstrapMemberCollision}, seen before the deadline by
+     * which every other instance's bootstrap member must have left (D108). A conflict past
+     * the deadline is persistent, and the client stops with its diagnosis instead.
+     */
+    static boolean shouldReplaceThread(Throwable exception, long nowNanos, long deadlineNanos) {
+        return isBootstrapMemberCollision(exception) && nowNanos - deadlineNanos < 0;
+    }
+
+    /**
+     * The diagnosis for a group join still refused as a protocol conflict once no bootstrap
+     * member of another instance can remain: a member speaking another group protocol sits
+     * in the group under this application id — a foreign consumer configured with it, or a
+     * bootstrap member of an instance that never left — and the substrate, not the process,
+     * must be corrected (D108).
+     */
+    static ParsleyFailClosedException persistentProtocolConflict(String applicationId, java.time.Duration window,
+                                                                 Throwable cause) {
+        return new ParsleyFailClosedException(ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
+                applicationId + ": the group join has been refused as a protocol conflict for longer than " + window
+                        + ", so a member speaking another group protocol persists in this group: a consumer"
+                        + " configured with this application id as its group, or another instance's bootstrap"
+                        + " member that never left. Remove it, then restart this instance.", cause);
+    }
+
+    /**
+     * The session timeout the bootstrap member joins with (D48): the configured consumer
+     * session timeout in any Streams spelling, else the committer's ten-second default. An
+     * ungraceful bootstrap exit holds the group for exactly this long, which is what bounds
+     * both the pre-start wait and the window in which a refused join is replaced (D108).
+     */
+    static java.time.Duration bootstrapMemberSessionTimeout(Map<String, Object> clientProps) {
+        java.util.OptionalLong configured = GroupMembershipCommitter.configuredSessionTimeoutMillis(clientProps);
+        return configured.isEmpty()
+                ? java.time.Duration.ofSeconds(10)
+                : java.time.Duration.ofMillis(configured.getAsLong());
+    }
+
+    /**
+     * Waits, bounded, until no bootstrap member of another instance sits in the group
+     * before this instance's Kafka Streams joins it (D108). Two instances cold-starting
+     * together each join as a bootstrap member to commit initial positions; a Streams join
+     * arriving while the other's member is still present is refused as a protocol
+     * conflict. Members leave within milliseconds of committing, so the wait is usually
+     * nothing; an ungraceful exit holds its membership for the session timeout, which
+     * bounds this wait, after which the join proceeds and a refused thread is replaced.
+     */
+    private void awaitBootstrapMembersGone(String applicationId, java.time.Duration bound) {
+        boolean gone = awaitMembersGone(
+                () -> admin.describeConsumerGroups(List.of(applicationId)).describedGroups()
+                        .get(applicationId).get(TIMEOUT_SECONDS, TimeUnit.SECONDS).members().stream()
+                        .anyMatch(member -> member.clientId().startsWith(GroupMembershipCommitter.CLIENT_ID_PREFIX)),
+                System.nanoTime() + bound.toNanos(),
+                System::nanoTime,
+                millis -> {
+                    try {
+                        Thread.sleep(millis);
+                        return true;
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return false;
+                    }
+                });
+        if (!gone) {
+            LOG.warn("{}: another instance's bootstrap member is still in the group after {}; starting"
+                    + " anyway, a refused join replaces its thread", applicationId, bound);
+        }
+    }
+
+    /**
+     * The wait of {@link #awaitBootstrapMembersGone} over its seams: polls {@code memberPresent}
+     * every hundred milliseconds until it answers false, and returns true; returns false once
+     * {@code nanoTime} passes {@code deadlineNanos} with the member still present. A describe
+     * that fails is not evidence either way, and an interrupted sleep ends the wait; both
+     * return true, since the join itself is guarded by the thread replacement.
+     */
+    static boolean awaitMembersGone(java.util.concurrent.Callable<Boolean> memberPresent, long deadlineNanos,
+                                    java.util.function.LongSupplier nanoTime,
+                                    java.util.function.LongPredicate sleepMillis) {
+        while (true) {
+            boolean present;
+            try {
+                present = memberPresent.call();
+            } catch (Exception e) {
+                return true;
+            }
+            if (!present) {
+                return true;
+            }
+            if (nanoTime.getAsLong() - deadlineNanos > 0) {
+                return false;
+            }
+            if (!sleepMillis.test(100)) {
+                return true;
+            }
         }
     }
 
@@ -212,9 +370,29 @@ public final class ParsleyRuntime implements AutoCloseable {
     // per-diagnosis log lines directly; production reaches it only through the uncaught
     // exception handler start() installs.
     void recordFailure(String process, Throwable exception) {
-        failuresByProcess.merge(process, exception, ParsleyRuntime::preferFailClosedDiagnosis);
+        // A stop the substrate detected but that recurs identically on restart carries its
+        // reason into status() like an engine refusal (D109, Operational 1): a supervisor
+        // keyed on refusalReason must not read it as a transient and restart forever.
+        FailureDiagnosis diagnosis = classifyFailure(exception);
+        Throwable recorded = switch (diagnosis) {
+            case POSITIONS_DISCARDED_UNREAD -> new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
+                    "process " + process + ": the broker no longer retains this process's committed read"
+                            + " position; positions were discarded before they were read (SPEC Safety 8)."
+                            + " Reset the process's state and group offsets deliberately to proceed.",
+                    exception);
+            case RECORD_TOO_LARGE -> new ParsleyFailClosedException(
+                    ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
+                    "process " + process + ": a record exceeded a size limit, typically a held message's"
+                            + " persisted form against the ordering changelog's max.message.bytes; raise that"
+                            + " limit and, if needed, producer.max.request.size, then restart.",
+                    exception);
+            default -> exception;
+        };
+        failuresByProcess.merge(process, recorded, ParsleyRuntime::preferFailClosedDiagnosis);
+        stopped.countDown();
 
-        switch (classifyFailure(exception)) {
+        switch (diagnosis) {
             case POSITIONS_DISCARDED_UNREAD ->
                 LOG.error("process {}: the broker no longer retains this process's committed read position;"
                         + " positions were discarded before they were read, and auto.offset.reset=none stops"
@@ -272,9 +450,11 @@ public final class ParsleyRuntime implements AutoCloseable {
             Throwable failure = failuresByProcess.get(process);
             ParsleyFailClosedException refusal =
                     ParsleyFailClosedException.findIn(failure);
+            ProcessDiagnostics diagnostics = diagnosticsByProcess.get(process);
             statuses.put(process, new io.github.tobyjamesclements.parsley.api.ProcessStatus(process, mapped,
                     java.util.Optional.ofNullable(refusal).map(ParsleyFailClosedException::reason),
-                    java.util.Optional.ofNullable(failure).map(Throwable::getMessage)));
+                    java.util.Optional.ofNullable(failure).map(Throwable::getMessage),
+                    diagnostics == null ? List.of() : diagnostics.snapshot()));
         });
         return statuses;
     }
@@ -360,16 +540,46 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     private Map<String, TopicInfo> resolveTopics(Set<String> names) {
-        try {
-            Map<String, TopicDescription> descriptions =
-                    admin.describeTopics(names).allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            Map<String, TopicInfo> topics = new LinkedHashMap<>();
-            descriptions.forEach((name, description) -> topics.put(name, requireTopicId(name, description)));
-            return topics;
-        } catch (ParsleyFailClosedException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new IllegalStateException("declared topics could not be resolved; refusing to start", e);
+        return resolveTopicsCorroborated(
+                () -> admin.describeTopics(names).allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                java.time.Duration.ofMillis(500));
+    }
+
+    /** The describe of every declared topic, behind a seam so tests can script the answers. */
+    @FunctionalInterface
+    interface TopicsDescribe {
+        Map<String, TopicDescription> describe() throws Exception;
+    }
+
+    /**
+     * Resolves the declared topics, concluding that one does not exist only from three
+     * consistent unknown-topic answers half a second apart (D113): a describe is served from
+     * one broker's metadata view, which can lag a topic created moments before the start,
+     * and a start that trusted a single stale answer refused a topic that existed. Any other
+     * failure refuses at once, since nothing about it is a matter of corroboration. The same
+     * evidence standard D84 applies to the ordering changelog's describe.
+     */
+    static Map<String, TopicInfo> resolveTopicsCorroborated(TopicsDescribe describe, java.time.Duration backoff) {
+        for (int attempt = 0; ; attempt++) {
+            try {
+                Map<String, TopicInfo> topics = new LinkedHashMap<>();
+                describe.describe().forEach((name, description) -> topics.put(name, requireTopicId(name, description)));
+                return topics;
+            } catch (ParsleyFailClosedException e) {
+                throw e;
+            } catch (Exception e) {
+                boolean unknown = e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
+                if (!unknown || attempt == 2) {
+                    throw new IllegalStateException("declared topics could not be resolved; refusing to start", e);
+                }
+                try {
+                    Thread.sleep(backoff.toMillis());
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException(
+                            "interrupted while resolving the declared topics; refusing to start", interrupted);
+                }
+            }
         }
     }
 
@@ -475,6 +685,9 @@ public final class ParsleyRuntime implements AutoCloseable {
         static final ChangelogView ABSENT = new ChangelogView(Map.of(), java.util.Set.of());
     }
 
+    /** Stands in for a held message's body in the bootstrap view: present, content unread. */
+    static final byte[] HELD_PRESENCE = new byte[0];
+
     /**
      * Client properties for the bootstrap's ordering-changelog reader.
      *
@@ -537,7 +750,14 @@ public final class ParsleyRuntime implements AutoCloseable {
             } else {
                 stallDeadline = System.nanoTime() + stallTimeout.toNanos();
                 polled.forEach(record -> {
-                    latest.put(record.key(), record.value());
+                    // A held message's body is never read here — the view answers which
+                    // channels hold something, not what — so it is kept as a presence
+                    // marker, and a tombstone still clears it (D110). Retaining every blob
+                    // put the whole hold-back backlog on the heap at every start.
+                    byte[] value = record.value();
+                    latest.put(record.key(), value != null
+                            && io.github.tobyjamesclements.parsley.core.OrderingStateInspector.isHeldKey(record.key())
+                            ? HELD_PRESENCE : value);
                     partitionsWithRecords.add(record.partition());
                 });
             }
@@ -968,6 +1188,26 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     /**
+     * Waits until any process stops or this runtime closes.
+     *
+     * @throws InterruptedException if the waiting thread is interrupted
+     */
+    public void awaitStopped() throws InterruptedException {
+        stopped.await();
+    }
+
+    /**
+     * Waits, bounded, until any process stops or this runtime closes.
+     *
+     * @param timeout how long to wait
+     * @return {@code true} if a process stopped or the runtime closed within the timeout
+     * @throws InterruptedException if the waiting thread is interrupted
+     */
+    public boolean awaitStopped(java.time.Duration timeout) throws InterruptedException {
+        return stopped.await(timeout.toNanos(), TimeUnit.NANOSECONDS);
+    }
+
+    /**
      * Returns {@code true} while every process is running or rebalancing.
      *
      * @return {@code true} while every process is running or rebalancing
@@ -985,6 +1225,7 @@ public final class ParsleyRuntime implements AutoCloseable {
      */
     @Override
     public void close() {
+        stopped.countDown();
         for (KafkaStreams kafkaStreams : streams) {
             try {
                 if (!kafkaStreams.close(java.time.Duration.ofSeconds(TIMEOUT_SECONDS))) {
@@ -1008,7 +1249,9 @@ public final class ParsleyRuntime implements AutoCloseable {
             }
         }
         try {
-            admin.close();
+            if (admin != null) {
+                admin.close(java.time.Duration.ofSeconds(TIMEOUT_SECONDS));
+            }
         } catch (RuntimeException e) {
             LOG.warn("the admin client failed to close", e);
         }

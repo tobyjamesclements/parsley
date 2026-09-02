@@ -57,6 +57,26 @@ final class ProcessTopology {
     }
 
     /**
+     * The ordering store's builder: persistent, changelogged with compaction (D57), and
+     * cached (D110). Every received record merges its whole frontier — one write per
+     * channel whose position advanced — and every delivery merges the same channels into
+     * the delivered past, so without the cache a record cost about two writes per
+     * frontier channel to RocksDB and to the changelog. The cache holds the latest value
+     * per key and writes it through at commit, so the writes per commit interval are
+     * bounded by the keys touched rather than by records times channels; under
+     * exactly-once the flush precedes the commit, so what a step persists is unchanged.
+     *
+     * @return the store builder
+     */
+    static org.apache.kafka.streams.state.StoreBuilder<org.apache.kafka.streams.state.KeyValueStore<
+            org.apache.kafka.common.utils.Bytes, byte[]>> orderingStore() {
+        return Stores.keyValueStoreBuilder(
+                Stores.persistentKeyValueStore(ORDERING_STORE), Serdes.Bytes(), Serdes.ByteArray())
+                .withLoggingEnabled(Map.of("cleanup.policy", "compact"))
+                .withCachingEnabled();
+    }
+
+    /**
      * @param topic a received topic
      * @return the topology node name for its source
      */
@@ -84,8 +104,24 @@ final class ProcessTopology {
      */
     static Topology build(ProcessDefinition definition, Map<String, TopicInfo> topics,
                           FactsSource factsSource, Duration factsInterval) {
+        return build(definition, topics, factsSource, factsInterval, new ProcessDiagnostics());
+    }
+
+    /**
+     * Builds a topology with the default metadata budget, gathering facts on the calling
+     * thread and publishing task status into {@code diagnostics}.
+     *
+     * @param definition    the process to build
+     * @param topics        resolved identity and width for every topic it uses
+     * @param factsSource   where broker facts come from
+     * @param factsInterval how often to refresh them
+     * @param diagnostics   where each task publishes its status
+     * @return the topology
+     */
+    static Topology build(ProcessDefinition definition, Map<String, TopicInfo> topics,
+                          FactsSource factsSource, Duration factsInterval, ProcessDiagnostics diagnostics) {
         return build(definition, topics, factsSource, factsInterval, Runnable::run,
-                io.github.tobyjamesclements.parsley.core.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES);
+                io.github.tobyjamesclements.parsley.core.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES, diagnostics);
     }
 
     /**
@@ -103,6 +139,28 @@ final class ProcessTopology {
     static Topology build(ProcessDefinition definition, Map<String, TopicInfo> topics,
                           FactsSource factsSource, Duration factsInterval,
                           java.util.concurrent.Executor factsExecutor, int metadataBudgetBytes) {
+        return build(definition, topics, factsSource, factsInterval, factsExecutor, metadataBudgetBytes,
+                new ProcessDiagnostics());
+    }
+
+    /**
+     * Builds a topology.
+     *
+     * @param definition          the process to build
+     * @param topics              resolved identity and width for every topic it uses
+     * @param factsSource         where broker facts come from
+     * @param factsInterval       how often to refresh them
+     * @param factsExecutor       where the refresh runs, kept off the processing thread in
+     *                            production so a slow broker query cannot stall delivery
+     * @param metadataBudgetBytes the largest causal metadata a message may carry
+     * @param diagnostics         where each task publishes its status, read by
+     *                            {@code ParsleyRuntime.status()}
+     * @return the topology
+     */
+    static Topology build(ProcessDefinition definition, Map<String, TopicInfo> topics,
+                          FactsSource factsSource, Duration factsInterval,
+                          java.util.concurrent.Executor factsExecutor, int metadataBudgetBytes,
+                          ProcessDiagnostics diagnostics) {
         Topology topology = new Topology();
         String[] sources = definition.receivedTopics().stream().map(ProcessTopology::sourceName).toArray(String[]::new);
         for (String topic : definition.receivedTopics()) {
@@ -110,14 +168,12 @@ final class ProcessTopology {
         }
         topology.addProcessor(PROCESSOR,
                 () -> new ParsleyProcessor(definition, topics, factsSource, factsInterval,
-                        factsExecutor, metadataBudgetBytes), sources);
+                        factsExecutor, metadataBudgetBytes, diagnostics), sources);
         for (String topic : definition.sendTopics()) {
             topology.addSink(sinkName(topic), topic, new ByteArraySerializer(), new ByteArraySerializer(), PROCESSOR);
         }
 
-        topology.addStateStore(Stores.keyValueStoreBuilder(
-                Stores.persistentKeyValueStore(ORDERING_STORE), Serdes.Bytes(), Serdes.ByteArray())
-                .withLoggingEnabled(Map.of("cleanup.policy", "compact")), PROCESSOR);
+        topology.addStateStore(orderingStore(), PROCESSOR);
         for (Store<?, ?> store : definition.stores()) {
             topology.addStateStore(Stores.keyValueStoreBuilder(
                     Stores.persistentKeyValueStore(store.name()), Serdes.Bytes(), Serdes.ByteArray()), PROCESSOR);

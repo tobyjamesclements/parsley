@@ -187,7 +187,8 @@ public final class SimProcess {
         Instance instance = slot.instance();
 
         oracle.onFed(name, instance);
-        engine.onReceive(new ReceivedMessage(id, position, position, instance.key, instance.value, instance.headers));
+        engine.onReceive(new ReceivedMessage(id, position, instance.timestamp, instance.key, instance.value,
+                instance.headers));
         return FeedResult.FED;
     }
 
@@ -217,12 +218,21 @@ public final class SimProcess {
      * dead or recreated channel, truncated below the log start (the same excuses
      * {@link #send} grants expression), or on a channel this process does not receive and so
      * will never deliver. Judged at delivery time for the oracle's delivery-legality check.
+     *
+     * <p>A cause this process has received and still holds is never settled, whatever the
+     * world says of its channel: the process owes its delivery, and delivering an effect
+     * past it is the inversion D46 and D104 refuse. Without this the check was blind to
+     * exactly the shape those records exist for.
      */
     private Set<Instance> settledCauses(Instance instance) {
         Set<Instance> settled = new java.util.HashSet<>();
         for (Instance cause : instance.trueCauses) {
             if (!received.containsKey(cause.channel)) {
                 settled.add(cause);
+                continue;
+            }
+            java.util.OptionalLong head = engine.headPosition(cause.channel);
+            if (head.isPresent() && cause.position >= head.getAsLong()) {
                 continue;
             }
             SimWorld.SimChannel causeChannel = world.channel(cause.channel);
@@ -236,7 +246,7 @@ public final class SimProcess {
     private void assertContentFidelity(DeliverableMessage delivered, Instance instance) {
         if (!Arrays.equals(delivered.key(), instance.key)
                 || !Arrays.equals(delivered.value(), instance.value)
-                || delivered.timestamp() != instance.position
+                || delivered.timestamp() != instance.timestamp
                 || !headersEqual(delivered.headers(), instance.headers)) {
             throw new AssertionError(name + " delivered " + instance + " with altered content: key/value/timestamp/"
                     + "headers must reach application logic exactly as received (restored holds included)");

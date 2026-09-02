@@ -53,8 +53,8 @@ by reordering, skipping, or adding a timeout. Where the guarantee cannot be uphe
   no network, no Kafka (SPEC Structural 9). Keep it that way.
 - `…/parsley/api`, the public, statically-typed declaration surface: `Parsley`,
   `ParsleyConfig`, `ProcessDefinition`, `Channel`, `Store`, `Handler`, `Delivery`,
-  `Effects`, `StateReader`, `ProcessStatus`, and `KafkaNames`, the one spelling of the
-  topic-name rule every declared name satisfies.
+  `Effects`, `StateReader`, `ProcessStatus` with its per-task `TaskStatus`, and
+  `KafkaNames`, the one spelling of the topic-name rule every declared name satisfies.
 - `…/parsley/kafka`, the Kafka Streams adapter: byte topologies (`ProcessTopology`,
   `ParsleyProcessor`), position facts from the admin client (`AdminFactsSource`), the
   store over a Streams state store (`StreamsOrderingStore`), and the EOS lifecycle
@@ -72,8 +72,9 @@ prove it catches each violation class.
 
 ## Verifying anything
 
-- `./mvnw verify` is the full gate: **668 tests, green, roughly four minutes**. It must be
-  green at every commit, and it grows. It never shrinks.
+- `./mvnw verify` is the full gate: **the whole suite, green, roughly five minutes** (the
+  surefire summary prints the count; it was 716 at D113). It must be green at every commit,
+  and it grows. It never shrinks.
 - Three layers. Unit tests over the pure core and the `session` companion. A **simulation harness** driving real engines
   under a simulated host that honours the spec's Host obligations, over randomised topologies,
   interleavings, gaps from aborted transactions, crashes, restarts and offset rewinds,
@@ -107,9 +108,13 @@ var shipper = ProcessDefinition.named("shipper")
     .build();
 
 try (Parsley parsley = Parsley.start(config, shipper)) {
-    // runs until closed; a process that fails closed stays down until an operator intervenes
+    parsley.awaitStopped(); // returns when a process stops; a process that fails closed stays down
+    parsley.status().forEach((name, status) -> log.info("{}: {}", name, status));
 }
 ```
+
+`Parsley.start` returns once each process has been started, not once it is running; the
+wait is what keeps the application up, and `status()` afterwards says what stopped and why.
 
 `docs/index.md` carries the fuller version. `ProcessStatus` and `OrderingStateInspector` are the
 diagnosis surface when a process is holding or has stopped.

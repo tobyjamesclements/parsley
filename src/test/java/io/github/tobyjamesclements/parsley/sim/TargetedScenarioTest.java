@@ -16,8 +16,10 @@ import io.github.tobyjamesclements.parsley.core.HeaderKV;
 import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
 import io.github.tobyjamesclements.parsley.sim.SimWorld.SimChannel;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Pins individual scenarios the random sweep reaches only rarely.
@@ -494,6 +496,105 @@ class TargetedScenarioTest {
         assertEquals(List.of("X0"), rig.uidsDelivered("p"));
         rig.oracle.finalChecks();
         assertEquals(List.of(), rig.oracle.violations(), "no safety violation: the refusal preserved causal order");
+    }
+
+    /**
+     * Retention crosses a message a process still holds (D104). P receives {b, w, x} and holds
+     * X (x@0, expressing W on w, unfed at P); Q receives {x, t}, delivers X at once (it does
+     * not receive w) and sends to b. Retention then discards x@0 — exactly up to both
+     * readers' committed read position, which the fed-based check could not see — and Q's
+     * facts round prunes (x, 0) from its frontier as Structural 13 permits. Q delivers T and
+     * sends B, which expresses nothing about x. The rig stops before P's facts round: an
+     * honest engine refuses there; an engine ignoring truncation goes on to deliver B past
+     * held X.
+     */
+    static Rig retentionCrossesAHeldMessage(SabotageMode mode) {
+        Rig rig = new Rig(mode);
+        // The drain scans received channels in ChannelId order; the inversion needs b < x.
+        List<SimChannel> made = new java.util.ArrayList<>(List.of(
+                rig.channel("k0"), rig.channel("k1"), rig.channel("k2"), rig.channel("k3")));
+        made.sort(java.util.Comparator.comparing(SimChannel::id));
+        SimChannel b = made.get(0);
+        SimChannel w = made.get(1);
+        SimChannel x = made.get(2);
+        SimChannel t = made.get(3);
+        rig.chans.put("b", b);
+        rig.chans.put("w", w);
+        rig.chans.put("x", x);
+        rig.chans.put("t", t);
+
+        SimProcess q = rig.process("q", List.of(x, t), List.of(b), d -> d.uid.equals("T") ? List.of(b) : List.of());
+        SimProcess p = rig.process("p", List.of(b, w, x), List.of(), d -> List.of());
+
+        Instance wMsg = rig.external(w, "W");
+        rig.externalCausedBy(x, "X", wMsg, wMsg.position);
+
+        p.feedOne(x);
+        assertEquals(0, p.drain(), "staging: X waits on W at P");
+        p.commitStep();
+
+        q.feedOne(x);
+        assertEquals(1, q.drain(), "staging: Q does not receive w, so X delivers there at once");
+        q.commitStep();
+
+        rig.world.truncate(x, 1);
+        q.ingestFacts();
+        rig.external(t, "T");
+        q.feedOne(t);
+        assertEquals(1, q.drain(), "staging: T delivers and B is sent, expressing nothing about x");
+        q.commitStep();
+        return rig;
+    }
+
+    /**
+     * Retention discarding a held message fails the holder closed (D104): the facts round
+     * that shows the earliest retained position past the head of the hold-back buffer
+     * refuses with POSITIONS_DISCARDED_UNREAD, naming the held position, before any effect
+     * can be delivered past it. The fed-based check this replaces passed here — the held
+     * message had advanced fedUpTo past itself — and the effect B was then delivered before
+     * its cause X: the retention dual of D46's deleted channel.
+     */
+    @Test
+    void retentionDiscardingAHeldMessageFailsTheHolderClosed() {
+        Rig rig = retentionCrossesAHeldMessage(SabotageMode.NONE);
+        SimProcess p = rig.proc("p");
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class, p::ingestFacts,
+                "retention past a held message must stop the holder");
+        assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, e.reason());
+        assertTrue(e.getMessage().contains("held message at position 0"),
+                "the diagnosis names the held position, got: " + e.getMessage());
+        assertEquals(List.of(), rig.uidsDelivered("p"), "nothing was delivered past the hold");
+        rig.oracle.finalChecks();
+        assertEquals(List.of(), rig.oracle.violations(), "no safety violation: the refusal preserved causal order");
+    }
+
+    /**
+     * Retention up to exactly the held message's position is ordinary retention: the hold
+     * survives and delivers once its cause arrives. Pins the boundary of the D104 check so
+     * it cannot loosen into refusing a retained hold.
+     */
+    @Test
+    void retentionUpToExactlyTheHeldMessageIsRetention() {
+        Rig rig = new Rig(SabotageMode.NONE);
+        SimChannel w = rig.channel("w");
+        SimChannel x = rig.channel("x");
+        SimProcess p = rig.process("p", List.of(w, x), List.of(), d -> List.of());
+        rig.external(x, "X0");
+        Instance wMsg = rig.external(w, "W");
+        rig.externalCausedBy(x, "X1", wMsg, wMsg.position);
+        p.feedOne(x);
+        p.drain();
+        p.feedOne(x);
+        assertEquals(0, p.drain(), "staging: X1 waits on W");
+        p.commitStep();
+
+        rig.world.truncate(x, 1);
+        assertDoesNotThrow(p::ingestFacts, "retention up to the held message itself discards nothing owed");
+        p.feedOne(w);
+        p.drain();
+        p.commitStep();
+        assertEquals(List.of("X0", "W", "X1"), rig.uidsDelivered("p"));
+        rig.assertClean();
     }
 
     static Rig recreatedTopic(SabotageMode mode) {

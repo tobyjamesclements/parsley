@@ -37,10 +37,13 @@ of undecodable metadata, persistence of held messages, truncation handling, and 
 This is the evidence that the tests would catch a violation. `SabotageMetaTest` pins one
 targeted case per mode — for the refusal-disarming modes, both that the sabotage disarms the
 refusal and a pinned seed on which the oracle catches the resulting violation — and a
-randomised sweep records the margin by which the oracle catches each broken engine. One mode
-is the exception: `DELIVER_PAST_DEAD_HOLDS` is reached by no random seed (calibrated at 0 in
-300), so its oracle evidence is a deterministic scenario constructing the causal inversion,
-and it carries no sweep floor.
+randomised sweep records the margin by which the oracle catches each broken engine. Two modes
+are the exception: `DELIVER_PAST_DEAD_HOLDS` is reached by no random seed (calibrated at 0 in
+300), so its oracle evidence is a deterministic scenario constructing the causal inversion;
+and `TREAT_COVERED_FEED_AS_REPLAY` disarms a refusal the sweep cannot provoke, because the
+harness derives every read-position report from a process's own progress (D91), so its
+evidence is the honest and sabotaged engines staged side by side over the same
+report-then-feed contradiction. Neither carries a sweep floor.
 
 **Streams wiring.** `TopologyTestDriver` tests for the header format on the wire, byte-exact
 key and value pass-through, Schema-Registry-format serdes, and punctuator fact ingestion

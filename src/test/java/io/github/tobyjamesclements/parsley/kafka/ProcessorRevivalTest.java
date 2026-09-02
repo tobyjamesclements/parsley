@@ -43,11 +43,13 @@ import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
 import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
+import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
 import io.github.tobyjamesclements.parsley.core.PositionFacts;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -129,7 +131,7 @@ class ProcessorRevivalTest {
         facts = new ControllableFacts();
         executor = Executors.newSingleThreadExecutor();
         processor = new ParsleyProcessor(twoInputRecorder(delivered), TOPICS, facts,
-                Duration.ofMillis(100), executor, 64 * 1024);
+                Duration.ofMillis(100), executor, 64 * 1024, new ProcessDiagnostics());
         context = newContext();
         orderingStore = Stores.keyValueStoreBuilder(
                         Stores.inMemoryKeyValueStore(ProcessTopology.ORDERING_STORE),
@@ -395,5 +397,32 @@ class ProcessorRevivalTest {
                     return Effects.none();
                 })
                 .build();
+    }
+
+    /**
+     * A round already deposited is applied before the next record is fed, not left for the
+     * next punctuation. Recreation is affirmative evidence acted on immediately (D44), so a
+     * received channel's recreation reported by a completed gather must stop the very next
+     * record from being fed under the old identity; and a freeing report must release a hold
+     * ahead of the record that follows it, so what a step delivers does not depend on where
+     * the wall-clock punctuation happens to fall.
+     */
+    @Test
+    void aDepositedRoundIsAppliedBeforeTheNextRecordIsFed() throws Exception {
+        feedHeldEffect();
+        plantRound(currentIncarnation(), freeingFacts());
+        context.setRecordMetadata("in2", 0, 1L);
+        processor.process(new Record<>("C".getBytes(), "C".getBytes(), 0L, new RecordHeaders()));
+        assertEquals(List.of("B", "C"), delivered,
+                "the deposited report must free the hold before the following record is fed");
+
+        plantRound(currentIncarnation(), new PositionFacts(Map.of(), Map.of(), Set.of(), Set.of(IN1)));
+        context.setRecordMetadata("in1", 0, 0L);
+        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+                () -> processor.process(new Record<>("D".getBytes(), "D".getBytes(), 0L, new RecordHeaders())),
+                "a recreation already reported must refuse the next record, not feed it under the old identity");
+        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason(),
+                "the refusal names the recreation");
+        assertEquals(List.of("B", "C"), delivered, "nothing may be delivered under the recreated identity");
     }
 }

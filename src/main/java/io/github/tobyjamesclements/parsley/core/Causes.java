@@ -40,7 +40,8 @@ public final class Causes {
      *
      * @param byChannel per channel, the highest causal position
      * @return the frontier, canonically ordered
-     * @throws IllegalArgumentException if any position is null or negative
+     * @throws IllegalArgumentException if any position is null, negative, or the reserved
+     *         maximum {@code Long.MAX_VALUE}, which no channel can assign (D105)
      */
     public static Causes of(Map<ChannelId, Long> byChannel) {
         if (byChannel.isEmpty()) {
@@ -50,6 +51,10 @@ public final class Causes {
         byChannel.forEach((channel, position) -> {
             if (position == null || position < 0) {
                 throw new IllegalArgumentException("position must be non-negative on " + channel + ": " + position);
+            }
+            if (position == Long.MAX_VALUE) {
+                throw new IllegalArgumentException("position on " + channel + " is beyond any position a channel"
+                        + " can assign: " + position);
             }
             copy.put(channel, position);
         });

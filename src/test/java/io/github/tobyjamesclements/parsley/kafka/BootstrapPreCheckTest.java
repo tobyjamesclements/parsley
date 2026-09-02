@@ -183,4 +183,45 @@ class BootstrapPreCheckTest {
                 "only the first look is paid; the interrupt fires in the wait before any"
                         + " relist");
     }
+
+    /**
+     * The retention-boundary check on re-established read positions is pinned on both sides
+     * of its boundary, over coverage a real engine wrote. A re-established position of
+     * covered + 1 means nothing was discarded (the next unread position is exactly where
+     * retention now begins) and must start; covered + 2 means one position was discarded
+     * unread and must refuse (SPEC Safety 8; D74's {@code offset - 1 > covered} spelling).
+     * The broker test only reaches the wide gap, so an off-by-one that refuses every
+     * legitimate expiry restart at the exact boundary stays green there.
+     */
+    @Test
+    void reEstablishedPositionAtExactlyTheCoveredBoundaryStartsAndOnePastItRefuses() throws Exception {
+        java.util.UUID topicId = new java.util.UUID(300, 1);
+        io.github.tobyjamesclements.parsley.core.ChannelId channel =
+                new io.github.tobyjamesclements.parsley.core.ChannelId(topicId, 0);
+        io.github.tobyjamesclements.parsley.sim.MemoryOrderingStore store =
+                new io.github.tobyjamesclements.parsley.sim.MemoryOrderingStore();
+        io.github.tobyjamesclements.parsley.core.ProcessEngine engine =
+                new io.github.tobyjamesclements.parsley.core.ProcessEngine("p", Map.of(channel, "t"), store);
+        engine.onReceive(io.github.tobyjamesclements.parsley.core.EngineTestFactory.plain(channel, 41, "M"));
+        engine.markDelivered(channel, 41);
+        engine.flushHolds();
+        store.commit();
+        Map<byte[], byte[]> orderingState = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
+        store.scanPrefix(new byte[0], orderingState::put);
+        Map<String, TopicInfo> topics = Map.of("t", new TopicInfo(topicId, 1));
+
+        java.lang.reflect.Method check = ParsleyRuntime.class.getDeclaredMethod(
+                "refusePositionsDiscardedUnread", String.class, Map.class, Map.class, Map.class);
+        check.setAccessible(true);
+        check.invoke(null, APP, topics, orderingState, Map.of(P0, new OffsetAndMetadata(42)));
+
+        java.lang.reflect.InvocationTargetException refused = org.junit.jupiter.api.Assertions.assertThrows(
+                java.lang.reflect.InvocationTargetException.class,
+                () -> check.invoke(null, APP, topics, orderingState, Map.of(P0, new OffsetAndMetadata(43))),
+                "one position discarded beyond coverage must refuse");
+        assertTrue(refused.getCause() instanceof io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException e
+                        && e.reason() == io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.Reason
+                                .POSITIONS_DISCARDED_UNREAD,
+                () -> "expected POSITIONS_DISCARDED_UNREAD, got " + refused.getCause());
+    }
 }
