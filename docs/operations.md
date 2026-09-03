@@ -22,14 +22,15 @@ topic refuses the start.
 
 ## What Parsley asks the cluster
 
-Beyond the Streams application's own consumer and producer, each start and each facts round
-uses the admin client and two plain consumers: describing topics by name and by id, listing
-the earliest offsets under `read_committed`, listing the group's committed offsets, and — at
-start when initial positions are missing — joining the group as a short-lived bootstrap
-member to commit them under the group's generation fence. A facts round also assigns a
-groupless consumer to the partitions a held head waits on and polls a few times, a second at
-most. The ACLs those need
-are Describe on every declared topic and on the group, Read on the group and on the received
+Beyond the Streams application's own consumer and producer, each start uses the admin client
+and one plain consumer: describing topics by name and by id, listing the earliest offsets
+under `read_committed`, listing the group's committed offsets, and — when initial positions
+are missing — joining the group as a short-lived bootstrap member to commit them under the
+group's generation fence. In normal operation each facts round, every thirty seconds by
+default, describes the topics the process reads and names in its causal metadata and lists
+their earliest offsets; a task's initialisation also lists the group's committed offsets
+once. Nothing else is asked of the cluster while a process runs. The ACLs those need are
+Describe on every declared topic and on the group, Read on the group and on the received
 topics, and whatever Streams itself needs to create and write its changelogs. A Describe
 denial is treated as denial, never as a topic's deletion.
 

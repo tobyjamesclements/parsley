@@ -48,34 +48,38 @@ operation runs the topology without exactly-once semantics.
 
 ## Facts ingestion
 
-Inside the processor, a punctuator periodically ingests position facts: committed positions,
-log-start positions, and topic existence and identity. A name resolving to a different
-identity is affirmative evidence of recreation. An unknown identity is corroborated against
-its last-known name and debounced in time. An authorization denial is treated as denial
-rather than death.
+Task initialisation seeds the engine with one round of broker facts, and a punctuator then
+refreshes them every facts interval, thirty seconds by default. The seed round is the one
+round that carries the group's committed read positions: they are the baseline below which
+a channel this task has received nothing on counts as settled, which is what lets a process
+started at the latest position, or a channel that has just joined the received set, deliver
+effects whose causes lie below where it began reading. Every later round carries log-start
+positions and topic existence and identity, and nothing else. A name resolving to a
+different identity is affirmative evidence of recreation. An unknown identity is
+corroborated against its last-known name and debounced in time. An authorization denial is
+treated as denial rather than death.
+
+No delivery waits on a round. A cause always names the offset of a record some process
+delivered, never an aborted batch or a control record, so the receiver settles it by
+receiving that record, or the first surviving record above it; Kafka feeds a partition in
+offset order, and a receipt at offset *o* covers everything below *o*. The background rounds
+therefore only ever prune causal metadata and refuse: a cause below its channel's log start
+or on a deleted channel is discarded, and a held message that retention or deletion has
+overtaken stops the process. The interval sets how promptly those happen and how much admin
+traffic a process at rest generates; it is not a delivery latency.
 
 Gathering runs on one background thread per runtime. The punctuator snapshots the inputs,
 applies each completed round exactly once on the stream thread, and never blocks on the
 cluster. Every fact is a per-position lower bound, so a round applied one interval late
-releases and prunes exactly what a fresh one would.
+prunes exactly what a fresh one would.
 
-Where a task holds messages, the round also probes the channels their heads wait on, under
-`read_committed`, for a trailing run of positions that will never yield a message — an
-aborted transaction at the end of a channel, which the host's committed position never
-covers after a restart. The probe assigns every such channel at once and runs one bounded
-poll loop, so it costs about a second per round however many channels are hinted; a channel
-that itself holds messages is never probed, since its settled position is its head. The seed
-round at task initialisation does not probe, so initialisation never waits on the broker for
-it.
+The dead-topic and recreation verdicts mature over an unbroken window of three intervals,
+floored at three seconds, of affirmative answers; the window's continuity is judged on the
+time no round was asking, from one round's end to the next round's first question, so a
+round's own queries never restart it.
 
-The dead-topic and recreation verdicts mature over an unbroken window of affirmative
-answers; the window's continuity is judged on the time no round was asking, from one
-round's end to the next round's first question, so a round's own queries and probes never
-restart it.
-
-This punctuator is internal plumbing for ingesting the host's read-position reports, which is
-the only transport Kafka Streams offers for them. It delivers nothing that was not received
-from a channel, and the decision it triggers remains the pure function described in
+This punctuator is internal plumbing. It delivers nothing that was not received from a
+channel, and the decision it triggers remains the pure function described in
 [Delivery](delivery.md). Time never appears among that function's inputs. The public API
 offers no timers and no scheduled callbacks.
 

@@ -4747,3 +4747,134 @@ A genuinely missing topic is refused one second later than before.
 **Specification gap**
 
 None.
+
+### D114 — Read positions are reported at task initialisation only; the trailing-run probe goes (supersedes D6's out-of-band report and D35; corrects D107's scope; narrows D77's reachable case)
+
+**Context**
+
+D6 read the group's committed offsets every facts round as the host's read-position report,
+and D35 added a `read_committed` probe consumer to settle the trailing aborted run the
+committed offset never covers after a restart. D107 then batched the probe and hinted only
+the channels a held head waits on, because the probe's poll loops had grown into the
+dominant cost of a round and were restarting the dead-confirmation windows. The whole
+apparatus compensated for Kafka channels not being dense: aborted batches and control
+records occupy offsets that yield no record.
+
+A review of what can actually appear in a cause showed the compensation answers a question
+the protocol never asks. The frontier has exactly two merge sites in `ProcessEngine`:
+`markDelivered` merges the delivered record's own offset, and `onReceive` merges the causes
+a header carries, which are transitively the same thing. `fedUpTo` never enters the
+frontier — the `OVEREXPRESS` sabotage mode exists to prove that an engine which inflates its
+frontier with `fedUpTo` is caught. So under Assumption 13 every cause is the offset of a
+record that was committed and delivered somewhere. A receiver of that channel fetches it in
+offset order under `read_committed`, is fed that record, or the first surviving record above
+it if compaction removed it, and the receipt advances `fedUpTo` to at least the cause. The
+aborted batches and control records below the cause are skipped by the receipt; those above
+it are irrelevant to it. No out-of-band report is needed for liveness.
+
+Every test that exercised Liveness 3 confirmed this by forging its cause: the two
+end-to-end tests stamped a header naming the control record at offset 2 by hand, and the
+simulator scenario used `externalCausedBy` against positions appended with `appendDead`. No
+test exercised a protocol-produced never-yielding cause, because none can exist.
+
+**Decision**
+
+Three changes, and a cadence.
+
+1. **The probe goes.** `AdminFactsSource` builds no consumer. The hint plumbing
+   (`FactsSource#gather`'s `fedUpToHints`, `ParsleyProcessor#probeHints`) goes with it.
+2. **Committed offsets are listed by the seed round only.** `FactsSource#gatherForSeed` is
+   the one round that carries `committedNextRead`; `gather` carries log starts and identity
+   and never asks the coordinator. The seed's report is still needed, and not for
+   sparseness: a process started at LATEST, or a channel joining the received set, has
+   received nothing on a channel, and a cause below where it began reading would otherwise
+   hold until that channel's first receipt, which may never come (Structural 12's baseline).
+   That is one number per channel, known at task initialisation.
+3. **The engine is unchanged.** `PositionFacts` keeps `committedNextRead`, `onFacts` keeps
+   applying it, and the simulator host keeps reporting every round. The core proves the
+   engine under a host that honours Host obligation 2 in full; the Kafka host is one that
+   reports once, and the evidence table now says which host each pin speaks for.
+4. **The default facts interval is thirty seconds, from one.** With the report gone, no
+   delivery waits on a round: the background facts prune and refuse, and nothing they carry
+   releases a hold. The interval sets how promptly causal metadata shrinks, how promptly a
+   held message overtaken by retention or deletion is refused, and the admin traffic a
+   process at rest generates — two describes and one offset listing per round per process,
+   where before it was those plus an offset-fetch and up to a second of probe polling every
+   second. The dead-confirmation window stays three intervals floored at three seconds, so
+   a deleted topic is now confirmed in ninety seconds rather than three; the integration
+   suite pins its interval at half a second as before.
+
+Pinned by `ProcessEngineTest#aReceiptAboveAGapSettlesACauseInsideItWithoutAFactsRound` (the
+premise, at the engine: a receipt above a gap settles a cause inside it with no report),
+`AdminFactsSourceDegradationTest#onlyTheSeedRoundListsCommittedPositions` (a
+background round never lists offsets; the seed does), `TopologyWiringTest#theSeedRoundAloneCarriesTheCommittedPositionBaseline`
+(initialisation seeds exactly once, and the seed's baseline settles a channel nothing has
+been received on), `#anUnseededStartSettlesAChannelOnItsFirstReceipt` (a failed seed
+starts the task unseeded and the channel settles on its first receipt instead),
+`ApiValidationTest#theDefaultFactsIntervalIsThirtySeconds` (the cadence),
+`EndToEndIntegrationTest#aCauseStampedAcrossAnAbortedRunIsSettledByReceiptAlone`
+(the header on a real effect names the delivered offset above the aborted run, and the
+receiver orders across it with no report), and the two forged-cause tests that replace
+D6's and D35's: `#aForgedCauseOnATrailingAbortedRunHoldsUntilARealRecordAboveItArrives` and
+`#aForgedCauseOnATrailingAbortedRunHoldsAcrossARestartAndReleasesOnTheNextRecord`, which
+fail if the hold releases without a record or fails to release on one.
+`ProbeIdleChannelCostIntegrationTest` and `TopologyWiringTest#probeHintsNameOnlyTheChannelsAHeldHeadWaitsOn`
+are deleted with the code they bounded; `ClusterMutationPinningTest` loses the probe's pin.
+`FactsRoundTailContinuityTest` and `AdminFactsSourceDebounceTest`, which injected a round's
+tail and its late-stage failure through the committed-offsets call, now do so through the
+confirming describe (`confirmIdentities`), which is the round's last abortable stage.
+
+**Alternatives**
+
+* Keeping the per-round committed-offset read and dropping only the probe. Rejected: it
+  keeps `fedUpTo` within an interval of the consumer's position, which makes the engine's
+  no-holds truncation check as precise as before, but it keeps the report on the delivery
+  path in the operator's mental model and an admin call per round for a fact nothing acts
+  on. The cost it would have avoided is recorded below and accepted.
+* Handing the runtime's freshly committed initial positions to the topology instead of
+  listing offsets at the seed. Rejected: on a restart the store's `fedUpTo` already covers
+  them, and on a first start the seed's listing is the same number; the listing also
+  covers a channel joining under D31 and a partition added mid-run, which the runtime's
+  bootstrap only sees on its own start.
+* Narrowing the engine's no-holds log-start check to the held-head check of D104, on the
+  ground that the consumer's `auto.offset.reset=none` catches a genuinely discarded read
+  position exactly. Not taken here: D9 keeps that check as defence in depth and the
+  testable seam for Safety 8, and the sabotage sweep's `IGNORE_TRUNCATION` margin is
+  measured against it. The widened false-positive shape is recorded below; narrowing is a
+  separate decision if it bites.
+* Making the sim host report once, like Kafka. Rejected: the engine is specified against
+  Host obligation 2 as written, and the simulator is the evidence that the engine honours
+  a report when it gets one; the Kafka layer's own pins say what the Kafka host does.
+
+**Cost**
+
+* Net, the suite loses two tests and gains six.
+* `fedUpTo` on an idle channel now lags the consumer's true position by any trailing
+  never-yielding run until the next task initialisation. That matters in one place: the
+  engine's no-holds truncation check refuses when the log start exceeds `fedUpTo + 1`. A
+  topic that receives only aborted transactions for a retention period, enough to roll and
+  expire the segment holding the last real record, now stops a process holding nothing on
+  it with `POSITIONS_DISCARDED_UNREAD`, where the per-round report used to carry coverage
+  past the run. The consumer itself is at the log start or above and would have carried
+  on. D74 already accepted this refusal for a stopped process, where the committed offset
+  never covered the run either; this extends it to a running one. The remedy is the one D74
+  names, a deliberate reset, and the diagnosis names the positions.
+* `COVERED_POSITION_FED` (D77) is reachable only through the seed round now: a zombie task
+  initialising after its successor committed reads the successor's offsets and is then fed
+  the records its own consumer had buffered. The refusal, its message and its recovery are
+  unchanged; the background round can no longer raise it.
+* A forged cause on a never-yielding trailing position, which is outside Assumption 13,
+  holds until a record arrives above it rather than releasing within a facts interval.
+* Liveness 3 and Host obligation 2's trailing-run clause are met on this host by receipt,
+  not by report. The specification's wording still describes a report that advances past
+  trailing runs; see below.
+
+**Specification gap**
+
+Yes, and the author's to close. Liveness 3's premise — a cause naming a position that will
+never yield a message — is unreachable under Assumption 13 except through compaction, since
+a process only ever stamps delivered offsets; the spec could say so as a Structural
+criterion (a cause names a position some process delivered) and recast Liveness 3 around
+compaction. Host obligation 2's trailing-run clause then binds the seed's baseline and
+nothing after it. Neither change is made here: `SPEC.md` is read-only to this tree, and the
+implementation honours a report wherever the host supplies one.

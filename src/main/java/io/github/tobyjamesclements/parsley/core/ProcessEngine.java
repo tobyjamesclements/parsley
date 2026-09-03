@@ -437,9 +437,11 @@ public final class ProcessEngine {
     /**
      * Takes the broker's current view of the channels this process reads.
      *
-     * <p>Facts are what let a channel settle past positions that will never yield a message,
-     * such as those consumed by an aborted transaction. Without them a process holding for a
-     * cause on an idle channel could not tell whether the wait would end.
+     * <p>A read-position report settles a channel up to the position below it, which is
+     * how positions a process chose not to read, below where it began reading a channel,
+     * count as satisfied before its first receipt there. Log starts and topic existence
+     * prune the frontier and the delivered past, and refuse when the substrate has
+     * discarded or deleted a message this process still owes.
      *
      * @param facts the broker's view
      * @throws ParsleyFailClosedException if positions were discarded before this process read

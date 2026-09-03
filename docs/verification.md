@@ -53,9 +53,10 @@ through an injected facts source.
 exactly-once semantics, restart with state restore, restart after a state-dir wipe with the
 ordering state rebuilt entirely from its changelog, migration of a task holding an
 undelivered effect between two live instances, a full broker bounce with a held message
-neither lost nor freed by the outage, aborted-transaction gaps and trailing
-runs, log truncation, and a plain `read_committed` consumer decoding output with application
-serdes alone.
+neither lost nor freed by the outage, a cause stamped across an aborted-transaction gap and
+settled by receipt alone, a forged cause on a trailing aborted run holding until a record
+arrives above it, log truncation, and a plain `read_committed` consumer decoding output with
+application serdes alone.
 
 ## Standard of evidence
 

@@ -77,7 +77,7 @@ class AdminFactsSourceRoundAbortTest {
 
         PositionFacts nameGoneRound(long atMillis) throws Exception {
             nowMillis.set(atMillis);
-            return gather(Set.of(R), Map.of(), Set.of());
+            return gather(Set.of(R), Set.of());
         }
     }
 
@@ -169,7 +169,7 @@ class AdminFactsSourceRoundAbortTest {
         AtomicReference<Object> outcome = new AtomicReference<>();
         Thread gatherer = new Thread(() -> {
             try {
-                outcome.set(facts.gather(Set.of(R), Map.of(), Set.of()));
+                outcome.set(facts.gather(Set.of(R), Set.of()));
             } catch (Exception e) {
                 outcome.set(e);
             }

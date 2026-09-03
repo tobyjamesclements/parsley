@@ -60,15 +60,30 @@ class TopologyWiringTest {
     private static final ChannelId IN2 = new ChannelId(IN2_ID, 0);
 
     static final class FakeFacts implements FactsSource {
+        /** What background rounds answer. */
         volatile PositionFacts facts = PositionFacts.EMPTY;
-        /** The hints each round was given, in order, for the probe-hint pins. */
-        final List<Map<ChannelId, Long>> hintsSeen = new java.util.concurrent.CopyOnWriteArrayList<>();
+        /** What the seed round answers, or null to answer {@link #facts} there too. */
+        volatile PositionFacts seedFacts;
+        /** When set, the seed round fails as a slow or unreachable broker would. */
+        volatile boolean seedUnavailable;
+        final java.util.concurrent.atomic.AtomicInteger backgroundRounds = new java.util.concurrent.atomic.AtomicInteger();
+        final java.util.concurrent.atomic.AtomicInteger seedRounds = new java.util.concurrent.atomic.AtomicInteger();
 
         @Override
-        public PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
-                                    Set<ChannelId> frontierChannels) {
-            hintsSeen.add(Map.copyOf(fedUpToHints));
+        public PositionFacts gather(Set<ChannelId> receivedChannels, Set<ChannelId> frontierChannels) {
+            backgroundRounds.incrementAndGet();
             return facts;
+        }
+
+        @Override
+        public PositionFacts gatherForSeed(Set<ChannelId> receivedChannels, Set<ChannelId> frontierChannels)
+                throws Exception {
+            seedRounds.incrementAndGet();
+            if (seedUnavailable) {
+                throw new org.apache.kafka.common.errors.TimeoutException("broker unreachable for the seed");
+            }
+            PositionFacts seed = seedFacts;
+            return seed != null ? seed : facts;
         }
     }
 
@@ -137,34 +152,78 @@ class TopologyWiringTest {
     }
 
     /**
-     * Probe hints name the channels a held head waits on, and nothing else (D107): not the
-     * holding channel, whose settled position is its head whatever lies above it, and not
-     * an idle channel nothing waits on. The seed round at initialisation carries no hints
-     * at all, so task initialisation never probes on the stream thread.
+     * The seed round at task initialisation is the one round that carries the group's
+     * committed read positions, and it is asked exactly once; background rounds follow the
+     * punctuator and are asked through the other seam (D114). The seed's baseline is what
+     * settles a cause below where this task began reading a channel it has received
+     * nothing on: without it the effect would hold until that channel's first receipt.
      */
     @Test
-    void probeHintsNameOnlyTheChannelsAHeldHeadWaitsOn() {
+    void theSeedRoundAloneCarriesTheCommittedPositionBaseline() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
+        List<String> delivered = new ArrayList<>();
         ProcessDefinition definition = ProcessDefinition.named("p")
-                .receives(in1, (delivery, state) -> Effects.none())
-                .receives(in2, (delivery, state) -> Effects.none())
+                .receives(in1, (delivery, state) -> {
+                    delivered.add(delivery.value());
+                    return Effects.none();
+                })
+                .receives(in2, (delivery, state) -> {
+                    delivered.add(delivery.value());
+                    return Effects.none();
+                })
                 .build();
         FakeFacts facts = new FakeFacts();
-        facts.facts = new PositionFacts(Map.of(IN1, 2L, IN2, 0L), Map.of(), Set.of());
+        facts.seedFacts = new PositionFacts(Map.of(IN1, 2L), Map.of(), Set.of());
         newDriver(definition, facts);
-        assertEquals(List.of(Map.of()), facts.hintsSeen, "the seed round at initialisation carries no hints");
-
-        driver.advanceWallClockTime(Duration.ofMillis(200));
-        assertEquals(Map.of(), facts.hintsSeen.get(facts.hintsSeen.size() - 1),
-                "nothing held, nothing to probe");
+        assertEquals(1, facts.seedRounds.get(), "initialisation seeds exactly once");
+        assertEquals(0, facts.backgroundRounds.get(), "no background round runs inside initialisation");
 
         var headers = new RecordHeaders();
-        headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(IN1, 5L)))));
+        headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(IN1, 1L)))));
         input("in2").pipeInput(new TestRecord<>("k".getBytes(), "b".getBytes(), headers));
+        assertEquals(List.of("b"), delivered,
+                "a cause below the seed's committed position on in1 is settled with nothing received there");
+
         driver.advanceWallClockTime(Duration.ofMillis(200));
-        assertEquals(Map.of(IN1, 1L), facts.hintsSeen.get(facts.hintsSeen.size() - 1),
-                "the held head on in2 waits on in1, so in1 is hinted at its fed position and in2 is not");
+        assertTrue(facts.backgroundRounds.get() >= 1, "the punctuator runs background rounds");
+        assertEquals(1, facts.seedRounds.get(), "the seed is never asked again");
+    }
+
+    /**
+     * A task whose seed round fails starts unseeded rather than refusing (D54, D114): it has
+     * no committed-position baseline, so a cause on a channel it has received nothing on
+     * holds, and that channel settles on its first receipt there instead. Fails if a failed
+     * seed stops the task, releases the hold without a receipt, or leaves the channel
+     * unsettled once a record has arrived.
+     */
+    @Test
+    void anUnseededStartSettlesAChannelOnItsFirstReceipt() {
+        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
+        List<String> delivered = new ArrayList<>();
+        ProcessDefinition definition = ProcessDefinition.named("p")
+                .receives(in1, (delivery, state) -> {
+                    delivered.add(delivery.value());
+                    return Effects.none();
+                })
+                .receives(in2, (delivery, state) -> {
+                    delivered.add(delivery.value());
+                    return Effects.none();
+                })
+                .build();
+        FakeFacts facts = new FakeFacts();
+        facts.seedUnavailable = true;
+        newDriver(definition, facts);
+        assertEquals(1, facts.seedRounds.get(), "the seed was attempted");
+
+        var headers = new RecordHeaders();
+        headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(IN1, 0L)))));
+        input("in2").pipeInput(new TestRecord<>("k".getBytes(), "b".getBytes(), headers));
+        assertEquals(List.of(), delivered, "unseeded, nothing is known of in1 and the effect holds");
+
+        input("in1").pipeInput(new TestRecord<>("k".getBytes(), "a".getBytes()));
+        assertEquals(List.of("a", "b"), delivered, "in1's first receipt settles it and releases the effect");
     }
 
     /**

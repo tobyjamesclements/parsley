@@ -580,6 +580,18 @@ class ApiValidationTest {
         }
     }
 
+    /**
+     * The default facts interval is thirty seconds (D114). No delivery waits on a facts
+     * round — a cause is settled by receiving the record it names — so the interval paces
+     * only pruning, the retention and deletion refusals, and the admin traffic a process at
+     * rest generates; a one-second default would spend admin calls on facts nothing acts on.
+     * Fails if the default drifts back toward the delivery-path cadence it once had.
+     */
+    @Test
+    void theDefaultFactsIntervalIsThirtySeconds() {
+        assertEquals(Duration.ofSeconds(30), ParsleyConfig.builder("broker:9092", "p").build().factsInterval());
+    }
+
     /** A null facts interval is refused. */
     @Test
     void nullFactsIntervalIsRefused() {

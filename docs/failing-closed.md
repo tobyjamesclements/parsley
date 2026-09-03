@@ -25,7 +25,7 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 | `UNDECODABLE_METADATA` | Metadata present and not decodable |
 | `POSITIONS_DISCARDED_UNREAD` | Retention discarded positions this process has not delivered: a read position below the log-start offset, whether detected by the engine's log-start check mid-run or at start when a lost read position would be re-established beyond the ordering state's covered position; or a held message — received, not yet delivered — whose position the log start has crossed, since its senders may since have pruned it from the causes they express and its place in causal order can no longer be preserved (the retention counterpart of `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES`). Retention must cover hold-back time |
 | `OUT_OF_ORDER_FEED` | The host fed a channel out of position order within one execution, or fed a channel recorded as no longer existing |
-| `COVERED_POSITION_FED` | A message arrived at a position a read-position report had already covered as fed-or-never-arriving. Either the report was false, or this execution was superseded and a facts round observed its successor's committed progress — a superseded execution's step cannot commit, a restart recovers, and the refusal then does not recur |
+| `COVERED_POSITION_FED` | A message arrived at a position a read-position report had already covered as fed-or-never-arriving. Either the report was false, or this execution was superseded and its seed round observed its successor's committed progress — a superseded execution's step cannot commit, a restart recovers, and the refusal then does not recur |
 | `ORDERING_STATE_LOST` | Committed read positions the bootstrap did not write (a previous Kafka Streams execution's stamp, or bare external commits) exist while the ordering-changelog partition behind them holds no records — the topic absent, or its records purged, in whole or for that one partition. If a prior execution ran, the state of its most recent committed step has been lost and resuming would silently under-express every cause delivered before the loss |
 | `CHANNEL_REMOVED_WITH_HELD_MESSAGES` | A declaration removed a channel that still holds messages |
 | `CHANNEL_IDENTITY_CHANGED` | A topic resolves to an identity other than the one recorded |
@@ -77,6 +77,6 @@ it when it closes, so what the status shows is at most one interval old and neve
 this instance no longer runs.
 
 A head with no blockers listed is deliverable and goes on the next drain. A head whose
-blocker names a position the channel has settled below is waiting on that channel's feed or
-its read-position report; a blocker whose settled position is empty names a channel this
-task has heard nothing of yet.
+blocker names a position the channel has settled below is waiting on that channel's feed to
+reach the record the cause names; a blocker whose settled position is empty names a channel
+this task has heard nothing of yet.

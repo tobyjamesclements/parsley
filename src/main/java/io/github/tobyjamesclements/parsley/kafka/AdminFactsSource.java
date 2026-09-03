@@ -31,11 +31,15 @@ import io.github.tobyjamesclements.parsley.core.PositionFacts;
 /**
  * Gathers broker position facts through the admin client.
  *
- * <p>Two questions are asked of each channel: how far the log is readable under
- * {@code read_committed}, and how far retention has discarded. The first lets a channel
- * settle past positions no message will ever occupy, such as those consumed by an aborted
- * transaction. The second distinguishes positions this process chose not to read from
- * positions it can no longer read.
+ * <p>Every round asks two questions: how far retention has discarded on each channel, and
+ * whether each topic still exists under the identity the process knows. The first is what
+ * prunes causes that can no longer matter and refuses a held message the substrate has
+ * discarded; the second is what prunes causes on deleted channels and refuses a recreated
+ * one. The seed round at task initialisation also lists the group's committed read
+ * positions, the baseline below which positions this process chose not to read count as
+ * settled. No round reads positions after that: a cause always names a delivered record,
+ * so receiving that record is what settles it, whatever aborted batches or control records
+ * lie below it (D114).
  *
  * <p>A topic that cannot be described is treated as unavailable rather than gone. Absence of
  * evidence is not evidence of deletion, and treating it as such would settle a channel that
@@ -68,7 +72,6 @@ class AdminFactsSource implements FactsSource {
 
     private final Admin admin;
     private final String groupId;
-    private final Map<String, Object> probeConsumerProperties;
     private final Map<UUID, String> topicNamesById = new HashMap<>();
 
     /**
@@ -115,16 +118,13 @@ class AdminFactsSource implements FactsSource {
 
     private final long evictionMillis;
     private final java.util.function.LongSupplier clock;
-    private org.apache.kafka.clients.consumer.KafkaConsumer<byte[], byte[]> probe;
 
     private volatile boolean closed;
 
     AdminFactsSource(Admin admin, String groupId, Map<UUID, String> knownTopicNames,
-                     Map<String, Object> probeConsumerProperties,
                      long deadConfirmationMillis, java.util.function.LongSupplier clock) {
         this.admin = admin;
         this.groupId = groupId;
-        this.probeConsumerProperties = Map.copyOf(probeConsumerProperties);
         this.topicNamesById.putAll(knownTopicNames);
         this.pinnedIds = Set.copyOf(knownTopicNames.keySet());
         this.deadConfirmationMillis = deadConfirmationMillis;
@@ -133,11 +133,11 @@ class AdminFactsSource implements FactsSource {
     }
 
     @Override
-    public PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
-                                Set<ChannelId> frontierChannels) throws Exception {
+    public PositionFacts gather(Set<ChannelId> receivedChannels, Set<ChannelId> frontierChannels)
+            throws Exception {
         roundLock.lockInterruptibly();
         try {
-            return gatherRound(receivedChannels, fedUpToHints, frontierChannels);
+            return gatherRound(receivedChannels, frontierChannels, false);
         } finally {
             roundLock.unlock();
         }
@@ -148,25 +148,31 @@ class AdminFactsSource implements FactsSource {
      *
      * <p>Waits a bounded five seconds for the source; a task initialising while another
      * round grinds against a slow broker starts unseeded rather than stalling the stream
-     * thread, and the first background round arrives within an interval.
+     * thread. An unseeded task has no committed-position baseline, so a channel it has not
+     * received from yet settles on its first receipt there instead.
      */
     @Override
-    public PositionFacts gatherForSeed(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
-                                       Set<ChannelId> frontierChannels) throws Exception {
+    public PositionFacts gatherForSeed(Set<ChannelId> receivedChannels, Set<ChannelId> frontierChannels)
+            throws Exception {
         if (!roundLock.tryLock(SEED_WAIT_MILLIS, TimeUnit.MILLISECONDS)) {
-            LOG.warn("{}: facts source busy; starting unseeded, the first background round will seed instead",
-                    groupId);
+            LOG.warn("{}: facts source busy; starting unseeded, the baseline waits for each channel's first"
+                    + " receipt", groupId);
             return PositionFacts.EMPTY;
         }
         try {
-            return gatherRound(receivedChannels, fedUpToHints, frontierChannels);
+            return gatherRound(receivedChannels, frontierChannels, true);
         } finally {
             roundLock.unlock();
         }
     }
 
-    private PositionFacts gatherRound(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
-                                      Set<ChannelId> frontierChannels) throws Exception {
+    /**
+     * One round. {@code withCommittedPositions} is true for the seed only: the group's
+     * committed offsets are the baseline a task starts from, and after that they are never
+     * needed, since receipt settles every cause (D114).
+     */
+    private PositionFacts gatherRound(Set<ChannelId> receivedChannels, Set<ChannelId> frontierChannels,
+                                      boolean withCommittedPositions) throws Exception {
         if (closed) {
             return PositionFacts.EMPTY;
         }
@@ -239,8 +245,8 @@ class AdminFactsSource implements FactsSource {
 
         long now = clock.getAsLong();
         // Every window this round observed is stamped again when the round ends (D107): the
-        // offset wait, the committed fetch, the confirming describe and the probes all run
-        // after this sample, and D88's rule counts that as watched time, not blind time.
+        // offset wait, the seed's committed fetch and the confirming describe all run after
+        // this sample, and D88's rule counts that as watched time, not blind time.
         Set<UUID> observedThisRound = new HashSet<>();
         for (UUID id : unknownIds) {
             String lastKnown = topicNamesById.get(id);
@@ -353,12 +359,13 @@ class AdminFactsSource implements FactsSource {
             }
         }
 
-        // Both name-keyed queries — log starts above and the committed offsets here — run
-        // between the opening describe and this confirming one, so neither is attributed to
-        // a channel whose name-to-id binding did not hold across the query (D22).
-        Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> committed = committedOffsets();
+        // Both name-keyed queries — log starts above and the seed's committed offsets here —
+        // run between the opening describe and this confirming one, so neither is attributed
+        // to a channel whose name-to-id binding did not hold across the query (D22).
+        Map<TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> committed =
+                withCommittedPositions ? committedOffsets() : Map.of();
 
-        Map<UUID, String> confirmedNames = describeByIds(liveNames.keySet());
+        Map<UUID, String> confirmedNames = confirmIdentities(liveNames.keySet());
 
         Map<ChannelId, Long> committedNextRead = new TreeMap<>();
         Map<ChannelId, Long> logStart = new TreeMap<>();
@@ -388,7 +395,6 @@ class AdminFactsSource implements FactsSource {
                 }
             }
         }
-        probeTrailingRuns(fedUpToHints, partitionsByChannel, confirmedNames, committedNextRead);
         stampObservedWindows(observedThisRound);
         return new PositionFacts(committedNextRead, logStart, deadChannels, recreatedChannels);
     }
@@ -397,11 +403,8 @@ class AdminFactsSource implements FactsSource {
      * Marks the end of this round's watch on every window it observed (D107). Continuity
      * is judged from the previous round's last stamp to the next round's first question;
      * before this stamp the reference was the classification-time sample, so the offset
-     * wait, the committed fetch, the confirming describe and the probes — a second per
-     * idle probed channel — were charged as blind time, and a task holding across three
-     * received channels restarted its windows on every round and confirmed nothing.
-     * Maturity is still judged at classification time: a single long round cannot mature
-     * a window it opened.
+     * wait and the confirming describe were charged as blind time. Maturity is still
+     * judged at classification time: a single long round cannot mature a window it opened.
      */
     private void stampObservedWindows(Set<UUID> observedThisRound) {
         if (observedThisRound.isEmpty()) {
@@ -431,8 +434,8 @@ class AdminFactsSource implements FactsSource {
      * bracketing it isolated observations, exactly what D44's continuity requirement
      * rejects. Time a round spends inside its own queries is watched time: counting it
      * would let routine in-round latency — a leaderless partition burning the offset
-     * deadline, probe polls on idle channels — exceed the window every round and make a
-     * genuinely dead topic permanently unconfirmable (D88 corrects D85's spelling here).
+     * deadline — exceed the window every round and make a genuinely dead topic permanently
+     * unconfirmable (D88 corrects D85's spelling here).
      */
     private boolean observeWindow(Map<UUID, ConfirmationWindow> windows, UUID id, long askedAt, long now) {
         ConfirmationWindow window = windows.get(id);
@@ -533,169 +536,9 @@ class AdminFactsSource implements FactsSource {
     }
 
     /**
-     * Probes every hinted channel in one pass (D107): all eligible partitions are assigned
-     * to the probe consumer at once, each is sought to the position above its hint, and
-     * one bounded poll loop resolves each partition by the offset of its first record or by
-     * its position advancing past an aborted run. An idle channel — nothing above the
-     * hint — cost four polls per channel when probed one at a time, a second each,
-     * serialised on the runtime's one facts thread; batched, a round's probe costs one
-     * loop however many channels hold.
-     */
-    private void probeTrailingRuns(Map<ChannelId, Long> fedUpToHints,
-                                   Map<ChannelId, TopicPartition> partitionsByChannel,
-                                   Map<UUID, String> confirmedNames,
-                                   Map<ChannelId, Long> committedNextRead) {
-        Map<TopicPartition, ChannelId> toProbe = new HashMap<>();
-        Map<TopicPartition, Long> fedByPartition = new HashMap<>();
-        for (var hint : fedUpToHints.entrySet()) {
-            ChannelId channel = hint.getKey();
-            long fed = hint.getValue();
-            if (fed == Long.MAX_VALUE) {
-                continue;
-            }
-            TopicPartition tp = partitionsByChannel.get(channel);
-            Long committedOffset = committedNextRead.get(channel);
-            if (tp == null || !tp.topic().equals(confirmedNames.get(channel.topicId()))
-                    || (committedOffset != null && committedOffset > fed + 1)) {
-                continue;
-            }
-            toProbe.put(tp, channel);
-            fedByPartition.put(tp, fed);
-        }
-        if (toProbe.isEmpty()) {
-            return;
-        }
-        Map<ChannelId, Long> probed = new HashMap<>();
-        try {
-            var consumer = probeConsumer();
-            consumer.assign(toProbe.keySet());
-            // A partition paused in an earlier round keeps that state across assign().
-            consumer.resume(consumer.paused());
-            for (var entry : fedByPartition.entrySet()) {
-                consumer.seek(entry.getKey(), entry.getValue() + 1);
-            }
-            Set<TopicPartition> unresolved = new HashSet<>(toProbe.keySet());
-            for (int attempt = 0; attempt < 4 && !unresolved.isEmpty(); attempt++) {
-                org.apache.kafka.clients.consumer.ConsumerRecords<byte[], byte[]> polled;
-                try {
-                    polled = consumer.poll(java.time.Duration.ofMillis(250));
-                } catch (org.apache.kafka.clients.consumer.OffsetOutOfRangeException e) {
-                    // One hint lies below its channel's log start: the round's log-start fact
-                    // is what refuses that (D104); the other channels still settle.
-                    LOG.warn("{}: probe of {} lies below the log start; the log-start fact governs it", groupId,
-                            e.partitions());
-                    consumer.pause(e.partitions());
-                    unresolved.removeAll(e.partitions());
-                    continue;
-                } catch (org.apache.kafka.common.errors.TopicAuthorizationException e) {
-                    Set<TopicPartition> denied = new HashSet<>();
-                    for (TopicPartition tp : unresolved) {
-                        if (e.unauthorizedTopics().contains(tp.topic())) {
-                            denied.add(tp);
-                        }
-                    }
-                    LOG.warn("{}: probe of {} denied; the other channels still settle", groupId, denied);
-                    consumer.pause(denied);
-                    unresolved.removeAll(denied);
-                    continue;
-                }
-                for (TopicPartition tp : java.util.List.copyOf(unresolved)) {
-                    long fed = fedByPartition.get(tp);
-                    var records = polled.records(tp);
-                    long report = records.isEmpty() ? consumer.position(tp) : records.get(0).offset();
-                    if (report > fed + 1) {
-                        probed.put(toProbe.get(tp), report);
-                        unresolved.remove(tp);
-                    } else if (!records.isEmpty()) {
-                        // The next record sits at the hint's successor: nothing to settle.
-                        unresolved.remove(tp);
-                    }
-                }
-            }
-        } catch (org.apache.kafka.common.errors.InterruptException e) {
-            closeProbe();
-            return;
-        } catch (RuntimeException e) {
-            // What settled before the failure is applied below; the rest retries next round.
-            LOG.warn("{}: probe of {} failed; retrying next round", groupId, toProbe.keySet(), e);
-            closeProbe();
-        }
-        if (probed.isEmpty()) {
-            return;
-        }
-
-        Map<UUID, String> namesAfterProbe;
-        try {
-            Set<UUID> probedIds = new HashSet<>();
-            for (ChannelId channel : probed.keySet()) {
-                probedIds.add(channel.topicId());
-            }
-            namesAfterProbe = describeByIds(probedIds);
-        } catch (Exception e) {
-            LOG.warn("{}: could not confirm probed identities; discarding this round's probe results", groupId, e);
-            return;
-        }
-        probed.forEach((channel, report) -> {
-            TopicPartition tp = partitionsByChannel.get(channel);
-            if (tp != null && tp.topic().equals(namesAfterProbe.get(channel.topicId()))) {
-                LOG.info("{}: probe settled {} positions {}..{} as never-yielding",
-                        groupId, tp, fedUpToHints.get(channel) + 1, report - 1);
-                committedNextRead.merge(channel, report, Math::max);
-            }
-        });
-    }
-
-    /** Client properties for the trailing-run probe, with the guarantee-bearing pins applied. */
-    static Map<String, Object> probeProperties(Map<String, Object> base) {
-        Map<String, Object> props = new HashMap<>(base);
-        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ISOLATION_LEVEL_CONFIG, "read_committed");
-        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
-        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
-        // The probe wants one offset per partition, not the records: a small partition fetch
-        // keeps a batched probe over many partitions from pulling a megabyte from each, and
-        // the broker still returns a first batch larger than this bound (KIP-74), so a
-        // large record cannot stall it.
-        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.MAX_PARTITION_FETCH_BYTES_CONFIG, 16 * 1024);
-        // The probe's metadata refreshes must never create a topic: a received topic
-        // deleted mid-run has to run the dead-confirmation window, and an auto-created
-        // empty impostor under a new id would turn the designed settle into a spurious
-        // identity-changed stop manufactured by this client's own side effect (D82).
-        props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false);
-        props.remove(org.apache.kafka.clients.consumer.ConsumerConfig.GROUP_ID_CONFIG);
-        return props;
-    }
-
-    private org.apache.kafka.clients.consumer.KafkaConsumer<byte[], byte[]> probeConsumer() {
-        if (probe == null) {
-            probe = new org.apache.kafka.clients.consumer.KafkaConsumer<>(probeProperties(probeConsumerProperties),
-                    new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
-                    new org.apache.kafka.common.serialization.ByteArrayDeserializer());
-        }
-        return probe;
-    }
-
-    private void closeProbe() {
-        if (probe == null) {
-            return;
-        }
-        boolean interrupted = Thread.interrupted();
-        try {
-            probe.close(java.time.Duration.ofSeconds(5));
-        } catch (RuntimeException e) {
-            LOG.warn("{}: probe consumer close failed", groupId, e);
-        } finally {
-            probe = null;
-            if (interrupted) {
-                Thread.currentThread().interrupt();
-            }
-        }
-    }
-
-    /**
      * Stops the source. A round in flight — its queries bounded by their own timeouts, its
      * thread already interrupted by the runtime's executor shutdown — is given a bounded
-     * wait; past it the source is marked closed without the lock and the round's own
-     * interrupt handling closes the probe (D109, Operational 3).
+     * wait; past it the source is marked closed without the lock (D109, Operational 3).
      */
     void close() {
         boolean locked;
@@ -712,7 +555,6 @@ class AdminFactsSource implements FactsSource {
         }
         try {
             closed = true;
-            closeProbe();
         } finally {
             roundLock.unlock();
         }
@@ -728,6 +570,16 @@ class AdminFactsSource implements FactsSource {
     Map<Uuid, KafkaFuture<TopicDescription>> describeByIdFutures(Set<UUID> topicIds) {
         var uuids = topicIds.stream().map(TopicInfo::toKafkaUuid).toList();
         return admin.describeTopics(TopicCollection.ofTopicIds(uuids)).topicIdValues();
+    }
+
+    /**
+     * The confirming describe that closes D22's identity window, after the name-keyed
+     * queries. Its own seam because it is the round's last stage that can abort the round:
+     * a failure here leaves this round's name observations standing, where a failure in
+     * the opening describe clears them.
+     */
+    Map<UUID, String> confirmIdentities(Set<UUID> topicIds) throws Exception {
+        return describeByIds(topicIds);
     }
 
     Map<UUID, String> describeByIds(Set<UUID> topicIds) throws Exception {

@@ -312,9 +312,67 @@ class EndToEndIntegrationTest {
         }
     }
 
-    /** Cause on aborted positions resolves from read position reports. */
+    /**
+     * A cause a process stamps always names a delivered record's offset, never an aborted
+     * batch or a control record below it, so the receiver settles it by receiving that
+     * record and needs no read-position report across the gap (D114). Fails if the header
+     * on the effect names anything but the delivered offset, or if the receiver inverts
+     * the order across the aborted run.
+     */
     @Test
-    void causeOnAbortedPositionsResolvesFromReadPositionReports() throws Exception {
+    void aCauseStampedAcrossAnAbortedRunIsSettledByReceiptAlone() throws Exception {
+        createTopics("rc-a", "rc-b");
+        Channel<String, String> a = Channel.of("rc-a", Serdes.String(), Serdes.String());
+        Channel<String, String> b = Channel.of("rc-b", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition sender = ProcessDefinition.named("rcs")
+                .receives(a, (d, s) -> Effects.builder().send(b, d.key(), "S:" + d.value()).build())
+                .sends(b)
+                .build();
+        ProcessDefinition receiver = ProcessDefinition.named("rcp")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .receives(b, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("rc"), sender, receiver)) {
+            produce("rc-a", "k", "A0");
+            await("A0 and its effect delivered", () -> delivered.contains("S:A0"), Duration.ofSeconds(120));
+            produceAborted("rc-a", "ghost");
+            produce("rc-a", "k", "A1");
+            await("A1 and its effect delivered across the aborted run",
+                    () -> delivered.contains("S:A1"), Duration.ofSeconds(120));
+            assertTrue(parsley.healthy());
+        }
+
+        List<String> order = List.copyOf(delivered);
+        assertTrue(order.indexOf("A0") < order.indexOf("S:A0"), "cause before effect: " + order);
+        assertTrue(order.indexOf("A1") < order.indexOf("S:A1"), "cause before effect across the run: " + order);
+
+        ChannelId aChannel = new ChannelId(topicId("rc-a"), 0);
+        for (ConsumerRecord<String, String> record : readAllCommitted("rc-b")) {
+            Causes causes = CausesCodec.decode(record.headers().lastHeader(CausesCodec.HEADER_KEY).value());
+            long expected = record.value().equals("S:A0") ? 0L : 3L;
+            assertEquals(expected, causes.byChannel().get(aChannel),
+                    record.value() + " must name the delivered offset: A0 at 0, then the aborted record at 1"
+                            + " and its marker at 2, then A1 at 3");
+        }
+    }
+
+    /**
+     * A cause naming a position no process could have stamped — the control record closing
+     * an aborted transaction at the tail of a channel — holds until a real record above it
+     * is received, and no facts round releases it (D114): the substrate is asked for read
+     * positions at task initialisation only. Fails if the hold releases without a record,
+     * or if the record's receipt does not release it.
+     */
+    @Test
+    void aForgedCauseOnATrailingAbortedRunHoldsUntilARealRecordAboveItArrives() throws Exception {
         createTopics("gap-a", "gap-b");
         Channel<String, String> a = Channel.of("gap-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("gap-b", Serdes.String(), Serdes.String());
@@ -337,15 +395,31 @@ class EndToEndIntegrationTest {
             produceAborted("gap-a", "ghost");
             produce("gap-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("gap-a"), 0), 2L)));
 
-            await("B freed by the read-position report over the aborted trailing run",
-                    () -> delivered.contains("B"), Duration.ofSeconds(120));
+            Thread.sleep(5_000);
+            assertEquals(List.of("A0"), List.copyOf(delivered),
+                    "B names the marker at 2; nothing settles gap-a past 0 until a record arrives there");
+            assertEquals(1, parsley.status().get("pg").tasks().stream().mapToInt(t -> t.heldMessages()).sum(),
+                    "status shows the one held message");
+            assertTrue(parsley.healthy());
+
+            produce("gap-a", "k", "A1");
+            await("A1's receipt settles gap-a past the marker and releases B",
+                    () -> delivered.size() == 3, Duration.ofSeconds(120));
+            // B names offset 2, not A1's offset 3: A1's receipt alone settles the channel to 2,
+            // so B may deliver before or after A1 and only A0's place is fixed.
+            assertEquals("A0", List.copyOf(delivered).get(0));
+            assertEquals(java.util.Set.of("A0", "A1", "B"), java.util.Set.copyOf(delivered));
             assertTrue(parsley.healthy());
         }
     }
 
-    /** Cause on trailing aborted run resolves even after a restart. */
+    /**
+     * The restart shape D35 once probed for: the aborted run lands while the process is
+     * down, so the group's committed position never covers it. It now holds across the
+     * restart like any missing cause, and releases on the next real record (D114).
+     */
     @Test
-    void causeOnTrailingAbortedRunResolvesEvenAfterARestart() throws Exception {
+    void aForgedCauseOnATrailingAbortedRunHoldsAcrossARestartAndReleasesOnTheNextRecord() throws Exception {
         createTopics("gapr-a", "gapr-b");
         Channel<String, String> a = Channel.of("gapr-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("gapr-b", Serdes.String(), Serdes.String());
@@ -370,8 +444,16 @@ class EndToEndIntegrationTest {
         produce("gapr-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("gapr-a"), 0), 2L)));
 
         try (Parsley parsley = Parsley.start(config("gapr"), pg)) {
-            await("B freed after restart despite no record ever arriving on gapr-a again",
-                    () -> delivered.contains("B"), Duration.ofSeconds(120));
+            Thread.sleep(5_000);
+            assertEquals(List.of("A0"), List.copyOf(delivered),
+                    "after the restart B still holds: the seed's committed position is 1, below the marker");
+            assertTrue(parsley.healthy());
+
+            produce("gapr-a", "k", "A1");
+            await("A1's receipt releases B", () -> delivered.size() == 3, Duration.ofSeconds(120));
+            assertEquals("A0", List.copyOf(delivered).get(0));
+            assertEquals(java.util.Set.of("A0", "A1", "B"), java.util.Set.copyOf(delivered),
+                    "B names offset 2, so A1's receipt at 3 releases it whichever drains first");
             assertTrue(parsley.healthy());
         }
     }

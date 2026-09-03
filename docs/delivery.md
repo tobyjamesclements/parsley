@@ -12,10 +12,16 @@ execution the host feeds each partition in offset order, and Kafka's per-partiti
 means every earlier offset was already fed or will never yield a record. Aborted
 transactions, control records and compaction account for the positions that yield nothing.
 
-Read-position facts contribute the group's committed offset *n*, giving
+The seed round at task initialisation contributes the group's committed offset *n*, giving
 `fedUpTo(c) := max(fedUpTo(c), n - 1)`. A committed position asserts that everything below it
-was fed or never will be. This is what advances past a trailing run of positions that never
-arrive, and it rests on the substrate's own report rather than on elapsed time.
+was fed or never will be. This is the baseline for a channel the process has received
+nothing on: positions below where it began reading count as satisfied.
+
+Nothing else advances `fedUpTo`, and nothing else needs to. A cause names the offset of a
+record that some process delivered, so it is a real committed record; a receiver of that
+channel is fed it, or the first surviving record above it, and that receipt settles the
+cause. The aborted batches and control records between the receiver's last receipt and the
+cause are skipped by the receipt itself, and those above the cause are irrelevant to it.
 
 `held(c)` is the hold-back buffer: received but undelivered messages of *c*, in position
 order, persisted.
@@ -58,8 +64,8 @@ Determinism means replay after a restart reproduces the same order from the same
 ## Baselines and duplicates
 
 Before anything is known of *c*, `settled(c)` is undefined, and any dependency on *c* holds
-the message while *c* is received. The initial committed position established at first start
-initialises `fedUpTo(c)`, so positions below the first receipt count as already satisfied.
+the message while *c* is received. The committed position the seed round reads initialises
+`fedUpTo(c)`, so positions below the first receipt count as already satisfied.
 
 A record at an offset at or below `fedUpTo(c)` that is not in the buffer was already
 delivered in a committed step. The host re-feeds exactly those records whose read positions

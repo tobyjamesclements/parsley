@@ -139,7 +139,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                 Map<UUID, String> namesById = new HashMap<>();
                 topics.forEach((name, info) -> namesById.put(info.topicId(), name));
 
-                AdminFactsSource factsSource = new AdminFactsSource(admin, applicationId, namesById, adminProps,
+                AdminFactsSource factsSource = new AdminFactsSource(admin, applicationId, namesById,
                         Math.max(config.factsInterval().toMillis() * 3, 3_000L),
                         () -> (System.nanoTime() - factsClockOrigin) / 1_000_000L);
                 runtime.factsSources.add(factsSource);

@@ -118,7 +118,7 @@ class FramedPayloadWireFormatTest {
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "unused:9092");
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toString());
         driver = new TopologyTestDriver(ProcessTopology.build(
-                definition, topics, (received, hints, frontier) -> io.github.tobyjamesclements.parsley.core.PositionFacts.EMPTY,
+                definition, topics, (received, frontier) -> io.github.tobyjamesclements.parsley.core.PositionFacts.EMPTY,
                 Duration.ofSeconds(1)), props);
 
         byte[] valueIn = framed.serializer().serialize("framed-in", new Order("widget", 3));

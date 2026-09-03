@@ -60,10 +60,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * which closes the topology, so the processor sees {@code close()} followed by {@code init}.
  * {@code TopologyTestDriver} never does this, so these tests do it by hand — in that order,
  * and also as {@code init} without {@code close}, which other lifecycles may produce. A facts
- * round answers hints taken from the engine's in-memory feed positions, which include records
- * fed inside the transaction the revival rolled back; applying such a round to the restored
- * engine would assert rolled-back progress as durable truth and can deliver an effect before
- * its cause.
+ * round launched by the previous incarnation was gathered for that incarnation's snapshot of
+ * the frontier and received set, and the tests here plant rounds whose read positions run
+ * past what the restored engine has been fed; applying such a round to the restored engine
+ * would assert progress the revival rolled back as durable truth and can deliver an effect
+ * before its cause. Since D114 a real background round carries no read positions at all,
+ * so the guard is belt and braces; it is kept because the seed round does carry them and
+ * the cost of the guard is one comparison.
  *
  * <p>The stale-round defence is layered: a deposit guard on the executor thread, and the
  * authoritative incarnation check where the stream thread applies a round. The interleaving the
@@ -103,8 +106,7 @@ class ProcessorRevivalTest {
         }
 
         @Override
-        public PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
-                                    Set<ChannelId> frontierChannels) throws InterruptedException {
+        public PositionFacts gather(Set<ChannelId> receivedChannels, Set<ChannelId> frontierChannels) throws InterruptedException {
             calls.incrementAndGet();
             ParkedCall parked = armed.poll();
             if (parked != null) {

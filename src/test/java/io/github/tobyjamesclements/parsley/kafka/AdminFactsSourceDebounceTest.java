@@ -43,7 +43,7 @@ class AdminFactsSourceDebounceTest {
         volatile boolean failPositionsThisRound;
 
         private ScriptedFacts(AtomicLong nowMillis) {
-            super(null, "g", Map.of(Z_ID, "z"), Map.of(), WINDOW_MILLIS, nowMillis::get);
+            super(null, "g", Map.of(Z_ID, "z"), WINDOW_MILLIS, nowMillis::get);
             this.nowMillis = nowMillis;
         }
 
@@ -76,12 +76,13 @@ class AdminFactsSourceDebounceTest {
             return Map.of();
         }
 
+        /** The round's last abortable stage, after its name observations landed. */
         @Override
-        Map<TopicPartition, OffsetAndMetadata> committedOffsets() {
+        Map<UUID, String> confirmIdentities(Set<UUID> topicIds) throws Exception {
             if (failPositionsThisRound) {
-                throw new org.apache.kafka.common.errors.TimeoutException("group coordinator unreachable");
+                throw new org.apache.kafka.common.errors.TimeoutException("broker unreachable for the confirming describe");
             }
-            return Map.of();
+            return super.confirmIdentities(topicIds);
         }
 
         PositionFacts round(long atMillis, boolean nameGone) throws Exception {
@@ -91,14 +92,14 @@ class AdminFactsSourceDebounceTest {
         PositionFacts round(long atMillis, Object nameAnswer) throws Exception {
             nowMillis.set(atMillis);
             nameAnswerThisRound = nameAnswer;
-            return gather(Set.of(R), Map.of(), Set.of());
+            return gather(Set.of(R), Set.of());
         }
 
         void abortedRound(long atMillis) {
             nowMillis.set(atMillis);
             abortThisRound = true;
             try {
-                gather(Set.of(R), Map.of(), Set.of());
+                gather(Set.of(R), Set.of());
                 throw new AssertionError("the aborted round must propagate its failure");
             } catch (AssertionError e) {
                 throw e;
@@ -109,13 +110,13 @@ class AdminFactsSourceDebounceTest {
             }
         }
 
-        /** A round whose name observations land but whose position queries then fail. */
+        /** A round whose name observations land but whose confirming describe then fails. */
         void lateAbortedRound(long atMillis, boolean nameGone) {
             nowMillis.set(atMillis);
             nameAnswerThisRound = nameGone ? NameVerdict.NAME_GONE : null;
             failPositionsThisRound = true;
             try {
-                gather(Set.of(R), Map.of(), Set.of());
+                gather(Set.of(R), Set.of());
                 throw new AssertionError("the late-aborted round must propagate its failure");
             } catch (AssertionError e) {
                 throw e;
@@ -205,7 +206,7 @@ class AdminFactsSourceDebounceTest {
     /**
      * In-round latency is watched time, not a blind gap: a round that spends longer than
      * the whole window on its own queries — a leaderless partition burning the offset
-     * deadline, probe polls on idle channels — must not restart the window it is itself
+     * deadline — must not restart the window it is itself
      * corroborating, or a genuinely dead topic behind a slow broker could never be
      * confirmed at all (D88). Only time during which no round asked breaks continuity.
      */
@@ -347,8 +348,7 @@ class AdminFactsSourceDebounceTest {
     @Test
     void anIdWithNoKnownNameIsNeverConfirmedDeadOnTimeAlone() throws Exception {
         AtomicLong nowMillis = new AtomicLong();
-        AdminFactsSource facts = new AdminFactsSource(null, "g", Map.of(), Map.of(),
-                WINDOW_MILLIS, nowMillis::get) {
+        AdminFactsSource facts = new AdminFactsSource(null, "g", Map.of(), WINDOW_MILLIS, nowMillis::get) {
             @Override
             Map<UUID, String> describeByIds(Set<UUID> topicIds) {
                 return Map.of();
@@ -373,7 +373,7 @@ class AdminFactsSourceDebounceTest {
 
         for (long at = 0; at <= 40 * WINDOW_MILLIS; at += WINDOW_MILLIS) {
             nowMillis.set(at);
-            assertTrue(facts.gather(Set.of(), Map.of(), Set.of(R)).deadChannels().isEmpty(),
+            assertTrue(facts.gather(Set.of(), Set.of(R)).deadChannels().isEmpty(),
                     "a nameless id must never be confirmed dead by elapsed time alone (at " + at + "ms)");
         }
     }

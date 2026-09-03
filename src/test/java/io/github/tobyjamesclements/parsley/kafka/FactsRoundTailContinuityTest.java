@@ -2,7 +2,6 @@ package io.github.tobyjamesclements.parsley.kafka;
 
 import org.apache.kafka.clients.admin.ListOffsetsResult;
 import org.apache.kafka.clients.admin.OffsetSpec;
-import org.apache.kafka.clients.consumer.OffsetAndMetadata;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.Test;
@@ -24,14 +23,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Establishes that a round's own tail is watched time (D107). D88 judges a confirmation
  * window's continuity on the blind time between rounds and says in-round latency is
  * watched time; before D107 the reference stamp was taken at classification, before the
- * earliest-offset wait, the committed-offsets fetch, the confirming describe and the
- * trailing-run probes, so everything after it was charged to the next round as blind time.
- * A task holding across three received channels — a second of probe each — restarted its
- * windows on every round and never confirmed a deleted topic. The stamp now lands when the
- * round ends.
+ * earliest-offset wait and the confirming describe, so everything after it was charged to
+ * the next round as blind time, and a round whose tail reached the window length restarted
+ * its windows every time and never confirmed a deleted topic. The stamp now lands when the
+ * round ends. The tail here is the confirming describe; with D114 it and the offset wait
+ * are the whole of a background round's tail.
  */
 class FactsRoundTailContinuityTest {
-    private static final long WINDOW_MILLIS = 3_000; // max(3 x 1s factsInterval, 3s): production's floor
+    private static final long WINDOW_MILLIS = 3_000; // the window's floor, whatever the facts interval
 
     /** Topic z is gone by name; each round's post-sample tail takes {@code tailMillis} of clock. */
     static final class TailedRoundFacts extends AdminFactsSource {
@@ -41,7 +40,7 @@ class FactsRoundTailContinuityTest {
         final long tailMillis;
 
         TailedRoundFacts(AtomicLong clock, String group, long tailMillis) {
-            super(null, group, Map.of(Z_ID, "z"), Map.of(), WINDOW_MILLIS, clock::get);
+            super(null, group, Map.of(Z_ID, "z"), WINDOW_MILLIS, clock::get);
             this.clock = clock;
             this.tailMillis = tailMillis;
         }
@@ -66,19 +65,19 @@ class FactsRoundTailContinuityTest {
             return Map.of();
         }
 
-        /** Always called, after the round sampled {@code now}: stands for the offset wait and the probes. */
+        /** Always called, after the round sampled {@code now}: stands for the offset wait and the confirming describe. */
         @Override
-        Map<TopicPartition, OffsetAndMetadata> committedOffsets() {
+        Map<UUID, String> confirmIdentities(Set<UUID> topicIds) {
             clock.addAndGet(tailMillis);
             return Map.of();
         }
 
         PositionFacts round() throws Exception {
-            return gather(Set.of(R), Map.of(), Set.of());
+            return gather(Set.of(R), Set.of());
         }
     }
 
-    /** A 2s tail (two idle probed channels) confirms on the third back-to-back round. */
+    /** A 2s tail confirms on the third back-to-back round. */
     @Test
     void aTwoSecondTailConfirmsOnTheThirdBackToBackRound() throws Exception {
         TailedRoundFacts a = new TailedRoundFacts(new AtomicLong(), "a", 2_000);
@@ -89,11 +88,10 @@ class FactsRoundTailContinuityTest {
     }
 
     /**
-     * One process, one task, three received channels, something held: a 3s tail after the
-     * classification-time sample equals the whole window. Before D107 every round saw a
-     * blind gap of a full window and restarted it, and ten minutes of unbroken name-gone
-     * answers produced no verdict; the round-end stamp makes the tail watched time, so the
-     * second round matures the window.
+     * A 3s tail after the classification-time sample equals the whole window. Before D107
+     * every round saw a blind gap of a full window and restarted it, and ten minutes of
+     * unbroken name-gone answers produced no verdict; the round-end stamp makes the tail
+     * watched time, so the second round matures the window.
      */
     @Test
     void aThreeSecondTailStillConfirmsADeadTopicForALoneProcess() throws Exception {

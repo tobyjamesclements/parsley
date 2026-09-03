@@ -117,8 +117,7 @@ class BudgetWarningTest {
                 .receives(in1, (delivery, state) -> Effects.none())
                 .receives(in2, (delivery, state) -> Effects.none())
                 .build();
-        FactsSource facts = (Set<ChannelId> received, Map<ChannelId, Long> hints,
-                             Set<ChannelId> frontier) -> PositionFacts.EMPTY;
+        FactsSource facts = (Set<ChannelId> received, Set<ChannelId> frontier) -> PositionFacts.EMPTY;
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "budget-warning-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "unused:9092");

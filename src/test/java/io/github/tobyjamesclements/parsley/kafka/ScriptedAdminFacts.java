@@ -32,7 +32,7 @@ abstract class ScriptedAdminFacts extends AdminFactsSource {
     }
 
     private ScriptedAdminFacts(AtomicLong nowMillis) {
-        super(null, "g", Map.of(Z_ID, "z"), Map.of(), WINDOW_MILLIS, nowMillis::get);
+        super(null, "g", Map.of(Z_ID, "z"), WINDOW_MILLIS, nowMillis::get);
         this.nowMillis = nowMillis;
     }
 

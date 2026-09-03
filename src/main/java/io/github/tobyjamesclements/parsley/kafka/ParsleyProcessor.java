@@ -49,7 +49,10 @@ import io.github.tobyjamesclements.parsley.core.ReceivedMessage;
  * <p>Broker facts are refreshed on a separate executor, so a slow query cannot stall
  * delivery. The result is picked up on the next record or punctuation. Initialisation seeds
  * one round synchronously when the source is free, and waits only a bounded time when it is
- * not — a slow broker must not stack initialising tasks against the poll interval.
+ * not — a slow broker must not stack initialising tasks against the poll interval. No
+ * delivery waits on a round: the seed carries the committed-position baseline, and after
+ * that every cause is settled by receiving the record it names (D114). The background
+ * rounds carry retention and identity facts, which prune and refuse but never release.
  *
  * @see ProcessTopology
  */
@@ -80,12 +83,12 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private Cancellable factsPunctuator;
 
     /**
-     * A facts round tagged with the incarnation whose in-memory state produced its hints.
+     * A facts round tagged with the incarnation that launched it.
      *
      * <p>A round is applied only by the incarnation that launched it. A revived task restores
-     * the engine to committed state, so hints taken from the previous incarnation may describe
-     * feed progress that was rolled back; a probe answering them must not reach the restored
-     * engine as durable truth.
+     * the engine to committed state and re-seeds; a round the previous incarnation launched
+     * was gathered for a frontier and received set that incarnation snapshotted, and is
+     * discarded rather than reasoned about.
      */
     private record GatheredRound(long incarnation, io.github.tobyjamesclements.parsley.core.PositionFacts facts) {}
 
@@ -252,13 +255,12 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             return;
         }
         java.util.Set<ChannelId> received = java.util.Set.copyOf(engine.receivedChannelSet());
-        Map<ChannelId, Long> hints = probeHints();
         java.util.Set<ChannelId> frontier = engine.frontierSnapshot().byChannel().keySet();
         try {
             factsExecutor.execute(() -> {
                 try {
                     io.github.tobyjamesclements.parsley.core.PositionFacts facts =
-                            factsSource.gather(received, hints, frontier);
+                            factsSource.gather(received, frontier);
                     // Best-effort: a deposit racing a concurrent re-initialisation can still
                     // leave a superseded round behind; the apply-time incarnation check
                     // discards it.
@@ -365,43 +367,16 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     }
 
     /**
-     * The channels worth probing for a trailing never-yielding run: those a held head is
-     * waiting on (D107). A channel that itself holds messages settles at its head whatever
-     * the broker says above it, and a channel nothing waits on has nothing a probe could
-     * release, so probing every received channel — the previous rule — spent a second per
-     * idle channel per round for no fact anyone would act on.
+     * The seed round, on the stream thread inside task initialisation. It is the one round
+     * that carries the group's committed read positions: the baseline below which a channel
+     * this task has received nothing on counts as settled (SPEC Structural 12). A busy
+     * source yields an unseeded start, and the baseline then waits for each channel's first
+     * receipt.
      */
-    private Map<ChannelId, Long> probeHints() {
-        Map<ChannelId, Long> hints = new java.util.TreeMap<>();
-        if (engine.heldCountTotal() == 0) {
-            return hints;
-        }
-        for (ChannelId channel : engine.receivedChannelSet()) {
-            if (engine.heldCount(channel) == 0) {
-                continue;
-            }
-            engine.headVerdict(channel).ifPresent(verdict -> {
-                if (verdict instanceof Deliverability.Held held) {
-                    for (Deliverability.Blocker blocker : held.blockers()) {
-                        ChannelId blocked = blocker.channel();
-                        if (engine.heldCount(blocked) == 0) {
-                            engine.fedUpTo(blocked).ifPresent(fed -> hints.put(blocked, fed));
-                        }
-                    }
-                }
-            });
-        }
-        return hints;
-    }
-
     private void ingestFacts() {
-        // Unhinted on purpose (D107): the seed runs on the stream thread inside task
-        // initialisation, and a probe costs a poll loop per round. Facts are lower bounds,
-        // so the first background round probes instead, one interval later.
-        Map<ChannelId, Long> hints = Map.of();
         io.github.tobyjamesclements.parsley.core.PositionFacts facts;
         try {
-            facts = factsSource.gatherForSeed(engine.receivedChannelSet(), hints,
+            facts = factsSource.gatherForSeed(engine.receivedChannelSet(),
                     engine.frontierSnapshot().byChannel().keySet());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();

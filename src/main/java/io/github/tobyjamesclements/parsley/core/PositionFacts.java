@@ -6,9 +6,11 @@ import java.util.Set;
 /**
  * What the broker currently says about the channels a process reads.
  *
- * <p>These facts are what let the engine distinguish a cause that has not arrived yet from
- * one that never will. Without them a process holding for a cause on an idle channel could
- * not tell whether waiting would terminate.
+ * <p>Log starts and topic existence are what let the engine discard causes that can no
+ * longer matter and refuse when the substrate has discarded a message it still owes.
+ * Committed read positions are the host's read-position report: a baseline below which
+ * every position was fed or will never arrive as a message, which is what settles causes
+ * on a channel the process has not received from yet, or chose to start reading above.
  *
  * @param committedNextRead per channel, the first position not yet settled as readable
  * @param logStart          per channel, the earliest position still retained

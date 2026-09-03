@@ -345,12 +345,10 @@ class IdentityIntegrationTest {
         createTopics("zid-in");
         UUID inId = topicId("zid-in");
         ChannelId received = new ChannelId(inId, 0);
-        AdminFactsSource source = new AdminFactsSource(admin, "zid-group", Map.of(inId, "zid-in"),
-                Map.of("bootstrap.servers", cluster.bootstrapServers()), 1_000L,
+        AdminFactsSource source = new AdminFactsSource(admin, "zid-group", Map.of(inId, "zid-in"), 1_000L,
                 () -> System.nanoTime() / 1_000_000L);
 
-        var facts = source.gather(Set.of(received), Map.of(),
-                Set.of(new ChannelId(new UUID(0, 0), 0)));
+        var facts = source.gather(Set.of(received), Set.of(new ChannelId(new UUID(0, 0), 0)));
 
         assertEquals(Map.of(received, 0L), facts.logStart(),
                 "the round must still settle the live channel's facts despite the unanswerable frontier id");

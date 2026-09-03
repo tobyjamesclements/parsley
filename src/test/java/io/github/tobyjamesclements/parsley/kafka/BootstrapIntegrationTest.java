@@ -577,27 +577,27 @@ class BootstrapIntegrationTest {
         UUID xId = topicId("db-x");
         ChannelId xChannel = new ChannelId(xId, 0);
         long[] clock = {1_000_000L};
-        AdminFactsSource facts = new AdminFactsSource(admin, "db-group", Map.of(xId, "db-x"),
-                Map.of("bootstrap.servers", cluster.bootstrapServers()), 1_500, () -> clock[0]);
+        AdminFactsSource facts = new AdminFactsSource(admin, "db-group", Map.of(xId, "db-x"), 1_500,
+                () -> clock[0]);
 
-        assertTrue(facts.gather(Set.of(), Map.of(), Set.of(xChannel)).deadChannels().isEmpty(),
+        assertTrue(facts.gather(Set.of(), Set.of(xChannel)).deadChannels().isEmpty(),
                 "a live topic is never dead");
         admin.deleteTopics(List.of("db-x")).all().get(30, TimeUnit.SECONDS);
         await("the deletion to propagate", () -> {
             try {
-                return facts.gather(Set.of(), Map.of(), Set.of(xChannel)).logStart().isEmpty();
+                return facts.gather(Set.of(), Set.of(xChannel)).logStart().isEmpty();
             } catch (Exception e) {
                 return false;
             }
         }, Duration.ofSeconds(30));
 
-        assertTrue(facts.gather(Set.of(), Map.of(), Set.of(xChannel)).deadChannels().isEmpty(),
+        assertTrue(facts.gather(Set.of(), Set.of(xChannel)).deadChannels().isEmpty(),
                 "an unknown id younger than the confirmation window reports nothing");
         clock[0] += 1_000;
-        assertTrue(facts.gather(Set.of(), Map.of(), Set.of(xChannel)).deadChannels().isEmpty(),
+        assertTrue(facts.gather(Set.of(), Set.of(xChannel)).deadChannels().isEmpty(),
                 "still inside the window: still nothing");
         clock[0] += 1_000;
-        assertEquals(Set.of(xChannel), facts.gather(Set.of(), Map.of(), Set.of(xChannel)).deadChannels(),
+        assertEquals(Set.of(xChannel), facts.gather(Set.of(), Set.of(xChannel)).deadChannels(),
                 "corroborated-unknown for the whole window: dead, terminally");
         facts.close();
     }
@@ -609,16 +609,13 @@ class BootstrapIntegrationTest {
         produce("cf-x", null, "k", "r0");
         UUID xId = topicId("cf-x");
         ChannelId xChannel = new ChannelId(xId, 0);
-        Map<String, Object> props = Map.of("bootstrap.servers", cluster.bootstrapServers());
-
-        AdminFactsSource honest = new AdminFactsSource(admin, "cf-group", Map.of(xId, "cf-x"),
-                props, 1_500, () -> 0L);
-        assertEquals(0L, honest.gather(Set.of(), Map.of(), Set.of(xChannel)).logStart().get(xChannel),
+        AdminFactsSource honest = new AdminFactsSource(admin, "cf-group", Map.of(xId, "cf-x"), 1_500, () -> 0L);
+        assertEquals(0L, honest.gather(Set.of(), Set.of(xChannel)).logStart().get(xChannel),
                 "control: with a stable identity the log start is attributed");
         honest.close();
 
-        AdminFactsSource racedByRecreation = new AdminFactsSource(admin, "cf-group", Map.of(xId, "cf-x"),
-                props, 1_500, () -> 0L) {
+        AdminFactsSource racedByRecreation = new AdminFactsSource(admin, "cf-group", Map.of(xId, "cf-x"), 1_500,
+                () -> 0L) {
             private int describes;
 
             @Override
@@ -628,7 +625,7 @@ class BootstrapIntegrationTest {
                 return ++describes % 2 == 0 ? Map.of() : real;
             }
         };
-        assertTrue(racedByRecreation.gather(Set.of(), Map.of(), Set.of(xChannel)).logStart().isEmpty(),
+        assertTrue(racedByRecreation.gather(Set.of(), Set.of(xChannel)).logStart().isEmpty(),
                 "an identity that did not hold across the offsets query attributes nothing (D22)");
         racedByRecreation.close();
     }

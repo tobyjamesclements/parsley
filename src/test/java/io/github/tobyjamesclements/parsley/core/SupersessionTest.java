@@ -18,14 +18,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Establishes the mid-run supersession refusal against a real successor's committed progress.
  *
- * <p>D77's most reachable case for {@code COVERED_POSITION_FED} is routine supersession: a
- * session-timed-out execution's background facts round reads the group's committed offsets,
- * sees its successor's progress, and advances coverage past records still buffered in its own
- * consumer. {@code ProcessEngineTest#feedAtAReportCoveredPositionFailsClosedAsCoveredPositionFed}
+ * <p>D77's most reachable case for {@code COVERED_POSITION_FED} is routine supersession: an
+ * execution's seed round reads the group's committed offsets, sees a successor's progress,
+ * and advances coverage past records the host then feeds it anyway. {@code ProcessEngineTest#feedAtAReportCoveredPositionFailsClosedAsCoveredPositionFed}
  * pins the reason with a hand-written report; this class stages the condition structurally —
  * two lifetimes of one logical process over one committed ordering image, the report built
- * from the successor engine's actual state, the way {@code ParsleyProcessor#probeHints}
- * derives read positions from {@code ProcessEngine#fedUpTo} — and then pins the recovery
+ * from the successor engine's actual state, the way the Kafka host's seed round reads the
+ * group's committed offsets — and then pins the recovery
  * promise the refusal's message makes: a restart adopting the group's real progress delivers
  * normally, and the refusal does not recur (D77, D10).
  */
@@ -49,10 +48,9 @@ class SupersessionTest {
     }
 
     /**
-     * The read-position report a facts round gathers once the group's committed offsets are
+     * The read-position report a seed round gathers once the group's committed offsets are
      * the successor's: per channel, the successor's next unread position. Built by querying
-     * the successor engine, not from invented numbers, the way the Kafka host's probe hints
-     * are derived from {@code engine.fedUpTo}.
+     * the successor engine, not from invented numbers.
      */
     private static PositionFacts factsFromCommittedProgressOf(ProcessEngine successor) {
         Map<ChannelId, Long> committedNextRead = new HashMap<>();

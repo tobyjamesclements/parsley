@@ -43,13 +43,14 @@ class AdminFactsSourceDegradationTest {
      * and topic z's name now resolves to a different identity (recreated). */
     static final class DegradedFacts extends AdminFactsSource {
         final java.util.concurrent.atomic.AtomicLong nowMillis;
+        int committedListings;
 
         DegradedFacts() {
             this(new java.util.concurrent.atomic.AtomicLong());
         }
 
         private DegradedFacts(java.util.concurrent.atomic.AtomicLong clock) {
-            super(null, "g", Map.of(X_ID, "x", Y_ID, "y", Z_ID, "z"), Map.of(), 1_000L, clock::get);
+            super(null, "g", Map.of(X_ID, "x", Y_ID, "y", Z_ID, "z"), 1_000L, clock::get);
             this.nowMillis = clock;
         }
 
@@ -93,6 +94,7 @@ class AdminFactsSourceDegradationTest {
 
         @Override
         Map<TopicPartition, OffsetAndMetadata> committedOffsets() {
+            committedListings++;
             return Map.of(X0, new OffsetAndMetadata(2L), Y0, new OffsetAndMetadata(7L));
         }
     }
@@ -105,7 +107,7 @@ class AdminFactsSourceDegradationTest {
     void aBusySourceYieldsAnUnseededStartInsteadOfAStall() throws Exception {
         java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(1);
         java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
-        AdminFactsSource parked = new AdminFactsSource(null, "g", Map.of(X_ID, "x"), Map.of(), 1_000L, () -> 0L) {
+        AdminFactsSource parked = new AdminFactsSource(null, "g", Map.of(X_ID, "x"), 1_000L, () -> 0L) {
             @Override
             Map<UUID, String> describeByIds(Set<UUID> topicIds) throws Exception {
                 entered.countDown();
@@ -131,7 +133,7 @@ class AdminFactsSourceDegradationTest {
         };
         Thread background = new Thread(() -> {
             try {
-                parked.gather(Set.of(A), Map.of(), Set.of());
+                parked.gather(Set.of(A), Set.of());
             } catch (Exception e) {
                 Thread.currentThread().interrupt();
             }
@@ -139,7 +141,7 @@ class AdminFactsSourceDegradationTest {
         background.start();
         assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS), "the round must be in flight");
 
-        PositionFacts seed = parked.gatherForSeed(Set.of(A), Map.of(), Set.of());
+        PositionFacts seed = parked.gatherForSeed(Set.of(A), Set.of());
 
         assertEquals(PositionFacts.EMPTY, seed, "a busy source must yield an unseeded start, not a stall");
         release.countDown();
@@ -148,7 +150,7 @@ class AdminFactsSourceDegradationTest {
 
     @Test
     void oneUnavailablePartitionWithholdsOnlyItsOwnChannelsFacts() throws Exception {
-        PositionFacts facts = new DegradedFacts().gather(Set.of(A, B), Map.of(), Set.of());
+        PositionFacts facts = new DegradedFacts().gatherForSeed(Set.of(A, B), Set.of());
 
         assertEquals(Map.of(A, 2L, B, 7L), facts.committedNextRead(),
                 "read positions come from the coordinator and must survive the partition outage");
@@ -156,21 +158,41 @@ class AdminFactsSourceDegradationTest {
                 "only the unavailable partition's log-start fact is withheld");
     }
 
+    /**
+     * The group's committed positions are listed by the seed round and by nothing else
+     * (D114): a background round carries log starts and identity, and asks the coordinator
+     * for nothing. Fails if a background round starts listing positions again, or if the
+     * seed stops.
+     */
+    @Test
+    void onlyTheSeedRoundListsCommittedPositions() throws Exception {
+        DegradedFacts source = new DegradedFacts();
+
+        PositionFacts background = source.gather(Set.of(A, B), Set.of());
+        assertEquals(0, source.committedListings, "a background round never lists committed positions");
+        assertEquals(Map.of(), background.committedNextRead(), "and so reports none");
+        assertEquals(Map.of(B, 4L), background.logStart(), "while still carrying the log starts");
+
+        PositionFacts seed = source.gatherForSeed(Set.of(A, B), Set.of());
+        assertEquals(1, source.committedListings, "the seed lists them once");
+        assertEquals(Map.of(A, 2L, B, 7L), seed.committedNextRead());
+    }
+
     @Test
     void verdictsRideTheRoundThroughAPartitionOutage() throws Exception {
         DegradedFacts source = new DegradedFacts();
         // The recreated answer convicts only across a continuous confirmation window
         // (D85), so the verdict matures over three rounds before the outage assertion.
-        source.gather(Set.of(A, B, R), Map.of(), Set.of());
+        source.gather(Set.of(A, B, R), Set.of());
         source.nowMillis.set(500);
-        source.gather(Set.of(A, B, R), Map.of(), Set.of());
+        source.gather(Set.of(A, B, R), Set.of());
         source.nowMillis.set(1_000);
 
-        PositionFacts facts = source.gather(Set.of(A, B, R), Map.of(), Set.of());
+        PositionFacts facts = source.gather(Set.of(A, B, R), Set.of());
 
         assertEquals(Set.of(R), facts.recreatedChannels(),
                 "the recreated verdict must reach the engine despite the unavailable partition");
         assertTrue(facts.deadChannels().isEmpty());
-        assertEquals(Map.of(A, 2L, B, 7L), facts.committedNextRead());
+        assertEquals(Map.of(), facts.committedNextRead(), "a background round carries no read positions (D114)");
     }
 }

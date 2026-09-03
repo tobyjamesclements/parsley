@@ -50,6 +50,36 @@ class ProcessEngineTest {
         assertEquals(0, engine.heldCountTotal());
     }
 
+    /**
+     * A receipt covers every position below it, so a cause inside a gap the host skipped —
+     * an aborted batch, a control record — is settled by the next record's receipt with no
+     * facts round at all (Fault model 1, D5). This is what lets the Kafka host report read
+     * positions once, at task initialisation (D114): a cause names a delivered offset, and
+     * receiving that offset, or any surviving one above it, is the report. Fails if the
+     * engine ever requires a report, or contiguous positions, to settle across a gap.
+     */
+    @Test
+    void aReceiptAboveAGapSettlesACauseInsideItWithoutAFactsRound() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        engine.onReceive(plain(C1, 0, "A0"));
+        engine.markDelivered(C1, 0);
+        engine.onReceive(caused(C2, 0, "B", Map.of(C1, 2L)));
+        assertTrue(engine.nextDeliverable().isEmpty(), "positions 1 and 2 on c1 are unknown: B holds");
+
+        engine.onReceive(plain(C1, 3, "A1"));
+        Optional<DeliverableMessage> next = engine.nextDeliverable();
+        assertTrue(next.isPresent(), "c1's receipt at 3 settles 1 and 2 as fed-or-never, with no report");
+        assertEquals("A1", new String(next.get().value()),
+                "channels drain in ChannelId order and A1 itself is deliverable; the release of B follows");
+        engine.markDelivered(C1, 3);
+        Optional<DeliverableMessage> released = engine.nextDeliverable();
+        assertTrue(released.isPresent(), "B releases on the receipt alone");
+        assertEquals("B", new String(released.get().value()));
+        engine.markDelivered(C2, 0);
+        assertEquals(0, engine.heldCountTotal());
+    }
+
     /** Frontier merges receipt delivery and stamps emissions. */
     @Test
     void frontierMergesReceiptDeliveryAndStampsEmissions() throws Exception {

@@ -95,7 +95,7 @@ class AdminFactsSourceEvictionTest {
         /** A round asking about {@code channel} alone, with whatever answers are scripted. */
         PositionFacts round(long atMillis, ChannelId channel) throws Exception {
             nowMillis.set(atMillis);
-            return gather(Set.of(channel), Map.of(), Set.of());
+            return gather(Set.of(channel), Set.of());
         }
 
         /** A round in which {@code channel}'s topic resolves by id, teaching the source its name. */

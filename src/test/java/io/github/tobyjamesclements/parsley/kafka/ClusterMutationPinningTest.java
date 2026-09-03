@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /**
  * Establishes that every consumer the kafka layer builds by hand is pinned against
@@ -15,11 +14,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
  * <p>The consumer default leaves {@code allow.auto.create.topics} true, so a bare metadata
  * request against a broker with auto-create enabled silently creates the topic it asks
  * about. Kafka Streams pins the config false for every consumer it builds; these are the
- * three consumers Streams does not build for us, and each one's metadata requests touch a
+ * two consumers Streams does not build for us, and each one's metadata requests touch a
  * topic whose absence is load-bearing: the changelog reader's absence-of-records is the
- * prior-state evidence, the bootstrap member subscribes to just-resolved received topics,
- * and the probe asks about topics mid-deletion. An auto-created empty impostor at any of
- * those seams converts a refusal into a silent resume (D82).
+ * prior-state evidence, and the bootstrap member subscribes to just-resolved received
+ * topics. An auto-created empty impostor at either seam converts a refusal into a silent
+ * resume (D82). The facts source builds no consumer at all since D114.
  */
 class ClusterMutationPinningTest {
 
@@ -50,19 +49,5 @@ class ClusterMutationPinningTest {
                 "the member's metadata requests must never create a received topic");
         assertEquals("none", props.get(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG),
                 "the member must never invent a position");
-    }
-
-    /** The probe's metadata refreshes must never resurrect a deleted received topic. */
-    @Test
-    void probeConsumerNeverAutoCreatesAndNeverAutoResets() {
-        Map<String, Object> props = AdminFactsSource.probeProperties(Map.of("bootstrap.servers", "b:9092"));
-
-        assertEquals(false, props.get(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG),
-                "a probe metadata refresh must never re-create a topic mid-deletion; the"
-                        + " dead-confirmation window, not an auto-created impostor, decides its fate");
-        assertEquals("none", props.get(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG),
-                "a probe seek past the end must fail the probe, not reposition it");
-        assertFalse(props.containsKey(ConsumerConfig.GROUP_ID_CONFIG),
-                "the probe is groupless; it must never touch committed positions");
     }
 }

@@ -107,9 +107,9 @@ public final class ParsleyConfig {
     }
 
     /**
-     * Returns how often broker position facts are refreshed.
+     * Returns how often broker facts are refreshed.
      *
-     * @return how often broker position facts are refreshed
+     * @return how often broker facts are refreshed
      */
     public Duration factsInterval() {
         return factsInterval;
@@ -138,7 +138,7 @@ public final class ParsleyConfig {
         private final String bootstrapServers;
         private final String applicationIdPrefix;
         private String stateDir;
-        private Duration factsInterval = Duration.ofSeconds(1);
+        private Duration factsInterval = Duration.ofSeconds(30);
         private int metadataBudgetBytes = io.github.tobyjamesclements.parsley.core.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES;
         private final Map<String, Object> extraProperties = new LinkedHashMap<>();
 
@@ -173,11 +173,17 @@ public final class ParsleyConfig {
         }
 
         /**
-         * Sets how often broker position facts are refreshed.
+         * Sets how often broker facts are refreshed.
          *
-         * <p>Position facts are what let a process distinguish a cause that has not arrived
-         * yet from one that will never arrive, so this interval bounds how long a settled
-         * frontier takes to advance while a channel is idle.
+         * <p>A facts round asks the admin client for each channel's earliest retained
+         * position and each topic's identity. Those facts prune causes that can no longer
+         * matter and refuse a process whose held messages retention or deletion has
+         * overtaken; no delivery waits on them, since a cause is settled by receiving the
+         * record it names. The interval therefore bounds how promptly the causal metadata
+         * shrinks and how promptly such a refusal is raised, and sets the admin traffic a
+         * process at rest generates. The default is thirty seconds. The window over which a
+         * topic's deletion must be observed continuously before it is believed is three
+         * intervals, floored at three seconds.
          *
          * @param factsInterval a positive duration
          * @return this builder
