@@ -55,9 +55,10 @@ public final class OrderingStateInspector {
      * Recovers how far each channel was covered as fed-or-never-arriving.
      *
      * <p>This is the durable record of a previous execution's read coverage. A start that
-     * re-establishes a lost read position must not place it beyond this coverage plus one:
-     * doing so would fabricate a read-position report claiming positions were fed or will
-     * never arrive when they were simply discarded unread.
+     * must re-establish a lost read position resumes at this coverage plus one — the next
+     * position the previous execution would have read — and leaves it to the substrate's
+     * fetch, under {@code auto.offset.reset=none}, to refuse the position if retention has
+     * since discarded it (D115).
      *
      * <p>A channel settled on its topic's confirmed deletion carries the engine's
      * fed-to-end sentinel, {@code Long.MAX_VALUE} — everything covered. It is returned

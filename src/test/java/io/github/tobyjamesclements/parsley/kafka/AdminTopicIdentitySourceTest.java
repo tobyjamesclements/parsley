@@ -144,6 +144,32 @@ class AdminTopicIdentitySourceTest {
     }
 
     /**
+     * A recreation completing mid-corroboration is still a recreation: the name unknown and
+     * the name resolving to another id both say the id asked about is dead, so a run mixing
+     * them confirms death, and any answer that resolved the name elsewhere makes the verdict
+     * recreated rather than deleted — whichever order the answers arrive in. Reported alive,
+     * the task would run on under the dead incarnation, which is the one thing
+     * CHANNEL_IDENTITY_CHANGED exists to refuse.
+     */
+    @Test
+    void mixedNameGoneAndOtherIdAnswersConfirmRecreationInEitherOrder() throws Exception {
+        Map<String, Object> resolvesElsewhere = Map.of("orders", NEW_ID);
+        List<List<Map<String, Object>>> runs = List.of(
+                List.of(nameGone("orders"), nameGone("orders"), resolvesElsewhere),
+                List.of(resolvesElsewhere, nameGone("orders"), nameGone("orders")),
+                List.of(nameGone("orders"), resolvesElsewhere, nameGone("orders")));
+        for (List<Map<String, Object>> run : runs) {
+            Scripted source = new Scripted(Map.of(DECLARED_ID, "orders"));
+            run.forEach(source.byNameAnswers::add);
+            TopicIdentityVerdicts verdicts = source.resolve(Set.of(DECLARED_ID));
+            assertEquals(Set.of(DECLARED_ID), verdicts.recreated(),
+                    "a name that ever resolved to another id was recreated: " + run);
+            assertEquals(Set.of(), verdicts.deleted(), "recreated, not merely deleted: " + run);
+            assertEquals(3, source.namesAsked.size(), "every one of the three answers was taken: " + run);
+        }
+    }
+
+    /**
      * A verdict needs an unbroken run of consistent answers: one contrary answer among the
      * corroborating ones — a metadata view flapping, a topic reappearing — keeps the id
      * alive, and the source stops asking once nothing is left to confirm.

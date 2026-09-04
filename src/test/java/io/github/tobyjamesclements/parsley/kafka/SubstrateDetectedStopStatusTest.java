@@ -13,6 +13,7 @@ import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -66,9 +67,12 @@ class SubstrateDetectedStopStatusTest {
     @Test
     void aMissingSourceTopicStaysATransientWithNoRefusalReason() {
         ParsleyRuntime runtime = new ParsleyRuntime(null);
-        runtime.recordFailure("p", new StreamsException("stream thread died",
+        StreamsException stop = new StreamsException("stream thread died",
                 new org.apache.kafka.streams.errors.MissingSourceTopicException(
-                        "One or more source topics were missing during rebalance")));
+                        "One or more source topics were missing during rebalance"));
+        runtime.recordFailure("p", stop);
+        assertSame(stop, runtime.recordedFailure("p"),
+                "the stop is recorded — status() and awaitStopped depend on it — merely without a reason");
         assertNull(ParsleyFailClosedException.findIn(runtime.recordedFailure("p")),
                 "a missing source topic is diagnosed by the restart, so it must not read as a deliberate stop");
     }

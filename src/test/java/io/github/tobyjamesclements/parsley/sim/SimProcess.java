@@ -203,6 +203,23 @@ public final class SimProcess {
         oracle.commitStep(name, List.copyOf(stepAppends));
         stepAppends.clear();
         openTxn = null;
+        // SPEC Assumption 2, judged at the moment it is breached rather than at the end of
+        // the run: a step committed while a received channel is a dead incarnation whose
+        // name is bound to a live other id — the same judgement reportIdentity makes — is a
+        // step taken on the wrong log. An honest engine never gets here, since the identity
+        // report at its re-initialisation refuses; so every such commit is a catch, whatever
+        // the process does afterwards, and a fresh incarnation killed later on hides nothing.
+        for (SimChannel channel : received.values()) {
+            if (!channel.dead) {
+                continue;
+            }
+            SimChannel current = world.currentByName(channel.name);
+            if (current != null && !current.id().equals(channel.id())) {
+                oracle.flag("Assumption 2: " + name + " committed a step while its received topic ("
+                        + channel.name + ") had been deleted and recreated under the same name, without"
+                        + " failing closed");
+            }
+        }
     }
 
     /**

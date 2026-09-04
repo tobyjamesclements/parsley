@@ -210,6 +210,24 @@ public final class Scenario {
                             + " (earliest retained " + channel.logStart + " > covered position "
                             + covered + ") without failing closed");
                 }
+                if (channel.dead) {
+                    continue;
+                }
+                // Judged from world truth the host cannot launder: every committed record
+                // between where this process first read the channel and where it has
+                // committed reading to must have been fed to it. A host that reset its read
+                // position past discarded records (auto.offset.reset=earliest where D9 pins
+                // none) skipped records it owed, whatever its read position says now.
+                for (long q = p.initialNextRead(channel); q < p.committedNextRead(channel); q++) {
+                    if (world.slot(channel, q) instanceof SimWorld.MessageSlot slot
+                            && !oracle.committedFeedOf(p.name, slot.instance())) {
+                        violations.add("Safety 8: " + p.name + " sailed past discarded positions on "
+                                + channel.name + ": the record at " + q + " was never fed to it, yet it"
+                                + " committed reading on to " + p.committedNextRead(channel)
+                                + " without failing closed");
+                        break;
+                    }
+                }
             }
         }
         for (CorruptSpot spot : corrupted) {

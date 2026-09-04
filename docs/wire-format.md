@@ -70,16 +70,19 @@ Every constraint below is mandatory. Violating any one makes the value undecodab
    records a deleted channel with it. (A reader-side tightening in the manner of
    constraint 5: no conforming writer has ever produced such a pair; D105 records the
    reasoning.)
-8. `position` is the offset of a committed record on that channel: a record the substrate
-   has stored and serves to a `read_committed` reader — never a control record, a record
-   of an aborted transaction, or an offset at or beyond the log's end. A Parsley process
-   satisfies this by construction, since its frontier holds only positions it received
-   records at and positions it learned from received metadata, and so does every
-   `CausalPast` token. A writer naming any other position — the log-end offset is the
-   natural naive stamp — is out of contract: no reader is obliged to settle it, and a
-   receiver holds the message, visibly in its status, until a later record on that
-   channel settles the position (D115). Unlike constraints 1–7 this one is not decidable
-   from the bytes, so no reader refuses it; it is the contract a writer signs.
+8. `position` is the offset at which a committed record was stored on that channel: a
+   record the substrate served to a `read_committed` reader, whether or not retention
+   still holds it — never a control record, a record of an aborted transaction, or an
+   offset at or beyond the log's end at the time of stamping. A Parsley process satisfies
+   this by construction, since its frontier holds only positions it received records at
+   and positions it learned from received metadata; a `CausalPast` token satisfies it when
+   the write tier merges only coordinates the broker's acknowledgement confirmed, as
+   [Session consistency](session.md) requires. A writer naming any other position — the
+   log-end offset is the natural naive stamp — is out of contract: no reader is obliged
+   to settle it, and a receiver holds the message, visibly in its status, until a later
+   record on that channel settles the position (D115). Unlike constraints 1–7 this one is
+   not decidable from the bytes, so no reader refuses it; it is the contract a writer
+   signs.
 
 ## Meaning
 
@@ -102,10 +105,12 @@ A receiver may deliver a message only when, for every entry naming a channel in 
 received-channel set, every position on that channel up to and including the entry's position
 has either been delivered at that receiver or will never yield a message it receives. Receipt
 of a record at an offset establishes that for every offset below it, since a channel is fed in
-order; the channel's deletion establishes it for every offset; and the position the receiver
-started reading the channel from establishes it for every offset below that. Nothing else
-does, and an entry naming an offset no committed record occupies (constraint 8) holds the
-message until a later record on the channel settles it. Entries naming channels outside the
+order; the channel's deletion establishes it for every offset; the position the receiver
+started reading the channel from establishes it for every offset below that; and the
+receiver's own delivered causal past establishes it, for a channel joining its received set,
+for every offset at or below what it had already delivered behind. Nothing else does, and an
+entry naming an offset no committed record occupies (constraint 8) holds the message until a
+later record on the channel settles it. Entries naming channels outside the
 received-channel set impose no constraint there, which includes dead incarnations of
 recreated topics. The receiver still re-expresses them on its own sends while they can still
 matter.

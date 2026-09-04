@@ -47,6 +47,14 @@ class ProcessEngineTest {
         assertTrue(engine.nextDeliverable().isEmpty(), "c1@3 has not been received");
 
         engine.onReceive(plain(C1, 3, "A"));
+        Deliverability.Verdict effectWhileCauseHeld = engine.headVerdict(C2).orElseThrow();
+        assertTrue(effectWhileCauseHeld instanceof Deliverability.Held,
+                "received but undelivered, the cause still holds the effect: " + effectWhileCauseHeld);
+        Deliverability.Blocker blocker = ((Deliverability.Held) effectWhileCauseHeld).blockers().get(0);
+        assertEquals(C1, blocker.channel());
+        assertEquals(3L, blocker.requiredPosition());
+        assertEquals(java.util.OptionalLong.of(2), blocker.settledPosition(),
+                "the settled view stops below the held head, so c1@3 is not yet settled");
         DeliverableMessage a = engine.nextDeliverable().orElseThrow();
         assertEquals(C1, a.channel(), "the cause is offered first: the effect still waits behind the held cause");
         engine.markDelivered(C1, 3);
@@ -55,6 +63,33 @@ class ProcessEngineTest {
         assertEquals("B", new String(next.get().value()));
         engine.markDelivered(C2, 0);
         assertEquals(0, engine.heldCountTotal());
+    }
+
+    /**
+     * A cause naming a position no record occupies — an aborted transaction's slot, a
+     * marker — is settled by the receipt of the next record on the channel and by nothing
+     * before it (SPEC Liveness 3 as D115 restates it): a record below the named position
+     * leaves the effect held with the gap still open, and the record after it, once
+     * delivered, releases the effect without the named position ever being fed.
+     */
+    @Test
+    void aGapBelowAReceivedRecordIsSettledByThatReceiptAndNothingBeforeIt() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        engine.onReceive(caused(C2, 0, "B", Map.of(C1, 2L)));
+        engine.onReceive(plain(C1, 1, "A1"));
+        engine.markDelivered(C1, 1);
+        Deliverability.Verdict verdict = engine.headVerdict(C2).orElseThrow();
+        assertTrue(verdict instanceof Deliverability.Held, "c1@1 settles nothing at or above 2: " + verdict);
+        assertEquals(java.util.OptionalLong.of(1),
+                ((Deliverability.Held) verdict).blockers().get(0).settledPosition());
+        assertTrue(engine.nextDeliverable().isEmpty(), "nothing but a record at or past c1@2 releases the effect");
+
+        engine.onReceive(plain(C1, 3, "A3"));
+        engine.markDelivered(C1, 3);
+        Optional<DeliverableMessage> next = engine.nextDeliverable();
+        assertTrue(next.isPresent(), "receipt of c1@3 settles 2 as never yielding a message");
+        assertEquals("B", new String(next.get().value()));
     }
 
     /**
@@ -439,6 +474,12 @@ class ProcessEngineTest {
         engine.onIdentityReport(IdentityReport.NONE);
         assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)), CausesCodec.decode(engine.causesHeaderForEmission()),
                 "a report naming nothing prunes nothing");
+
+        engine.flushHolds();
+        store.commit();
+        ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
+        assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)), CausesCodec.decode(restarted.causesHeaderForEmission()),
+                "the prune reached the store: a restart does not restore the dead channel's cause");
     }
 
     /** Joining channel whose old messages aged out starts cleanly from its pre committed position. */
@@ -846,9 +887,7 @@ class ProcessEngineTest {
     /**
      * Flushing after every receipt stays cheap while the buffer deepens: a flush writes the
      * holds taken in since the previous flush and never scans the buffer (D102). This is
-     * one of the suite's two wall-clock bounds (the other, in
-     * {@code ProbeIdleChannelCostIntegrationTest}, times a real broker's probe), chosen
-     * with a wide margin: 50,000 receipts each
+     * the suite's one wall-clock bound, chosen with a wide margin: 50,000 receipts each
      * followed by a flush complete in well under a second here, where a flush that scanned
      * every hold would spend on the order of twenty seconds in the scan alone.
      */

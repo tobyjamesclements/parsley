@@ -30,12 +30,14 @@ import java.util.concurrent.TimeUnit;
  * topic as unknown by id, and a broker's metadata view can lag. So an unknown id is judged
  * by its last-known name — declared at start, or learned at an earlier initialisation of
  * this process — and only from three consistent answers half a second apart, the evidence
- * standard the start path applies to the changelog and the declared topics (D84, D113):
- * the name resolving to another id confirms recreation, the name unknown confirms deletion,
- * and a denial, an unavailable answer, or the name resolving to the very id asked about
- * (the by-id answer was stale) keeps the id alive. An id whose name was never learned is
- * never confirmed dead at all (D75); it lingers in the frontier, costing expression size and
- * never safety.
+ * standard the start path applies to the changelog and the declared topics (D84, D113).
+ * Two answers say the id asked about is dead: the name unknown, and the name resolving to
+ * another id. Three of those in a row confirm it, and the id is reported recreated if any
+ * of the three resolved the name elsewhere — a recreation completing between two answers is
+ * still a recreation — and deleted otherwise. A denial, an unavailable answer, or the name
+ * resolving to the very id asked about (the by-id answer was stale) keeps the id alive. An
+ * id whose name was never learned is never confirmed dead at all (D75); it lingers in the
+ * frontier, costing expression size and never safety.
  *
  * <p>One instance serves every task of a process, so a name learned by one task's
  * initialisation serves the next; the map is concurrent because tasks initialise on their
@@ -102,36 +104,43 @@ class AdminTopicIdentitySource implements TopicIdentitySource {
             return TopicIdentityVerdicts.NONE;
         }
 
-        Set<UUID> deleted = new HashSet<>(nameOf.keySet());
-        Set<UUID> recreated = new HashSet<>(nameOf.keySet());
-        for (int answer = 0; answer < CORROBORATING_ANSWERS; answer++) {
+        // Every id here starts as a dead candidate; any keep-alive answer removes it. Both
+        // NAME_GONE and RECREATED say the id asked about is dead, so a run that mixes them
+        // still confirms death — and one that ever resolved the name elsewhere is a
+        // recreation, whether the new incarnation appeared before the first answer or
+        // between two of them.
+        Set<UUID> dead = new HashSet<>(nameOf.keySet());
+        Set<UUID> resolvedElsewhere = new HashSet<>();
+        for (int answer = 0; answer < CORROBORATING_ANSWERS && !dead.isEmpty(); answer++) {
             if (answer > 0) {
                 Thread.sleep(corroborationBackoff.toMillis());
             }
             Map<String, Object> byName = describeByNames(new HashSet<>(nameOf.values()));
             for (var entry : nameOf.entrySet()) {
                 NameVerdict verdict = classifyName(byName, entry.getValue(), entry.getKey());
-                if (verdict != NameVerdict.NAME_GONE) {
-                    deleted.remove(entry.getKey());
-                }
-                if (verdict != NameVerdict.RECREATED) {
-                    recreated.remove(entry.getKey());
-                }
-                if (verdict == NameVerdict.DENIED) {
-                    LOG.warn("{}: describe denied for topic '{}' ({}); treating as denied, not dead",
-                            applicationId, entry.getValue(), entry.getKey());
+                switch (verdict) {
+                    case NAME_GONE -> { }
+                    case RECREATED -> resolvedElsewhere.add(entry.getKey());
+                    case DENIED -> {
+                        dead.remove(entry.getKey());
+                        LOG.warn("{}: describe denied for topic '{}' ({}); treating as denied, not dead",
+                                applicationId, entry.getValue(), entry.getKey());
+                    }
+                    case SAME_ID, UNAVAILABLE -> dead.remove(entry.getKey());
                 }
             }
-            if (deleted.isEmpty() && recreated.isEmpty()) {
-                break;
+        }
+        Set<UUID> deleted = new HashSet<>();
+        Set<UUID> recreated = new HashSet<>();
+        for (UUID id : dead) {
+            if (resolvedElsewhere.contains(id)) {
+                recreated.add(id);
+                LOG.warn("{}: topic '{}' was recreated; {} is a dead incarnation", applicationId, nameOf.get(id), id);
+            } else {
+                deleted.add(id);
+                LOG.info("{}: topic '{}' ({}) no longer exists; its causes can no longer matter",
+                        applicationId, nameOf.get(id), id);
             }
-        }
-        for (UUID id : deleted) {
-            LOG.info("{}: topic '{}' ({}) no longer exists; its causes can no longer matter",
-                    applicationId, nameOf.get(id), id);
-        }
-        for (UUID id : recreated) {
-            LOG.warn("{}: topic '{}' was recreated; {} is a dead incarnation", applicationId, nameOf.get(id), id);
         }
         return new TopicIdentityVerdicts(deleted, recreated);
     }

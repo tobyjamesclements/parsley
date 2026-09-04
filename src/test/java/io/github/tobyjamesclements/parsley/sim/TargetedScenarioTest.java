@@ -826,9 +826,24 @@ class TargetedScenarioTest {
         rig.assertClean();
     }
 
-    /** Join clamp survives retention at its exact position. */
+    /**
+     * Join clamp survives retention at its exact position, and past it: a delivered-past
+     * entry is never pruned by retention (D115), so a channel that joins after its
+     * delivered cause was discarded — at exactly the delivered position, or one past it,
+     * the boundary a strict-below prune would still miss — does not redeliver the cause
+     * behind its delivered effect.
+     */
     @Test
     void joinClampSurvivesRetentionAtItsExactPosition() {
+        joinClampSurvivesRetentionAt(2);
+    }
+
+    @Test
+    void joinClampSurvivesRetentionOnePastItsPosition() {
+        joinClampSurvivesRetentionAt(3);
+    }
+
+    private static void joinClampSurvivesRetentionAt(long logStart) {
         Rig rig = new Rig(SabotageMode.NONE);
         SimChannel c1 = rig.channel("c1");
         SimChannel c2 = rig.channel("c2");
@@ -848,7 +863,7 @@ class TargetedScenarioTest {
         p.drain();
         p.commitStep();
 
-        rig.world.truncate(c1, 2);
+        rig.world.truncate(c1, logStart);
         p.commitStep();
         p.stopCleanly();
 

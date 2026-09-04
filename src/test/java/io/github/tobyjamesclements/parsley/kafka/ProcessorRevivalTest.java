@@ -170,6 +170,12 @@ class ProcessorRevivalTest {
         revive(true);
         assertEquals(1, diagnostics.snapshot().get(0).frontierChannels(),
                 "the deleted topic's channel is pruned at the revival's identity report");
+
+        identity.verdicts = TopicIdentityVerdicts.NONE;
+        revive(true);
+        assertEquals(1, diagnostics.snapshot().get(0).frontierChannels(),
+                "the prune reached the ordering store: a later revival with nothing to report does not"
+                        + " restore the dead channel's cause");
     }
 
     /**
@@ -224,11 +230,14 @@ class ProcessorRevivalTest {
     /**
      * An identity source that cannot answer — a broker outage at initialisation — is not
      * evidence about any topic: the revival proceeds on the identities resolved at start,
-     * the hold stays, and the frontier keeps every cause (D44's rule, D115). The next
-     * initialisation asks again.
+     * the hold stays, and the frontier keeps every cause (D44's rule, D115). The question
+     * stays pending: each status punctuation asks again until it is answered, and the
+     * answer is then applied exactly as an initialisation's would be — here a deleted
+     * frontier topic is pruned, and a deleted received topic with nothing held from it is
+     * settled so the hold waiting on it goes.
      */
     @Test
-    void anUnansweredIdentityCheckKeepsEveryCauseAndEveryHold() {
+    void anUnansweredIdentityCheckKeepsEveryCauseAndEveryHoldAndIsAskedAgainUntilAnswered() {
         feedHeldEffect();
         feed("in1", 0L, "A", Map.of(FOREIGN, 7L));
         punctuate(context);
@@ -237,10 +246,24 @@ class ProcessorRevivalTest {
         identity.failure = new java.util.concurrent.TimeoutException("broker unreachable");
         MockProcessorContext<byte[], byte[]> revived = assertDoesNotThrow(() -> revive(true),
                 "an unanswered identity check must not fail the task");
+        int askedAtRevival = identity.asked.size();
         punctuate(revived);
         assertEquals(List.of("A"), delivered, "the hold stays: absence of an answer settles nothing");
         assertEquals(frontierBefore, diagnostics.snapshot().get(0).frontierChannels(),
                 "the frontier keeps every cause: absence of an answer prunes nothing");
+        assertEquals(askedAtRevival + 1, identity.asked.size(), "the punctuation asked again while unanswered");
+
+        identity.failure = null;
+        identity.verdicts = new TopicIdentityVerdicts(Set.of(FOREIGN_ID, IN1_ID), Set.of());
+        punctuate(revived);
+        assertEquals(askedAtRevival + 2, identity.asked.size(), "asked once more, and answered");
+        assertEquals(1, diagnostics.snapshot().get(0).frontierChannels(),
+                "the answer prunes both dead channels as an initialisation's would, and only the released"
+                        + " effect's own channel enters the frontier");
+        assertEquals(List.of("A", "B"), delivered,
+                "the answer settles the deleted received topic with nothing held from it, and the hold goes");
+        punctuate(revived);
+        assertEquals(askedAtRevival + 2, identity.asked.size(), "answered, nothing asks again");
     }
 
     /**

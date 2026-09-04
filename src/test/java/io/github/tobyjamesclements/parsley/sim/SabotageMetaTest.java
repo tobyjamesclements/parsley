@@ -26,18 +26,24 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class SabotageMetaTest {
     /**
      * A seed the sweep catches IGNORE_RECREATION on under the current generator (D43's
-     * rule). Recreation is detected at initialisation since D115, and the harness
-     * re-initialises a recreated topic's receivers at the event, so the sweep's catches for
-     * this mode fell from 13 to 5 of 300; the deterministic pins carry the evidence
-     * (TargetedScenarioTest#recreatedReceivedTopicFailsClosedAtTheNextInitialisation).
+     * rule). Assumption 2 is judged at the moment a process commits a step while receiving
+     * a dead incarnation whose name is bound to a live other id — the same judgement the
+     * host's identity report makes — rather than at the end of the run, where a process
+     * that later failed closed for another reason, or whose fresh incarnation was itself
+     * killed, used to be excused: 177 of 300 seeds catch the mode this way, against 5 of
+     * 300 judged at the end (D115).
      */
-    static final long RECREATION_SEED = 109;
-    /** Half of the recreation catches measured over 300 seeds under the current generator (5). */
-    static final long RECREATION_FLOOR = 2;
-    /** Half of the host-reset catches measured over 120 seeds under the current generator (49). */
-    static final long HOST_RESET_FLOOR = 24;
-    /** A seed the sweep catches the host reset on. */
-    static final long HOST_RESET_SEED = 1;
+    static final long RECREATION_SEED = 1;
+    /** Half of the recreation catches measured over 300 seeds under the current generator (177). */
+    static final long RECREATION_FLOOR = 88;
+    /**
+     * Half of the host-reset catches measured over 120 seeds under the current generator
+     * (68: 42 through the Safety 8 obligation judged from world truth, the rest through the
+     * delivery-time Safety 1 check alone).
+     */
+    static final long HOST_RESET_FLOOR = 34;
+    /** A seed the sweep catches the host reset on through the Safety 8 obligation. */
+    static final long HOST_RESET_SEED = 4;
 
     /** Delivering despite unsatisfied causes is caught. */
     @Test
@@ -114,14 +120,13 @@ class SabotageMetaTest {
 
     /**
      * A host that resets a read position past discarded positions — {@code auto.offset.reset=earliest}
-     * where D9 pins {@code none} — is caught by the harness, judged from world truth. The
+     * where D9 pins {@code none} — is caught by the harness's Safety 8 obligation, judged
+     * from world truth the host cannot launder: a committed record between where the process
+     * first read the channel and where it committed reading to that was never fed to it. The
      * engine no longer checks retention (D115), so the fault is the host's: the simulated
      * host's fetch refusal is disarmed, the process reads on past the gap, and the scenario
-     * flags it. The catch arrives as either obligation the fault breaks: Safety 8 when the
-     * process ends the run with discarded positions still uncovered, or the delivery-time
-     * Safety 1 check when a message whose cause lay in the discarded gap is delivered
-     * without it — the latter is what a reset past the gap most often produces, since the
-     * reset itself moves the read position over the gap.
+     * flags the records it skipped — whether or not a message depending on one of them is
+     * later delivered, which is the only shape the delivery-time Safety 1 check sees.
      */
     @Test
     void aHostResettingPastDiscardedPositionsIsCaught() {
@@ -133,7 +138,7 @@ class SabotageMetaTest {
 
         List<String> violations = Scenario.run(HOST_RESET_SEED, SabotageMode.NONE,
                 SimProcess.HostFault.RESET_PAST_LOG_START).violations();
-        assertTrue(violations.stream().anyMatch(v -> v.startsWith("Safety 8") || v.startsWith("Safety 1")),
+        assertTrue(violations.stream().anyMatch(v -> v.startsWith("Safety 8")),
                 () -> "seed " + HOST_RESET_SEED + " must catch the host sailing past truncation, got: " + violations);
     }
 

@@ -103,8 +103,10 @@ is false, and no implementation can be held to it.
    messages that yield none — an aborted transaction, a control record — are settled by the receipt of the next
    message on the channel, since the host feeds each channel in order (Host obligation 1). An implementation MUST
    NOT rely on anything else, elapsed time in particular, to conclude that a position will never yield a message.
-   The only other ways a position settles are the channel ceasing to exist (Structural 13) and the position lying
-   below the process's start position on the channel (Structural 12, Host obligation 2).
+   The only other ways a position settles are the channel ceasing to exist (Structural 13), the position lying
+   below the process's start position on the channel (Structural 12, Host obligation 2), and the position lying
+   at or below the process's own delivered causal past on a channel that joins its received-channel set
+   (Structural 16), where delivering it would place a cause behind its delivered effect.
 4. Where a cause names a channel outside a process's received-channel set, that process MUST still eventually deliver.
 5. A message received but not yet delivered MUST still be delivered after the receiving process restarts, where its
    channel remains in the received-channel set.
@@ -207,9 +209,10 @@ been breached it MUST fail closed rather than degrade.
    and MUST NOT withhold a message indefinitely.
 2. At the start of each execution, the host MUST report a process's start position on each channel: the position it
    will feed first. Every position below a reported start position was fed to an earlier execution of the process and
-   committed, or lies below the position the process was started at; the host MUST NOT report a position covering a
-   message it has received but not yet fed. No report is owed between deliveries: a cause names the position of a
-   message that was sent, and receiving that message is what satisfies it (Liveness 3).
+   committed, lies below the position the process was started at, or is already recorded as settled by the process's
+   own committed state (Structural 16); the host MUST NOT report a position covering a message it has received but
+   not yet fed. No report is owed between deliveries: a cause names the position of a message that was sent, and
+   receiving that message is what satisfies it (Liveness 3).
 3. The host MUST commit, atomically, the state a step mutates, the messages it sends, and the read positions it
    consumed.
 4. The host MUST restart a process through its full initialisation, not resume it in place.
@@ -271,8 +274,10 @@ where it deviates, the deviation and its rationale MUST be recorded in `DECISION
 17. An implementation MAY assume that a channel is deleted only once it carries no undelivered obligations: no
     process retains a received-but-undelivered message from it, and no message yet to be received expresses a cause
     on it that its receiver has not already satisfied. It MAY further assume that a received topic is not deleted and
-    recreated under its name while a process that receives it runs: an implementation detects such a recreation
-    when the process next initialises, and what it delivered in between is outside its guarantees. Where an
+    recreated under its name while a process that receives it runs: an implementation asks the substrate about
+    identity when the process next initialises and refuses on the answer — an initialisation the substrate could
+    not answer asks again until it is answered — and what the process delivered in between is outside its
+    guarantees. Where an
     implementation detects this assumption breached — at minimum, a received-but-undelivered message retained from
     a channel that no longer exists — Safety 9 states its duty. A breach it cannot detect is outside its guarantees,
     as with Assumption 13.

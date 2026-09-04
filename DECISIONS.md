@@ -4931,9 +4931,10 @@ engine already satisfied. A cause is a `(channel, position)` pair that a Parsley
 wrote into a header, and the engine's frontier has only two merge sites (D4): a position the
 process received a record at, and a position carried by a received message's metadata. Both
 name records the substrate stored and served to a `read_committed` reader — a committed
-record. By induction over the causal graph, so does every pair on the wire, and so does every
-`CausalPast` token (docs/session.md's table: a write enters a token only once the broker
-acknowledged its coordinate). Under Host obligation 1 the host feeds each channel in order,
+record. By induction over the causal graph, so does every pair on the wire; a `CausalPast`
+token does when the write tier keeps docs/session.md's rule — a write enters a token only once
+the broker acknowledged its coordinate — which the type cannot enforce and the page requires.
+Under Host obligation 1 the host feeds each channel in order,
 so receipt of a record at offset *o* settles every position below *o* (D5's rule): the
 positions an aborted transaction or a control record occupy between two records are settled
 by the record after them, and the record a cause names is itself a record the receiver will
@@ -5035,13 +5036,18 @@ over two minutes after the deletion.
    describes by id (learning names into a runtime-lifetime map, D89's seam without its
    eviction), keeps every unknown id whose name it never learned (D75's rule: nameless ids are
    never confirmed dead), and corroborates the rest by name over three answers half a second
-   apart, the standard D84 set for the changelog and D113 for declared topics: dead only when
-   the name is gone in all three, recreated only when the name resolves to another id in all
-   three, and a denial, an unavailable answer or a same-id answer keeps the id alive (denial ≠
-   death, D44's principle kept without its clock). A describe failure that is not an
-   unknown-topic answer aborts the check: the processor warns and continues on the identities
-   resolved at start, every cause and hold intact, and the next initialisation asks again. No
-   verdict window, debounce, rescission or eviction exists any more.
+   apart, the standard D84 set for the changelog and D113 for declared topics: the name gone
+   and the name resolving to another id both say the id asked about is dead, three such
+   answers in a row confirm it, and the verdict is recreated if any of the three resolved the
+   name elsewhere (a recreation completing between two answers is still one — the review
+   caught the first cut requiring three answers of one kind, which reported that shape alive)
+   and deleted otherwise; a denial, an unavailable answer or a same-id answer keeps the id
+   alive (denial ≠ death, D44's principle kept without its clock). A describe failure that is
+   not an unknown-topic answer is not evidence: the processor warns and continues on the
+   identities resolved at start, every cause and hold intact, and the question stays pending —
+   each status punctuation asks it again until it is answered, and the answer is applied as
+   the initialisation's would have been. The check is therefore event-driven and eventual,
+   never periodic. No verdict window, debounce, rescission or eviction exists any more.
 
 5. *Recreation while running is assumed away, and Streams' own stop is named.* Assumption 17
    now also lets an implementation assume a received topic is not deleted and recreated under
@@ -5059,8 +5065,9 @@ over two minutes after the deletion.
 
 6. *The punctuation is status-only.* `ParsleyConfig.factsInterval` is retired and
    `statusInterval` (default one second, the same validation and D87's sub-millisecond refusal
-   under the new name) schedules one wall-clock punctuation per task that drains what receipt or
-   the initialisation's identity report already released, flushes holds (D102), observes the
+   under the new name) schedules one wall-clock punctuation per task that drains what receipt,
+   the start positions handed to the engine or the initialisation's identity report already
+   released, asks a still-unanswered identity question again, flushes holds (D102), observes the
    frontier for D53's once-only warning and publishes `TaskStatus` (D103). It touches no
    broker and ingests nothing. `TaskStatus` loses `sinceLastFacts` — a source break of the
    kind D111 recorded for record patterns, taken pre-release. D7's Structural 10 argument is
@@ -5076,8 +5083,9 @@ over two minutes after the deletion.
    `#aStartPositionCoversEverythingBelowItWithinTheSessionFloor`,
    `#recreatedReceivedChannelReportFailsClosed`,
    `#identityReportPrunesCausesOnDeadChannelsAndNothingElse`,
+   `#aGapBelowAReceivedRecordIsSettledByThatReceiptAndNothingBeforeIt`,
    `EngineBoundaryTest#aStartPositionOfZeroCoversNothingAndBlocksACauseAtPositionZero`,
-   `ProcessorRevivalTest`'s eight revival pins, `TopologyWiringTest#initialisationAsksAboutReceivedAndFrontierTopicsAndNothingAsksAgain`,
+   `ProcessorRevivalTest`'s eight revival pins, `TopologyWiringTest#aFirstInitialisationAsksAboutTheReceivedTopicsAndNoPunctuationAsksAgain`,
    `#aRecreatedReceivedTopicRefusesTaskInitialisation`,
    `#aCauseNamingAnUnreceivedPositionIsHeldAndVisibleUntilARecordReachesIt`,
    `BootstrapPreCheckTest#anExpiredOffsetResumesAtTheCoveredPositionPlusOneOrFallsBackToTheSubstrate`,
@@ -5098,15 +5106,23 @@ over two minutes after the deletion.
    the identity report runs, no longer clamps a rewind to the log start (that clamp modelled
    resume-at-log-start, the behaviour this record retires, and made 30 of 300 honest seeds
    dirty once the engine stopped absorbing it), and carries a `HostFault.RESET_PAST_LOG_START`
-   modelling an `auto.offset.reset=earliest` host, which the harness catches on 49 of 120
-   seeds through Safety 8 or the delivery-time Safety 1 check (floor 24). The sabotage floors
-   were recalibrated under the new generator (D43's rule, half the measured catches):
-   IGNORE_CAUSES 74, NO_FIFO 14, REDELIVER_REFEEDS 83, UNDECODABLE_AS_ABSENT 87,
-   SKIP_RECEIPT_MERGE 83, DROP_HELD 59, IGNORE_REMOVED_CHANNELS 19, SILENT_DROP 29,
-   OVEREXPRESS 93 of 120; IGNORE_RECREATION 5 of 300 (down from 13, because the harness now
-   re-initialises a recreated topic's receivers at the event and the honest engine refuses
-   there, leaving fewer seeds where the sabotaged engine's silence is visible; the
-   deterministic pin carries the evidence). `IGNORE_TRUNCATION` and
+   modelling an `auto.offset.reset=earliest` host. The harness's Safety 8 obligation is
+   judged from world truth the host cannot launder — every committed record between where a
+   process first read a channel and where it committed reading to must have been fed to it —
+   because the previous check, judged from the host's own read position, could never fire
+   under a host that resets that position past the gap (the review found it fired on none
+   of the fault's catches); the fault is caught on 68 of 120 seeds, 42 of them through that
+   obligation and the rest through the delivery-time Safety 1 check alone (floor 34, pinned
+   seed 4). Assumption 2 is likewise judged at the moment a process commits a step while
+   receiving a dead incarnation whose name is bound to a live other id — the judgement the
+   host's identity report makes — rather than at the end of the run, where a process that
+   later failed closed for another reason, or whose fresh incarnation was itself killed,
+   escaped: IGNORE_RECREATION is caught on 177 of 300 seeds this way against 5 judged at
+   the end (floor 88). The sabotage floors were recalibrated under the new generator (D43's
+   rule, half the measured catches): IGNORE_CAUSES 74, NO_FIFO 14, REDELIVER_REFEEDS 83,
+   UNDECODABLE_AS_ABSENT 87, SKIP_RECEIPT_MERGE 83, DROP_HELD 59, IGNORE_REMOVED_CHANNELS 19,
+   SILENT_DROP 29, OVEREXPRESS 93 of 120, with the honest engine clean on all 300 seeds under
+   both new checks. `IGNORE_TRUNCATION` and
    `TREAT_COVERED_FEED_AS_REPLAY` are deleted with the checks they disarmed. The whole suite
    shrinks for the first time, by the round's own pins; AGENTS.md's "it never shrinks" is
    amended to say a mechanism deleted with its pins is the one exception and the record that
@@ -5165,6 +5181,12 @@ over two minutes after the deletion.
   refuse rather than refusing before start: the process starts, and stops on its first fetch,
   where D74 refused from the bootstrap. The refusal reaches `status()` with its reason
   (D109) either way; an operator sees it a few seconds later than before.
+- That the runtime hands the topology the admin-backed identity source, rather than one
+  that answers nothing, has no broker-level pin: a test of the prune on a real broker needs a
+  name learned in the same runtime that then deletes the topic and re-initialises the task,
+  and on Streams the deletion's own missing-source-topic stop arrives first. The wiring in
+  `ParsleyRuntime.start` is a reviewed cell; the source and the processor are each pinned
+  behind their seams.
 - `TaskStatus.sinceLastFacts` and `ParsleyConfig.factsInterval` are gone; a caller naming
   either does not compile. Nothing in the status says when the entry was last refreshed;
   a task whose thread has stopped punctuating shows a stale entry, and the runbook says to

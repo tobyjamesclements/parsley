@@ -41,8 +41,9 @@ class EngineBoundaryTest {
      * same position twice within one execution while the first copy is still held (not
      * delivered) must refuse as a feed-order breach. Weakened to {@code <}, the second feed
      * falls through to the covered-position branch and refuses with
-     * {@code COVERED_POSITION_FED} instead, blaming a read-position report that never
-     * existed (SPEC Operational 6); the previous type-only assertThrows could not see that.
+     * {@code COVERED_POSITION_FED} instead, blaming the engine's own coverage rather than
+     * the feed order that was actually breached (SPEC Operational 6); the previous type-only
+     * assertThrows could not see that.
      */
     @Test
     void equalPositionRefeedOfAHeldNotDeliveredMessageFailsClosedAsOutOfOrderFeed() {

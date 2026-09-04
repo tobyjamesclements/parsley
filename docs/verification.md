@@ -45,8 +45,12 @@ is the exception: `DELIVER_PAST_DEAD_HOLDS` is reached by no random seed (calibr
 300), so its oracle evidence is a deterministic scenario constructing the causal inversion,
 and it carries no sweep floor. A host fault rather than an engine mode,
 `RESET_PAST_LOG_START`, models an `auto.offset.reset=earliest` host resetting past discarded
-positions, and the sweep runs it against the honest engine with its own floor, the catch
-arriving as Safety 8 or the delivery-time causal-order check.
+positions, and the sweep runs it against the honest engine with its own floor. Its catch is
+Safety 8 judged from world truth the host cannot launder — a committed record the process
+owed between where it first read the channel and where it committed reading to, never fed to
+it — or, where a message depending on a skipped record is later delivered, the delivery-time
+causal-order check. A recreation is judged the same way, at the moment a process commits a
+step while receiving a dead incarnation whose name is bound to a live other id.
 
 **Streams wiring.** `TopologyTestDriver` tests for the header format on the wire, byte-exact
 key and value pass-through, Schema-Registry-format serdes, the identity report at task

@@ -137,12 +137,14 @@ class TopologyWiringTest {
     }
 
     /**
-     * Task initialisation asks the identity source about exactly the topics the task's
-     * state names — the received topics, and every topic in the restored frontier — and
-     * nothing runs between deliveries: no punctuation asks again (D115).
+     * A first initialisation asks the identity source about the received topics — the
+     * frontier is empty until something is received — and, once answered, nothing runs
+     * between deliveries: no punctuation asks again (D115). The frontier half of the
+     * question is pinned where a restored frontier exists,
+     * {@code ProcessorRevivalTest#everyInitialisationAsksAboutReceivedAndFrontierTopicsAndNothingElseAsks}.
      */
     @Test
-    void initialisationAsksAboutReceivedAndFrontierTopicsAndNothingAsksAgain() {
+    void aFirstInitialisationAsksAboutTheReceivedTopicsAndNoPunctuationAsksAgain() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
         ProcessDefinition definition = ProcessDefinition.named("p")

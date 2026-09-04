@@ -308,9 +308,12 @@ class BootstrapIntegrationTest {
 
     /**
      * An expired committed position within retention resumes at the covered position plus
-     * one (D115): the records produced while the process was stopped deliver once each, and
-     * nothing delivered before the stop delivers again. The declared initial position is
-     * not consulted — a process with prior state resumes, it does not start.
+     * one (D115): the bootstrap's own commit, read before Kafka Streams has anything to
+     * commit over it, is exactly coverage plus one under its stamp — the substrate's
+     * earliest, D36's old fallback, would be 0 — and the records produced after the resume
+     * deliver once each while nothing delivered before the stop delivers again. The
+     * declared initial position is not consulted: a process with prior state resumes, it
+     * does not start.
      */
     @Test
     void expiredOffsetsWithinRetentionResumeAtTheCoveredPositionPlusOne() throws Exception {
@@ -331,8 +334,6 @@ class BootstrapIntegrationTest {
             awaitCommitted("exr-exr", "exr-in", 1);
         }
 
-        produce("exr-in", null, "k", "m1");
-        produce("exr-in", null, "k", "m2");
         await("the group's offsets to be deletable", () -> {
             try {
                 admin.deleteConsumerGroupOffsets("exr-exr", Set.of(new TopicPartition("exr-in", 0)))
@@ -344,11 +345,21 @@ class BootstrapIntegrationTest {
         }, Duration.ofSeconds(60));
 
         try (Parsley parsley = Parsley.start(config("exr"), p)) {
-            await("the records produced while stopped to deliver",
+            // Nothing has been produced since the stop, so Streams has nothing to commit and
+            // the group's offset is the bootstrap's own: coverage (m0 at 0) plus one.
+            var resumed = admin.listConsumerGroupOffsets("exr-exr").partitionsToOffsetAndMetadata()
+                    .get(30, TimeUnit.SECONDS).get(new TopicPartition("exr-in", 0));
+            assertEquals(1L, resumed.offset(),
+                    "the bootstrap resumed at the covered position plus one, not the substrate's earliest");
+            assertEquals(ParsleyRuntime.BOOTSTRAP_OFFSET_STAMP, resumed.metadata(),
+                    "the position was committed by the bootstrap, under its stamp");
+
+            produce("exr-in", null, "k", "m1");
+            produce("exr-in", null, "k", "m2");
+            await("the records produced after the resume to deliver",
                     () -> delivered.contains("m2"), Duration.ofSeconds(60));
             assertEquals(List.of("m0", "m1", "m2"), List.copyOf(delivered),
-                    "the resumed position is the covered position plus one: m0 once, m1 and m2 once each,"
-                            + " and the declared LATEST never consulted");
+                    "m0 once, m1 and m2 once each, and the declared LATEST never consulted");
             assertTrue(parsley.healthy());
             awaitCommitted("exr-exr", "exr-in", 3);
         }

@@ -77,8 +77,10 @@ confirms recreation; a denial, an unavailable answer, or the name resolving to t
 asked about keeps it alive. A denial is denial, never death. An id whose name was never
 learned is never confirmed dead: it lingers in the frontier, costing expression size and
 never safety. A describe failure that is not the substrate's unknown-topic answer — a timeout,
-an outage — is not evidence about any id: the check is skipped for this initialisation with a
-warning, every cause and every hold stays, and the next initialisation asks again.
+an outage — is not evidence about any id: the initialisation proceeds with a warning, every
+cause and every hold stays, and the question stays pending — each status punctuation asks it
+again until it is answered, and the answer is applied as the initialisation's would have
+been. The check is event-driven and eventual, never periodic.
 
 The engine takes the verdicts through `ProcessEngine.onIdentityReport`. A received channel
 whose topic was recreated under its name refuses `CHANNEL_IDENTITY_CHANGED`: records fed

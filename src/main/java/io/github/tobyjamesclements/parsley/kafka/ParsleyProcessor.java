@@ -73,6 +73,12 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
 
     private final BudgetAlarm budgetAlarm = new BudgetAlarm();
     private Cancellable statusPunctuator;
+    /**
+     * True from an initialisation until its identity question has been answered. A source
+     * that could not answer at initialisation is asked again at each status punctuation,
+     * so the check is event-driven and eventual, never periodic (D115).
+     */
+    private boolean identityCheckPending;
 
     private ProcessorContext<byte[], byte[]> context;
     private ProcessEngine engine;
@@ -180,9 +186,13 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         stateReader = new StoreStateReader();
         swallowedSeamViolation = null;
 
+        identityCheckPending = true;
         checkIdentity();
 
         statusPunctuator = context.schedule(statusInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
+            if (identityCheckPending) {
+                checkIdentity();
+            }
             drain();
             engine.flushHolds();
             observeFrontier();
@@ -195,8 +205,9 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      * Asks the identity source about every topic this task's state names — the received
      * topics at the identity resolved at start, and every topic in the restored frontier —
      * and hands the engine what was confirmed gone. A source that cannot answer is not
-     * evidence: the check is skipped for this initialisation with a warning, the causes
-     * stay expressed, and the next initialisation asks again (D44's rule, kept).
+     * evidence: the causes stay expressed, nothing settles, and the question stays pending,
+     * to be asked again at the next status punctuation until it is answered (D44's rule,
+     * kept: absence of an answer is never a verdict).
      */
     private void checkIdentity() {
         Set<UUID> topicIds = new HashSet<>();
@@ -214,10 +225,11 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             Thread.currentThread().interrupt();
             return;
         } catch (Exception e) {
-            LOG.warn("{}: topic identity could not be checked at task initialisation; continuing on the"
-                    + " identities resolved at start, the next initialisation asks again", definition.name(), e);
+            LOG.warn("{}: topic identity could not be checked; continuing on the identities resolved at"
+                    + " start, and asking again at the next status punctuation", definition.name(), e);
             return;
         }
+        identityCheckPending = false;
         if (verdicts.deleted().isEmpty() && verdicts.recreated().isEmpty()) {
             return;
         }

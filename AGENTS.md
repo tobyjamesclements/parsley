@@ -73,7 +73,7 @@ prove it catches each violation class.
 ## Verifying anything
 
 - `./mvnw verify` is the full gate: **the whole suite, green, roughly five minutes** (the
-  surefire summary prints the count; it was 716 at D113 and 693 at D115, after the facts
+  surefire summary prints the count; it was 716 at D113 and 696 at D115, after the facts
   round's suites went with the round). It must be green at every commit, and it grows. It
   shrinks only when a mechanism is deleted with its pins, and the record that deletes it
   says so.

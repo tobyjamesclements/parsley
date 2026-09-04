@@ -702,16 +702,20 @@ output topic.
 
 Every task initialisation asks the cluster about every topic its state names — the received
 topics and every topic in the frontier — and settles or prunes the channels whose topics are
-confirmed gone. Two log lines say the asking failed. "topic identity could not be checked at
-task initialisation; continuing on the identities resolved at start, the next initialisation
-asks again", with the cause, means the check was abandoned for that initialisation: the
-admin client could not reach the cluster, or a describe failed in a way that is not the
-broker's unknown-topic answer. "describe denied for topic '<name>' (<id>); treating as
-denied, not dead" means the application's principal lacks Describe on that topic, which
-the check declines to read as deletion. Neither is evidence: no channel is settled or pruned
-on the strength of either, so a dead channel a hold waits on stays unsettled, and its causes
-stay expressed on every send, until an initialisation gets an answer. Restore the rights or
-the connectivity, then restart the application so that its tasks initialise and ask again.
+confirmed gone. Two log lines say the asking failed. "topic identity could not be checked;
+continuing on the identities resolved at start, and asking again at the next status
+punctuation", with the cause, means the check could not be made: the admin client could not
+reach the cluster, or a describe failed in a way that is not the broker's unknown-topic
+answer. The question stays pending, and each status punctuation asks it again until it is
+answered — the line repeats once per interval while it does — and the answer is then applied
+as the initialisation's would have been. "describe denied for topic '<name>' (<id>);
+treating as denied, not dead" means the application's principal lacks Describe on that
+topic, which the check declines to read as deletion; that answer counts as an answer, so it
+is not asked again until the task next initialises. Neither is evidence: no channel is
+settled or pruned on the strength of either, so a dead channel a hold waits on stays
+unsettled, and its causes stay expressed on every send, until the check gets an answer.
+Restore the connectivity and the task asks again by itself; restore the rights, then restart
+the application so that its tasks initialise and ask again.
 
 ### The retention clock
 

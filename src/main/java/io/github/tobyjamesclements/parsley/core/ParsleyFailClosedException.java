@@ -21,10 +21,13 @@ public final class ParsleyFailClosedException extends RuntimeException {
         /** The host fed a channel out of position order. */
         OUT_OF_ORDER_FEED,
         /**
-         * A message arrived at a position a read-position report had already covered as
-         * fed-or-never-arriving. Either the report was false, or this execution has been
-         * superseded and observed its successor's progress — in which case a restart
-         * recovers and the refusal does not recur.
+         * The host fed a channel at a position, above the session floor, that this
+         * execution's own coverage already records as fed or never arriving: the feed and
+         * the engine's record contradict each other. An invariant guard with no known
+         * trigger since D115 — coverage above the floor is raised only by this execution's
+         * own receipts and by a deleted channel's settlement, both of which the feed-order
+         * checks refuse first — so a restart resumes from the committed record and the
+         * refusal does not recur.
          */
         COVERED_POSITION_FED,
         /**
