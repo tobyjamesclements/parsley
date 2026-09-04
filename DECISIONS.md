@@ -4747,3 +4747,118 @@ A genuinely missing topic is refused one second later than before.
 **Specification gap**
 
 None.
+
+### D114 — Runbooks: what an operator does when a process fails closed, reason by reason; the gaps the runbooks expose are recorded, not closed
+
+**Context**
+
+The fail-closed model was documented from the library's side and not from the operator's.
+`docs/failing-closed.md` listed every reason and the condition that raises it, and D111's
+`docs/operations.md` carried one reset procedure that several refusal messages point at. What
+nothing said was what an operator is expected to do when a process stops: how to tell a
+refusal from a failure without one, which refusals a restart clears and which a restart
+turns into a loop, which have a remedy that loses nothing (restore the channel, run the build
+that wrote the state, raise a limit) and which genuinely end at a reset, how to read a held
+message's blockers into an action, how to see a hold running down against retention, and
+what to check before and after the reset. An operator meeting `CHANNEL_REMOVED_WITH_HELD_MESSAGES`
+had "reset" as the only documented path, when putting the channel back and draining it loses
+nothing; one meeting `UNKNOWN_ORDERING_STATE_FORMAT` after a rollback was told to reset state
+that a newer build reads fine; one meeting `APPLICATION_PAYLOAD_UNDECODABLE` during a schema
+registry outage read "recurs identically on restart" about a stop that does not.
+
+Writing the runbooks against the code also surfaced what the library does not give an
+operator, which is recorded here so the next work on the operational surface starts from a
+list rather than from the next incident.
+
+**Decision**
+
+A new page, `docs/runbooks.md`, under Operation in the site nav, after Operations. It has
+five parts. *Before an incident*: keep the status logged, because a task retires its status
+entry when it closes and a stopped process has no task detail (D103); wire the supervisor's
+restart rule to `refusalReason`, with the one exception D91 recorded and the one shape
+`status()` cannot separate (an application failure and a substrate transient both stop with
+no reason); know the names, the tools, the rights a reset needs, and retention. *Triage*: the
+three exception arms of `start()`, the three shapes of a stopped process's status, a table
+mapping every reason to whether a restart alone helps and whether a reset is needed, what
+else is affected (the instance-by-instance cascade `SHUTDOWN_CLIENT` produces, downstream
+holds, sibling processes in the handle), and the actions that make things worse. *Runbooks by
+reason*: one per `ParsleyFailClosedException.Reason`, grouped by remedy class — restart
+resolves it; the application must change; the configuration or the cluster must change; the
+causal past is gone; neither restart nor reset — each giving the diagnosis as
+`failureDetail` prints it, what happened, the checks with the Kafka tools, the remedy, and
+whether anything is reset, plus the stops without a reason (a partition added, an outage, a
+throwing handler). *A message is held and not moving*: the blocker shapes `TaskStatus` can
+show and what each means, following a chain of holds to its root and a downstream hold to
+its stopped upstream, a starved facts source, and the retention clock. *Resetting a
+process*: the pre-reset checks, the four steps as commands, the wrong-order refusals, and the
+post-reset verification; `docs/operations.md` keeps what a reset discards and points here for
+the procedure. A closing section states the boundaries as facts.
+
+Every runbook's advice is derived from the code and the decisions it cites; the runbooks
+introduce no behaviour. `RunbookCoverageTest` scans `docs/runbooks.md` and
+`docs/failing-closed.md` and fails if a `Reason` exists without a runbook heading, a triage
+row, and a trigger row, so a reason cannot be added without a documented course of action.
+
+The gaps the runbooks expose, recorded as facts for the operator on the page and here as
+candidates for later work, none of them taken now:
+
+1. *No chosen starting position.* A channel starts at `EARLIEST` or `LATEST`, and the
+   bootstrap refuses offsets it did not write as `ORDERING_STATE_LOST` (D76). The one
+   record whose header cannot be decoded, or whose payload the serdes cannot be made to
+   accept, therefore has no way past short of skipping everything retained on its channel
+   or waiting for retention. An operator-stamped initial position — per partition, accepted
+   by the bootstrap only with no prior state — would make that boundary one message wide
+   instead of one channel wide. It is a causal boundary either way and belongs behind the
+   same deliberate act as a reset.
+2. *No programmatic reset.* Four commands across two tools and every instance's filesystem,
+   in an order that matters, with nothing checking that every instance is stopped. A
+   `Parsley.reset` over the same admin client, refusing while the group has members, would
+   remove the ordering hazard and could carry the chosen starting positions above.
+3. *No hold age or retention headroom in the status.* `TaskStatus.HeldChannel` carries the
+   head's position but not its timestamp, and no channel's log start or end, so the time a
+   hold has left before `POSITIONS_DISCARDED_UNREAD` — the one fail-closed stop that loses
+   data and is avoidable in advance — is computed from the Kafka tools. The engine holds the
+   timestamp in the hold's skeleton (D102) and receives the log start every facts round;
+   exposing both, and the channel's end where the round has it, would also settle the
+   lagging-or-not-produced question a blocker leaves open.
+4. *No third classification of a stop.* Operational 1 asks that a refusal be distinguished
+   from a transient; an application failure is neither, stops with no `refusalReason` like
+   a transient, and recurs like a refusal. A supervisor keyed on `status()` cannot tell them
+   apart. A flag on `ProcessStatus` saying the step failed in application code, set where
+   the processor already knows the frame it was in, would close it.
+5. *No push.* The status is pull-only, as D103 chose; the runbooks say to export it. A
+   metrics bridge remains the reasonable later addition D103 named.
+6. *No offline reading of a stopped process's holds.* `OrderingStateInspector` answers the
+   questions from the changelog's latest-per-key view, and `ParsleyRuntime` builds that
+   view at every start, but nothing public builds it for an operator.
+
+**Alternatives**
+
+* Folding the runbooks into `docs/failing-closed.md` and `docs/operations.md`. Rejected: an
+  operator in an incident needs one page, ordered by what they see, not the library's
+  explanation of itself with remedies interleaved; and the existing pages would triple in
+  length.
+* One runbook per remedy class rather than per reason. Rejected: the reason is what the
+  operator has in hand, and several reasons carry more than one shape with different
+  remedies (`SUBSTRATE_MISCONFIGURED`, `UNKNOWN_ORDERING_STATE_FORMAT`,
+  `POSITIONS_DISCARDED_UNREAD`); the classes remain as the grouping and the triage table.
+* Closing the gaps above in the same change. Rejected: each is a behaviour or API change
+  with its own decision, evidence and tests; the runbooks are correct against the code as it
+  is, and documenting the boundary is what lets the change be judged.
+* Leaving the boundaries out of the published page. Rejected: an operator who expects to
+  skip one message, or to see how long a hold has left, finds out in the incident otherwise.
+
+**Cost**
+
+A long page that must track every change to a refusal message or remedy; the coverage test
+catches an added reason, not an altered remedy. The reset procedure now lives in one place
+and `docs/operations.md` points at it, so D111's description of that page is narrower than
+it was. `EVIDENCE.md`'s Operational row 1 names the test and says, honestly, that nothing
+executable checks the advice.
+
+**Specification gap**
+
+Operational 1 asks that an operator be able to distinguish a refusal from a transient. It
+says nothing about what the operator is then expected to do, and nothing about the third
+kind of stop, an application failure. Both are what an operator needs, and the second is
+worth a criterion.

@@ -83,6 +83,7 @@ nav:
     - Failing closed: failing-closed.md
     - Runtime: runtime.md
     - Operations: operations.md
+    - Runbooks: runbooks.md
   - Patterns:
     - Session consistency: session.md
   - Reference:

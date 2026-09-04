@@ -117,7 +117,10 @@ try (Parsley parsley = Parsley.start(config, shipper)) {
 wait is what keeps the application up, and `status()` afterwards says what stopped and why.
 
 `docs/index.md` carries the fuller version. `ProcessStatus` and `OrderingStateInspector` are the
-diagnosis surface when a process is holding or has stopped.
+diagnosis surface when a process is holding or has stopped, and `docs/runbooks.md` says what
+an operator does with that diagnosis, one runbook per refusal reason. A reason added to
+`ParsleyFailClosedException.Reason` needs a runbook there and a trigger row in
+`docs/failing-closed.md`; `RunbookCoverageTest` fails until it has both.
 
 ## Conventions if you modify the code
 
