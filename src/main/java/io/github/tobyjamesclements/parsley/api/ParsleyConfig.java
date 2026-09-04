@@ -16,6 +16,19 @@ import java.util.Set;
  */
 public final class ParsleyConfig {
 
+    /** Which Kafka host runs each process. */
+    public enum Host {
+        /** One Kafka Streams application per process, the established host. */
+        KAFKA_STREAMS,
+        /**
+         * One consumer thread per process over the plain kafka-clients consumer, producer
+         * and admin APIs, committing read positions transactionally at the head of each
+         * channel's hold-back buffer (D114). Experimental: application stores are held in
+         * memory and rebuilt from their changelogs on assignment.
+         */
+        KAFKA_CLIENTS
+    }
+
     private static final Set<String> FORBIDDEN_KEYS = Set.of(
             "application.id",
             "group.id",
@@ -51,9 +64,11 @@ public final class ParsleyConfig {
     private final String stateDir;
     private final Duration factsInterval;
     private final int metadataBudgetBytes;
+    private final Host host;
     private final Map<String, Object> extraProperties;
 
     private ParsleyConfig(Builder builder) {
+        this.host = builder.host;
         this.bootstrapServers = builder.bootstrapServers;
         this.applicationIdPrefix = builder.applicationIdPrefix;
         this.stateDir = builder.stateDir;
@@ -125,6 +140,15 @@ public final class ParsleyConfig {
     }
 
     /**
+     * Returns the host each process runs under.
+     *
+     * @return the host each process runs under
+     */
+    public Host host() {
+        return host;
+    }
+
+    /**
      * Returns additional Kafka Streams properties, none of them safety-bearing.
      *
      * @return additional Kafka Streams properties, none of them safety-bearing
@@ -140,6 +164,7 @@ public final class ParsleyConfig {
         private String stateDir;
         private Duration factsInterval = Duration.ofSeconds(1);
         private int metadataBudgetBytes = io.github.tobyjamesclements.parsley.core.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES;
+        private Host host = Host.KAFKA_STREAMS;
         private final Map<String, Object> extraProperties = new LinkedHashMap<>();
 
         private Builder(String bootstrapServers, String applicationIdPrefix) {
@@ -217,6 +242,22 @@ public final class ParsleyConfig {
                 throw new IllegalArgumentException("metadataBudgetBytes must be positive");
             }
             this.metadataBudgetBytes = metadataBudgetBytes;
+            return this;
+        }
+
+        /**
+         * Selects the host each process runs under. The default is
+         * {@link Host#KAFKA_STREAMS}.
+         *
+         * @param host the host
+         * @return this builder
+         * @throws IllegalArgumentException if {@code host} is null
+         */
+        public Builder host(Host host) {
+            if (host == null) {
+                throw new IllegalArgumentException("host must be non-null");
+            }
+            this.host = host;
             return this;
         }
 

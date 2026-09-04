@@ -80,10 +80,19 @@ class EndToEndIntegrationTest {
         admin.createTopics(topics).all().get(30, TimeUnit.SECONDS);
     }
 
-    private static ParsleyConfig config(String prefix) {
+    /**
+     * The host this suite runs against. The suite is the contract every host must meet;
+     * a subclass overrides this to run the same cases against another host (D114).
+     */
+    ParsleyConfig.Host host() {
+        return ParsleyConfig.Host.KAFKA_STREAMS;
+    }
+
+    private ParsleyConfig config(String prefix) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(prefix).toString())
                 .factsInterval(Duration.ofMillis(500))
+                .host(host())
                 .build();
     }
 
@@ -228,7 +237,7 @@ class EndToEndIntegrationTest {
 
         Parsley first = Parsley.start(instanceConfig("mig", "mig-1"), pm);
         try {
-            awaitFedAndHeld("mig-pm", "mig-b", delivered);
+            awaitFedAndHeld(first, "pm", "mig-b", delivered);
 
             try (Parsley second = Parsley.start(instanceConfig("mig", "mig-2"), pm)) {
                 first.close();
@@ -243,10 +252,11 @@ class EndToEndIntegrationTest {
         }
     }
 
-    private static ParsleyConfig instanceConfig(String prefix, String instanceDir) {
+    private ParsleyConfig instanceConfig(String prefix, String instanceDir) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(instanceDir).toString())
                 .factsInterval(Duration.ofMillis(500))
+                .host(host())
                 .build();
     }
 
@@ -271,7 +281,7 @@ class EndToEndIntegrationTest {
         produce("wipe-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("wipe-a"), 0), 0L)));
 
         try (Parsley parsley = Parsley.start(config("wipe"), pw)) {
-            awaitFedAndHeld("wipe-pw", "wipe-b", delivered);
+            awaitFedAndHeld(parsley, "pw", "wipe-b", delivered);
             // The status surface names the hold and the cause it waits for (D103), on the
             // real host: the snapshot refreshes once per facts interval.
             await("status names the held message and its missing cause", () -> {
@@ -297,8 +307,9 @@ class EndToEndIntegrationTest {
         }
     }
 
-    private static void awaitFedAndHeld(String groupId, String topic, ConcurrentLinkedQueue<String> delivered) {
-        ClusterTestSupport.awaitFedAndHeld(admin, groupId, topic, delivered);
+    private static void awaitFedAndHeld(Parsley parsley, String process, String topic,
+                                        ConcurrentLinkedQueue<String> delivered) {
+        ClusterTestSupport.awaitFedAndHeld(parsley, process, topic, delivered);
     }
 
     private static void deleteRecursively(java.nio.file.Path root) throws Exception {

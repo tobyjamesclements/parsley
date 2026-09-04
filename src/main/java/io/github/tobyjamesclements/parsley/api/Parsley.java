@@ -2,7 +2,9 @@ package io.github.tobyjamesclements.parsley.api;
 
 import java.util.List;
 
+import io.github.tobyjamesclements.parsley.kafka.ClientRuntime;
 import io.github.tobyjamesclements.parsley.kafka.ParsleyRuntime;
+import io.github.tobyjamesclements.parsley.kafka.RuntimeHandle;
 
 /**
  * A running set of processes, each executing under causal delivery order.
@@ -16,9 +18,9 @@ import io.github.tobyjamesclements.parsley.kafka.ParsleyRuntime;
  * @see ParsleyConfig
  */
 public final class Parsley implements AutoCloseable {
-    private final ParsleyRuntime runtime;
+    private final RuntimeHandle runtime;
 
-    private Parsley(ParsleyRuntime runtime) {
+    private Parsley(RuntimeHandle runtime) {
         this.runtime = runtime;
     }
 
@@ -56,7 +58,10 @@ public final class Parsley implements AutoCloseable {
                 throw new IllegalArgumentException("processes must not contain a null element");
             }
         }
-        return new Parsley(ParsleyRuntime.start(config, List.of(processes)));
+        return new Parsley(switch (config.host()) {
+            case KAFKA_STREAMS -> ParsleyRuntime.start(config, List.of(processes));
+            case KAFKA_CLIENTS -> ClientRuntime.start(config, List.of(processes));
+        });
     }
 
     /**

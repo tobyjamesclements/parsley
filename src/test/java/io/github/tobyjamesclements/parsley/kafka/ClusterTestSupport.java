@@ -241,4 +241,20 @@ final class ClusterTestSupport {
         awaitCommitted(admin, groupId, topic, 1);
         assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
     }
+
+    /**
+     * The same premise, by the public status surface rather than the group's committed
+     * offset: the process reports a message held on {@code topic}. Host-neutral, since a
+     * host that commits its read position at the hold-back head (D114) never advances the
+     * committed offset past a held message.
+     */
+    static void awaitFedAndHeld(io.github.tobyjamesclements.parsley.api.Parsley parsley, String process,
+                                String topic, ConcurrentLinkedQueue<String> delivered) {
+        await("process " + process + " to report a hold on " + topic, () -> {
+            var status = parsley.status().get(process);
+            return status != null && status.tasks().stream().anyMatch(task ->
+                    task.heldChannels().stream().anyMatch(held -> held.topic().equals(topic)));
+        }, Duration.ofSeconds(60));
+        assertEquals(List.of(), List.copyOf(delivered), "the effect must be held while its cause is missing");
+    }
 }

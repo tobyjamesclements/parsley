@@ -160,6 +160,36 @@ public final class ProcessEngine {
 
     ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,
                   int metadataBudgetBytes, Sabotage sabotage) {
+        this(processName, receivedChannels, store, metadataBudgetBytes, sabotage, Map.of());
+    }
+
+    /**
+     * Builds an engine for a host that commits its read position at the head of each
+     * channel's hold-back buffer and re-feeds everything from there on restart, instead of
+     * persisting held messages (D114).
+     *
+     * <p>{@code resumeNextRead} is, per received channel, the position the host will feed
+     * next: every lower position was fed and either delivered or covered, and every position
+     * from it onward will be fed again. Restored feed coverage above it describes messages
+     * the previous execution held in memory and lost with it, so coverage is clamped just
+     * below the resume point and the re-fed messages are accepted rather than dropped as
+     * duplicates. A channel absent from the map is restored unchanged.
+     *
+     * @param processName         the process name, used in diagnostics
+     * @param receivedChannels    the channels this process receives, mapped to topic names
+     * @param store               durable ordering state
+     * @param metadataBudgetBytes the largest causal metadata a message may carry
+     * @param resumeNextRead      per received channel, the first position the host feeds next
+     * @throws ParsleyFailClosedException if the store carries a format version this build
+     *         cannot read
+     */
+    public ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,
+                         int metadataBudgetBytes, Map<ChannelId, Long> resumeNextRead) {
+        this(processName, receivedChannels, store, metadataBudgetBytes, Sabotage.NONE, resumeNextRead);
+    }
+
+    private ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,
+                          int metadataBudgetBytes, Sabotage sabotage, Map<ChannelId, Long> resumeNextRead) {
         this.processName = processName;
         this.receivedChannels = new TreeSet<>(receivedChannels.keySet());
         this.store = store;
@@ -245,6 +275,29 @@ public final class ProcessEngine {
                 advanceFedUpTo(channel, past);
             }
         }
+        resumeNextRead.forEach((channel, nextRead) -> {
+            if (!this.receivedChannels.contains(channel)) {
+                return;
+            }
+            if (heldCount(channel) != 0) {
+                throw new ParsleyFailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+                        "process " + processName + ": " + channel + " carries persisted held messages, which a"
+                                + " host resuming at the hold-back head never writes; this state was left by a"
+                                + " different host. Reset the process's state and group offsets deliberately"
+                                + " to proceed.");
+            }
+            Long fed = fedUpTo.get(channel);
+            if (fed == null || fed == FED_TO_END_OF_CHANNEL || fed < nextRead) {
+                return;
+            }
+            if (nextRead == 0) {
+                fedUpTo.remove(channel);
+                store.delete(StoreCodec.channelKey(StoreCodec.TAG_FED_UP_TO, channel));
+            } else {
+                fedUpTo.put(channel, nextRead - 1);
+                store.put(StoreCodec.channelKey(StoreCodec.TAG_FED_UP_TO, channel), StoreCodec.encodeLong(nextRead - 1));
+            }
+        });
         this.sessionFloor = Map.copyOf(fedUpTo);
     }
 

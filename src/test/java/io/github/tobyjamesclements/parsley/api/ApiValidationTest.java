@@ -155,6 +155,23 @@ class ApiValidationTest {
                 "the refusal says what is missing: " + e.getMessage());
     }
 
+    /**
+     * The host defaults to Kafka Streams, the one SPEC Substrate 2 names; the kafka-clients
+     * host is opt-in (D114), and a null selection is refused rather than read as either.
+     */
+    @Test
+    void hostDefaultsToKafkaStreamsAndTheClientsHostIsOptIn() {
+        assertEquals(ParsleyConfig.Host.KAFKA_STREAMS,
+                ParsleyConfig.builder("broker:9092", "app").build().host(),
+                "an application that does not opt in must run under the host the spec names");
+        assertEquals(ParsleyConfig.Host.KAFKA_CLIENTS,
+                ParsleyConfig.builder("broker:9092", "app").host(ParsleyConfig.Host.KAFKA_CLIENTS).build().host(),
+                "opting in must select the kafka-clients host");
+        assertThrows(IllegalArgumentException.class,
+                () -> ParsleyConfig.builder("broker:9092", "app").host(null),
+                "a null host must be refused at construction, not resolved at start");
+    }
+
     /** Guarantee bearing configuration is unoverridable. */
     @Test
     void guaranteeBearingConfigurationIsUnoverridable() {

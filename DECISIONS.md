@@ -4747,3 +4747,127 @@ A genuinely missing topic is refused one second later than before.
 **Specification gap**
 
 None.
+
+### D114 — A kafka-clients host beside the Kafka Streams host, as an opt-in spike
+
+**Context**
+
+Nearly all of the Streams adapter's complexity compensates for Streams hiding its consumer.
+The read-position report had to be reconstructed from the group's committed offsets through
+the admin client, and then corrected by a probe consumer because Streams commits only the
+partitions that had records in the current lifetime (D6, D35). Held messages had to be
+persisted in full to the ordering changelog because Streams commits read positions past
+records it buffered but never delivered — the source of the record-size refusals, the
+`max.message.bytes` sizing rule, and D102/D110's memory and flush machinery. Initial
+positions had to be committed by a separate group member because the Streams consumer is
+unreachable, which brought the generation fence (D48), the partial-listing retries (D86)
+and the concurrent cold-start collision handled by replacing a stream thread (D108). Prior
+state had to be discovered by reading the whole changelog before Streams starts (D79, D84,
+D88). Stream-thread failures had to be diagnosed by matching Streams' exception messages.
+The public API, meanwhile, exposes Streams only as the name of `streamsProperty` and
+`stateDir`: no `Topology`, no Streams type, no Streams configuration key an application
+needs.
+
+SPEC Substrate 2 says the host MUST be Kafka Streams, and Assumption 5 rests on it. This
+record does not amend the spec; it establishes, by the existing integration suite, what a
+host over the plain clients would cost and save, so the amendment can be argued from
+evidence.
+
+**Decision**
+
+`ParsleyConfig.Builder.host(Host.KAFKA_CLIENTS)` runs each process as one `ProcessRunner`:
+a consumer thread over the received topics under a co-partitioning assignor
+(`CoPartitionAssignor`, partition *p* of every received topic to one member), a
+transactional producer, and one `ProcessTask` per assigned partition driving an unchanged
+`ProcessEngine`. The default stays `Host.KAFKA_STREAMS`, so nothing changes for an
+application that does not opt in.
+
+Four things the Streams host builds are not built here, because the consumer is in hand:
+
+* *The read-position report is the consumer's own position after each poll.* Under
+  `read_committed` the position asserts that every lower offset was returned by a poll or is
+  an aborted or control record, which is exactly Host obligation 2's report; it is fed to the
+  engine as `committedNextRead` where it moved. The admin-client round (`AdminFactsSource`,
+  unchanged) still supplies log starts and topic identity for Safety 8 and pruning, but
+  never probes: it is passed no hints.
+* *Held messages are never persisted.* The engine delivers only per-channel heads, so a
+  channel's held set is a contiguous suffix of the log from the head; the task commits the
+  head's position where something is held and the consumer's position otherwise, and a
+  restart re-feeds the buffer from the log. `ProcessEngine` gains a constructor taking the
+  host's resume position per channel and clamps restored feed coverage just below it, so
+  the re-fed messages are accepted rather than dropped as covered; it refuses persisted
+  holds in that mode, since they can only have been left by the other host.
+* *Initial positions need no bootstrap member.* On assignment a task with no committed
+  offset resolves the declared initial position (earliest after prior state, per D36) to a
+  concrete offset and seeks; the first transaction's `sendOffsetsToTransaction` with the
+  consumer's group metadata commits it under the generation fence, the same fence D48 joined
+  a group to obtain.
+* *Prior state is per task, read on assignment.* Ordering state and every application store
+  live in compacted topics at the task width, one partition per task, materialised in
+  memory (`TopicStore`) by reading the partition to its true end (D79's reasoning, through
+  `ParsleyRuntime.readToEnds`). Writes are staged and sent inside the open transaction
+  ahead of the offsets, so the latest value per key costs one record per commit interval —
+  D110's cache, without RocksDB. The width refusal keys on the ordering topic's partition
+  count at start; the lost-state refusal (`ORDERING_STATE_LOST`) and the stranded-hold
+  refusal (`CHANNEL_REMOVED_WITH_HELD_MESSAGES`, derived from coverage against the group's
+  committed offset rather than from held blobs) run per task on assignment.
+
+The handler seam moved out of `ParsleyProcessor` into `DeliverySeam` unchanged — plan,
+apply, and the latched refusal — so both hosts run one copy of it, and the task-status
+composition into `TaskSnapshots` likewise. The transactional loop is the plain
+consume-transform-produce pattern: a transaction opens on a step's first write or send,
+commits every hundred milliseconds with the staged state and the read positions, aborts on
+any step failure with the process stopped (failing closed), commits on revoke and rebuilds
+every task from committed state on assignment, so nothing an incarnation held in memory
+outlives it. The producer's transaction timeout defaults to ten seconds as Streams' does
+under EOS, so a superseded incarnation's open transaction cannot hold a successor's
+restore for long.
+
+`EndToEndIntegrationTest` is now the contract every host must meet: `host()` selects the
+host, and `ClientHostEndToEndIntegrationTest` runs the same eight cases against the
+kafka-clients host on its own broker — the causal chain, the held message across a restart,
+across a migration between instances and across a state-directory wipe, the cause on an
+aborted run with and without a restart, truncation, and the mid-step crash. The held
+premise in those cases is established through `status()` rather than the group's committed
+offset, since a host committing at the head never advances the offset past a hold.
+
+**Alternatives**
+
+* Persisting held messages under the clients host too, committing the consumer's position
+  as Streams does. Rejected for the spike: it keeps the record-size coupling and the
+  memory machinery the change exists to remove, and commit-at-head needs only the clamp.
+* A custom Streams path that reaches the consumer. Rejected: there is none; the processor
+  API exposes neither the consumer nor its positions.
+* Amending the spec first. Rejected: an amendment argued from a design is weaker than one
+  argued from the suite passing on the alternative.
+
+**Cost**
+
+* Application stores are in memory and rebuilt from their changelogs on every assignment;
+  a large store is the one thing Streams' RocksDB-plus-checkpoint machinery does that this
+  host does not yet.
+* A held message stays decoded on the heap: D102's skeleton discipline relied on the store
+  holding the body. Deep hold-back buffers cost heap here where they cost RocksDB before.
+* A message held while retention discards it from its source topic was deliverable after a
+  restart under Streams, since the changelog held a copy; here the restart re-feeds from
+  the log and refuses with `POSITIONS_DISCARDED_UNREAD`. `docs/operations.md` already
+  requires retention to cover hold-back time, so this narrows a case rather than opens one.
+* The assignor is a classic-protocol client-side assignor; KIP-848 does not run it. The
+  Streams host has the same constraint today (D87 pins `group.protocol`).
+* Rebalances are eager and rebuild every task; cooperative rebalancing is not attempted.
+* `streamsProperty` values flow to the plain clients unfiltered beyond the owned keys; a
+  Streams-prefixed spelling is ignored with the client's own warning.
+* `stateDir` is ignored. `ClientRuntime` creates its own state topics (the ordering topic
+  is `<applicationId>-__parsley.ordering`, stores keep the Streams changelog names) with the
+  broker's default replication factor.
+* The unit-level pins of the Streams adapter (`TopologyWiringTest`, `ProcessorRevivalTest`,
+  the bootstrap suites) have no counterpart for the new host yet; the contract suite is
+  its only evidence.
+
+**Specification gap**
+
+Substrate 2 and Assumption 5 name Kafka Streams. If this host is adopted, both should name
+Kafka's consumer and producer instead, Substrate 3 should be restated as transactional
+produce with the read positions committed in the transaction under `read_committed`, and
+the Host obligations become the implementation's own — enforceable rather than merely
+detectable — since the implementation now owns the consumer.

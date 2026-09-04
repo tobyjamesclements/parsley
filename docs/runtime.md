@@ -119,3 +119,18 @@ A handler that throws fails its step. The process stops, and on restart is fed t
 message and fails again: Parsley never skips a message. To continue past an application
 failure, catch it and return effects that record it deterministically — an emission to a
 declared dead-letter channel, or a state write — rather than throwing.
+
+## Hosts
+
+The host above is Kafka Streams, the default. `ParsleyConfig.Builder.host(Host.KAFKA_CLIENTS)`
+opts a process into an experimental host over the plain kafka-clients consumer and producer
+(D114). The seam, the delivery decision and the wire format are the same; what differs is
+plumbing. The consumer's own position after each poll is the read-position report, so no
+probe runs; the read position commits at the head of each channel's hold-back buffer and a
+restart re-feeds the buffer from the log, so no held message is persisted and no record-size
+limit applies to holds; initial positions commit under the group's generation in the first
+transaction, so no bootstrap member joins; ordering state and application stores live in
+compacted topics at the task width, one partition per task, materialised in memory on
+assignment. The costs the record lists: stores are in memory, a held message stays decoded
+on the heap, and a message discarded by retention while held refuses on restart rather than
+delivering from a changelog copy.

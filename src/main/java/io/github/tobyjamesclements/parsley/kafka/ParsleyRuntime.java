@@ -44,7 +44,7 @@ import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
  *
  * @see io.github.tobyjamesclements.parsley.api.Parsley
  */
-public final class ParsleyRuntime implements AutoCloseable {
+public final class ParsleyRuntime implements RuntimeHandle {
     private static final Logger LOG = LoggerFactory.getLogger(ParsleyRuntime.class);
     private static final long TIMEOUT_SECONDS = 30;
     /**
@@ -438,6 +438,7 @@ public final class ParsleyRuntime implements AutoCloseable {
      * @return the current state of every process, keyed by name, with a refusal reason where
      *         one stopped to preserve the guarantee
      */
+    @Override
     public Map<String, io.github.tobyjamesclements.parsley.api.ProcessStatus> status() {
         Map<String, io.github.tobyjamesclements.parsley.api.ProcessStatus> statuses = new LinkedHashMap<>();
         streamsByProcess.forEach((process, kafkaStreams) -> {
@@ -497,7 +498,7 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    private static void validateDistinctNames(List<ProcessDefinition> definitions) {
+    static void validateDistinctNames(List<ProcessDefinition> definitions) {
         Set<String> names = new HashSet<>();
         for (ProcessDefinition definition : definitions) {
             if (!names.add(definition.name())) {
@@ -509,7 +510,7 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    private static Set<String> declaredTopics(List<ProcessDefinition> definitions) {
+    static Set<String> declaredTopics(List<ProcessDefinition> definitions) {
         Set<String> topics = new HashSet<>();
         for (ProcessDefinition definition : definitions) {
             topics.addAll(definition.receivedTopics());
@@ -1192,6 +1193,7 @@ public final class ParsleyRuntime implements AutoCloseable {
      *
      * @throws InterruptedException if the waiting thread is interrupted
      */
+    @Override
     public void awaitStopped() throws InterruptedException {
         stopped.await();
     }
@@ -1203,6 +1205,7 @@ public final class ParsleyRuntime implements AutoCloseable {
      * @return {@code true} if a process stopped or the runtime closed within the timeout
      * @throws InterruptedException if the waiting thread is interrupted
      */
+    @Override
     public boolean awaitStopped(java.time.Duration timeout) throws InterruptedException {
         return stopped.await(timeout.toNanos(), TimeUnit.NANOSECONDS);
     }
@@ -1212,6 +1215,7 @@ public final class ParsleyRuntime implements AutoCloseable {
      *
      * @return {@code true} while every process is running or rebalancing
      */
+    @Override
     public boolean healthy() {
         return failuresByProcess.isEmpty() && streams.stream().allMatch(ks -> ks.state().isRunningOrRebalancing());
     }

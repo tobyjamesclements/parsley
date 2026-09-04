@@ -55,10 +55,14 @@ by reordering, skipping, or adding a timeout. Where the guarantee cannot be uphe
   `ParsleyConfig`, `ProcessDefinition`, `Channel`, `Store`, `Handler`, `Delivery`,
   `Effects`, `StateReader`, `ProcessStatus` with its per-task `TaskStatus`, and
   `KafkaNames`, the one spelling of the topic-name rule every declared name satisfies.
-- `…/parsley/kafka`, the Kafka Streams adapter: byte topologies (`ProcessTopology`,
-  `ParsleyProcessor`), position facts from the admin client (`AdminFactsSource`), the
-  store over a Streams state store (`StreamsOrderingStore`), and the EOS lifecycle
-  (`ParsleyRuntime`).
+- `…/parsley/kafka`, the Kafka hosts. The Streams adapter: byte topologies
+  (`ProcessTopology`, `ParsleyProcessor`), position facts from the admin client
+  (`AdminFactsSource`), the store over a Streams state store (`StreamsOrderingStore`), and
+  the EOS lifecycle (`ParsleyRuntime`). The opt-in kafka-clients host (D114):
+  `ClientRuntime`, one `ProcessRunner` thread per process over the plain consumer and
+  transactional producer, `ProcessTask` per partition, `TopicStore` for state materialised
+  from compacted topics, and `CoPartitionAssignor`. Both hosts run the handler through one
+  `DeliverySeam`.
 - `…/parsley/session`, the companion surface for session consistency at the pipeline's
   edge (issue #96, D99): `CausalPast`, a causal frontier carried as a client token or
   recorded beside projected data, with a coverage check that fails closed over channels
