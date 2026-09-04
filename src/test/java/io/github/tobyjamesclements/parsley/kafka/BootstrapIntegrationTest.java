@@ -47,8 +47,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Establishes the start sequence against a real broker.
  *
- * <p>Covers position pre-commit under group fencing, expired positions, refusal where held
- * messages are stranded, the dead-channel confirmation window, and a width-changing restart.
+ * <p>Covers position pre-commit under group fencing, expired positions resumed at the covered
+ * position plus one and judged by the first fetch, refusal where held messages are stranded,
+ * and a width-changing restart.
  */
 class BootstrapIntegrationTest {
     private static KafkaClusterTestKit cluster;
@@ -75,7 +76,7 @@ class BootstrapIntegrationTest {
     private static ParsleyConfig config(String prefix) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(prefix).toString())
-                .factsInterval(Duration.ofMillis(500))
+                .statusInterval(Duration.ofMillis(500))
                 .build();
     }
 
@@ -195,9 +196,14 @@ class BootstrapIntegrationTest {
                 "the ordering changelog must be compacted; state restore depends on it");
     }
 
-    /** Expired offsets restart from earliest not the declared latest. */
+    /**
+     * Expired offsets resume from the ordering state's coverage, never the declared LATEST
+     * (D36 as D115 narrows it): a process with prior state resumes at the covered position
+     * plus one, so the record produced while it was stopped delivers, history the first
+     * execution skipped stays skipped, and what it delivered is not delivered again.
+     */
     @Test
-    void expiredOffsetsRestartFromEarliestNotTheDeclaredLatest() throws Exception {
+    void expiredOffsetsResumeFromCoverageNotTheDeclaredLatest() throws Exception {
         createTopics(new NewTopic("ex-in", 1, (short) 1));
         produce("ex-in", null, "k", "early");
         Channel<String, String> in = Channel.of("ex-in", Serdes.String(), Serdes.String())
@@ -239,15 +245,17 @@ class BootstrapIntegrationTest {
     }
 
     /**
-     * The expiry restart's re-established position must not jump positions discarded
-     * unread: where retention advanced past the previous execution's covered position
-     * while the process was stopped and its offsets expired, committing the current log
-     * start would fabricate a read-position report the host never made — and the engine's
-     * own truncation check, comparing log starts against coverage that very report just
-     * advanced, could never fire. SPEC Safety 8 requires the refusal instead.
+     * An expired committed position past retention refuses at the fetch (D115): the
+     * bootstrap resumes the partition at the ordering state's covered position plus one,
+     * Kafka Streams' first fetch of it finds the position below the log start, and
+     * {@code auto.offset.reset=none} stops the process with POSITIONS_DISCARDED_UNREAD in
+     * {@code status()} rather than skipping the gap (SPEC Safety 8, D9/D81/D109). Nothing
+     * past the discarded positions is delivered. D74's start-time comparison against the
+     * log start used to refuse this from {@code start()} itself; the fetch is now the one
+     * judge of retention, and there is no other.
      */
     @Test
-    void expiredOffsetsBeyondRetentionRefuseRatherThanAbsorbTheGap() throws Exception {
+    void expiredOffsetsBeyondRetentionRefuseAtTheFetchRatherThanAbsorbTheGap() throws Exception {
         createTopics(new NewTopic("exd-in", 1, (short) 1));
         Channel<String, String> in = Channel.of("exd-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
@@ -279,11 +287,71 @@ class BootstrapIntegrationTest {
                         org.apache.kafka.clients.admin.RecordsToDelete.beforeOffset(3)))
                 .all().get(30, TimeUnit.SECONDS);
 
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
-                () -> Parsley.start(config("exd"), p),
-                "a re-established read position beyond discarded-unread positions must refuse");
-        assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, e.reason(),
-                "the refusal names Safety 8's condition, not a generic startup failure");
+        Parsley parsley = Parsley.start(config("exd"), p);
+        try {
+            await("the first fetch at the resumed position to refuse", () -> {
+                var status = parsley.status().get("exd");
+                return status != null && status.refusalReason().isPresent();
+            }, Duration.ofSeconds(120));
+            assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
+                    parsley.status().get("exd").refusalReason().orElseThrow(),
+                    "the consumer's out-of-range stop names Safety 8's condition, not a generic failure");
+            assertEquals(List.of("m0"), List.copyOf(delivered), "nothing may be delivered past the discarded positions");
+        } finally {
+            parsley.close();
+        }
+        var committed = admin.listConsumerGroupOffsets("exd-exd").partitionsToOffsetAndMetadata()
+                .get(30, TimeUnit.SECONDS).get(new TopicPartition("exd-in", 0));
+        assertEquals(1L, committed.offset(),
+                "the bootstrap resumed at the covered position plus one, and the fetch judged it");
+    }
+
+    /**
+     * An expired committed position within retention resumes at the covered position plus
+     * one (D115): the records produced while the process was stopped deliver once each, and
+     * nothing delivered before the stop delivers again. The declared initial position is
+     * not consulted — a process with prior state resumes, it does not start.
+     */
+    @Test
+    void expiredOffsetsWithinRetentionResumeAtTheCoveredPositionPlusOne() throws Exception {
+        createTopics(new NewTopic("exr-in", 1, (short) 1));
+        Channel<String, String> in = Channel.of("exr-in", Serdes.String(), Serdes.String())
+                .startingAt(Channel.InitialPosition.LATEST);
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition p = ProcessDefinition.named("exr")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("exr"), p)) {
+            produce("exr-in", null, "k", "m0");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+            awaitCommitted("exr-exr", "exr-in", 1);
+        }
+
+        produce("exr-in", null, "k", "m1");
+        produce("exr-in", null, "k", "m2");
+        await("the group's offsets to be deletable", () -> {
+            try {
+                admin.deleteConsumerGroupOffsets("exr-exr", Set.of(new TopicPartition("exr-in", 0)))
+                        .all().get(10, TimeUnit.SECONDS);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }, Duration.ofSeconds(60));
+
+        try (Parsley parsley = Parsley.start(config("exr"), p)) {
+            await("the records produced while stopped to deliver",
+                    () -> delivered.contains("m2"), Duration.ofSeconds(60));
+            assertEquals(List.of("m0", "m1", "m2"), List.copyOf(delivered),
+                    "the resumed position is the covered position plus one: m0 once, m1 and m2 once each,"
+                            + " and the declared LATEST never consulted");
+            assertTrue(parsley.healthy());
+            awaitCommitted("exr-exr", "exr-in", 3);
+        }
     }
 
     /**
@@ -568,69 +636,6 @@ class BootstrapIntegrationTest {
         ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
                 () -> Parsley.start(config("st"), withoutB));
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES, e.reason());
-    }
-
-    /** Dead verdict waits out the confirmation window. */
-    @Test
-    void deadVerdictWaitsOutTheConfirmationWindow() throws Exception {
-        createTopics(new NewTopic("db-x", 1, (short) 1));
-        UUID xId = topicId("db-x");
-        ChannelId xChannel = new ChannelId(xId, 0);
-        long[] clock = {1_000_000L};
-        AdminFactsSource facts = new AdminFactsSource(admin, "db-group", Map.of(xId, "db-x"),
-                Map.of("bootstrap.servers", cluster.bootstrapServers()), 1_500, () -> clock[0]);
-
-        assertTrue(facts.gather(Set.of(), Map.of(), Set.of(xChannel)).deadChannels().isEmpty(),
-                "a live topic is never dead");
-        admin.deleteTopics(List.of("db-x")).all().get(30, TimeUnit.SECONDS);
-        await("the deletion to propagate", () -> {
-            try {
-                return facts.gather(Set.of(), Map.of(), Set.of(xChannel)).logStart().isEmpty();
-            } catch (Exception e) {
-                return false;
-            }
-        }, Duration.ofSeconds(30));
-
-        assertTrue(facts.gather(Set.of(), Map.of(), Set.of(xChannel)).deadChannels().isEmpty(),
-                "an unknown id younger than the confirmation window reports nothing");
-        clock[0] += 1_000;
-        assertTrue(facts.gather(Set.of(), Map.of(), Set.of(xChannel)).deadChannels().isEmpty(),
-                "still inside the window: still nothing");
-        clock[0] += 1_000;
-        assertEquals(Set.of(xChannel), facts.gather(Set.of(), Map.of(), Set.of(xChannel)).deadChannels(),
-                "corroborated-unknown for the whole window: dead, terminally");
-        facts.close();
-    }
-
-    /** Log start is not attributed across an unconfirmed identity. */
-    @Test
-    void logStartIsNotAttributedAcrossAnUnconfirmedIdentity() throws Exception {
-        createTopics(new NewTopic("cf-x", 1, (short) 1));
-        produce("cf-x", null, "k", "r0");
-        UUID xId = topicId("cf-x");
-        ChannelId xChannel = new ChannelId(xId, 0);
-        Map<String, Object> props = Map.of("bootstrap.servers", cluster.bootstrapServers());
-
-        AdminFactsSource honest = new AdminFactsSource(admin, "cf-group", Map.of(xId, "cf-x"),
-                props, 1_500, () -> 0L);
-        assertEquals(0L, honest.gather(Set.of(), Map.of(), Set.of(xChannel)).logStart().get(xChannel),
-                "control: with a stable identity the log start is attributed");
-        honest.close();
-
-        AdminFactsSource racedByRecreation = new AdminFactsSource(admin, "cf-group", Map.of(xId, "cf-x"),
-                props, 1_500, () -> 0L) {
-            private int describes;
-
-            @Override
-            Map<UUID, String> describeByIds(Set<UUID> topicIds) throws Exception {
-                Map<UUID, String> real = super.describeByIds(topicIds);
-
-                return ++describes % 2 == 0 ? Map.of() : real;
-            }
-        };
-        assertTrue(racedByRecreation.gather(Set.of(), Map.of(), Set.of(xChannel)).logStart().isEmpty(),
-                "an identity that did not hold across the offsets query attributes nothing (D22)");
-        racedByRecreation.close();
     }
 
     /** Width changing restart is refused with the accurate diagnosis. */

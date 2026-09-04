@@ -55,7 +55,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Establishes how topic identity is handled against a real broker.
  *
- * <p>Covers recreation during a run and across a restart, and authorization denial, which is
+ * <p>Covers recreation across a restart and deletion during a run, the classification a
+ * task's initialisation acts on over a real broker, and authorization denial, which is
  * treated as denial rather than as death.
  */
 class IdentityIntegrationTest {
@@ -89,7 +90,7 @@ class IdentityIntegrationTest {
     private static ParsleyConfig config(String prefix) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(prefix).toString())
-                .factsInterval(Duration.ofMillis(500))
+                .statusInterval(Duration.ofMillis(500))
                 .build();
     }
 
@@ -146,42 +147,108 @@ class IdentityIntegrationTest {
         return causes;
     }
 
-    /** Mid run recreation of a received topic stops the process. */
+    /**
+     * A received topic deleted while messages from it are held — an Assumption 17 breach —
+     * stops the process before anything delivers past them (SPEC Safety 9). On this host
+     * that happens one of two ways, both fail-closed and neither periodic (D115): a
+     * rebalance finds the source topic missing and Kafka Streams stops the thread with its
+     * own diagnosis, which {@code status()} carries as a transient the restart refines; or
+     * the task's transactional commit fails once the partition is gone (the producer's
+     * {@code max.block.ms}, a minute, and the abort that follows can spend another) and
+     * Streams re-creates the task, whose initialisation reports the topic deleted and
+     * refuses with CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES (D46) — or, when the
+     * re-creation's rejoin is what first meets the missing topic, stops the thread. Which
+     * one wins is the host's timing (measured: the commit and abort timeouts back to back,
+     * a little over two minutes); this pins that one does, and that nothing was delivered.
+     */
     @Test
-    void midRunRecreationOfAReceivedTopicStopsTheProcess() throws Exception {
-        createTopics("rr-in");
-        Channel<String, String> in = Channel.of("rr-in", Serdes.String(), Serdes.String());
+    void aReceivedTopicDeletedWhileHeldFromStopsTheProcessBeforeDeliveringPastTheHold() throws Exception {
+        createTopics("dh-a", "dh-b");
+        Channel<String, String> a = Channel.of("dh-a", Serdes.String(), Serdes.String());
+        Channel<String, String> b = Channel.of("dh-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("rr")
-                .receives(in, (d, s) -> {
+        ProcessDefinition p = ProcessDefinition.named("dh")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .receives(b, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
                 })
                 .build();
 
-        try (Parsley parsley = Parsley.start(config("rr"), p)) {
-            for (int i = 0; i < 5; i++) {
-                produce("rr-in", "k", "m" + i);
-            }
-            await("all five to deliver", () -> delivered.size() == 5, Duration.ofSeconds(60));
-            awaitCommitted("rr-rr", "rr-in", 5);
+        produce("dh-a", "k", "H", causesHeader(Map.of(new ChannelId(topicId("dh-b"), 0), 9L)));
 
-            admin.deleteTopics(List.of("rr-in")).all().get(30, TimeUnit.SECONDS);
-            Thread.sleep(200);
-            createTopics("rr-in");
+        try (Parsley parsley = Parsley.start(config("dh"), p)) {
+            ClusterTestSupport.awaitFedAndHeld(admin, "dh-dh", "dh-a", delivered);
+            admin.deleteTopics(List.of("dh-a")).all().get(30, TimeUnit.SECONDS);
 
-            for (int i = 0; i < 8; i++) {
-                produce("rr-in", "k", "v" + i);
-            }
-
-            await("the process to stop rather than adopt the new incarnation",
-                    () -> !parsley.healthy(), Duration.ofSeconds(30));
-            assertTrue(delivered.stream().filter(v -> v.startsWith("m")).count() == 5,
-                    "the old incarnation's deliveries stand");
-
-            await("the failure to be recorded in the status surface",
-                    () -> parsley.status().get("rr").failureDetail().isPresent(), Duration.ofSeconds(30));
+            await("the process to stop rather than run on without its received topic",
+                    () -> !parsley.healthy(), Duration.ofSeconds(300));
+            assertEquals(List.of(), List.copyOf(delivered), "nothing may be delivered past the held message");
+            await("the stop to be recorded in the status surface",
+                    () -> parsley.status().get("dh").failureDetail().isPresent(), Duration.ofSeconds(30));
+            io.github.tobyjamesclements.parsley.api.ProcessStatus status = parsley.status().get("dh");
+            boolean refusedAtInitialisation = status.refusalReason()
+                    .map(reason -> reason == ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES)
+                    .orElse(false);
+            boolean stoppedByTheHost = status.refusalReason().isEmpty()
+                    && status.failureDetail().orElseThrow().contains("source topics were missing");
+            assertTrue(refusedAtInitialisation || stoppedByTheHost,
+                    "the stop must be the initialisation's refusal or the host's missing-source-topic stop, got: "
+                            + status);
         }
+    }
+
+    /**
+     * The identity classification a task's initialisation acts on, over a real broker
+     * (D115): a live topic is neither deleted nor recreated; a deleted one is deleted only
+     * once its name is gone across three consistent answers; a topic recreated under its
+     * name makes the id it had a dead incarnation; and an id whose name the source never
+     * learned is never confirmed dead at all (D75), since a Describe denial masks a live
+     * topic as unknown by id exactly the same way.
+     */
+    @Test
+    void identitySourceClassifiesDeletedRecreatedAndNamelessTopicsAgainstARealBroker() throws Exception {
+        createTopics("id-x", "id-y");
+        UUID xId = topicId("id-x");
+        UUID yId = topicId("id-y");
+        AdminTopicIdentitySource source = new AdminTopicIdentitySource(admin, "id-group",
+                Map.of(xId, "id-x"), Duration.ofMillis(50));
+
+        assertEquals(TopicIdentityVerdicts.NONE, source.resolve(Set.of(xId, yId)), "live topics: nothing gone");
+
+        admin.deleteTopics(List.of("id-x", "id-y")).all().get(30, TimeUnit.SECONDS);
+        await("the deletions to propagate", () -> {
+            try {
+                admin.describeTopics(List.of("id-x")).allTopicNames().get(10, TimeUnit.SECONDS);
+                return false;
+            } catch (Exception e) {
+                return e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
+            }
+        }, Duration.ofSeconds(30));
+        TopicIdentityVerdicts afterDeletion = source.resolve(Set.of(xId, yId));
+        assertEquals(Set.of(xId, yId), afterDeletion.deleted(),
+                "both names were learned — x declared, y described alive at the first check — so both are deleted");
+        assertEquals(Set.of(), afterDeletion.recreated());
+
+        createTopics("id-x");
+        await("the recreation to propagate", () -> {
+            try {
+                return !topicId("id-x").equals(xId);
+            } catch (Exception e) {
+                return false;
+            }
+        }, Duration.ofSeconds(30));
+        TopicIdentityVerdicts afterRecreation = source.resolve(Set.of(xId));
+        assertEquals(Set.of(xId), afterRecreation.recreated(), "the name resolves to a new id: the old one is dead");
+        assertEquals(Set.of(), afterRecreation.deleted());
+
+        AdminTopicIdentitySource nameless = new AdminTopicIdentitySource(admin, "id-group-2", Map.of(),
+                Duration.ofMillis(50));
+        assertEquals(TopicIdentityVerdicts.NONE, nameless.resolve(Set.of(yId)),
+                "an id whose name was never learned is never confirmed dead");
     }
 
     /** Deliberate refusal is readable in the status surface. */
@@ -195,7 +262,7 @@ class IdentityIntegrationTest {
                 .build();
         ParsleyConfig tinyBudget = ParsleyConfig.builder(cluster.bootstrapServers(), "sr")
                 .stateDir(stateDir.resolve("sr").toString())
-                .factsInterval(Duration.ofMillis(500))
+                .statusInterval(Duration.ofMillis(500))
                 .metadataBudgetBytes(64)
                 .build();
 
@@ -222,9 +289,15 @@ class IdentityIntegrationTest {
         }
     }
 
-    /** Denied describe on a frontier topic does not prune its cause. */
+    /**
+     * A Describe denial on a frontier topic, in place when a task initialises, does not
+     * prune its cause: the broker masks the denied topic as unknown by id, the source has
+     * no name for a topic this process never declared, and an id without a name is never
+     * confirmed dead (D75, D115). The restart is what puts the denial in front of an
+     * initialisation's identity check.
+     */
     @Test
-    void deniedDescribeOnAFrontierTopicDoesNotPruneItsCause() throws Exception {
+    void deniedDescribeOnAFrontierTopicDoesNotPruneItsCauseAtInitialisation() throws Exception {
         createTopics("acl-in", "acl-out", "acl-x");
         UUID xId = topicId("acl-x");
         ChannelId xChannel = new ChannelId(xId, 0);
@@ -235,27 +308,34 @@ class IdentityIntegrationTest {
                 .sends(out)
                 .build();
 
-        try (Parsley parsley = Parsley.start(config("acl"), p)) {
-            produce("acl-in", "k", "first", causesHeader(Map.of(xChannel, 0L)));
-            await("the first emission", () -> emittedCauses("acl-out").size() >= 1, Duration.ofSeconds(60));
-            assertEquals(0L, emittedCauses("acl-out").get(0).byChannel().get(xChannel),
-                    "the injected cause must ride the frontier");
+        try {
+            try (Parsley parsley = Parsley.start(config("acl"), p)) {
+                produce("acl-in", "k", "first", causesHeader(Map.of(xChannel, 0L)));
+                await("the first emission", () -> emittedCauses("acl-out").size() >= 1, Duration.ofSeconds(60));
+                assertEquals(0L, emittedCauses("acl-out").get(0).byChannel().get(xChannel),
+                        "the injected cause must ride the frontier");
+            }
 
             denyDescribe("acl-x");
 
-            Thread.sleep(4_000);
-            produce("acl-in", "k", "second");
-            await("the second emission", () -> emittedCauses("acl-out").size() >= 2, Duration.ofSeconds(60));
-            List<Causes> causes = emittedCauses("acl-out");
-            assertEquals(0L, causes.get(causes.size() - 1).byChannel().get(xChannel),
-                    "a denied describe is not evidence of death: the cause must still be expressed");
-            assertTrue(parsley.healthy(), "denial is not a failure of this process");
+            try (Parsley parsley = Parsley.start(config("acl"), p)) {
+                produce("acl-in", "k", "second");
+                await("the second emission", () -> emittedCauses("acl-out").size() >= 2, Duration.ofSeconds(60));
+                List<Causes> causes = emittedCauses("acl-out");
+                assertEquals(0L, causes.get(causes.size() - 1).byChannel().get(xChannel),
+                        "a denied describe is not evidence of death: the cause must still be expressed");
+                assertTrue(parsley.healthy(), "denial is not a failure of this process");
+            }
         } finally {
             dropAcls("acl-x");
         }
     }
 
-    /** Denied describe on a received topic does not release held messages. */
+    /**
+     * A Describe denial on a received topic neither releases nor refuses a message held
+     * for a cause on it: nothing settles a received channel but receiving the record its
+     * cause names (D115), so the process holds and waits, healthy, until the record arrives.
+     */
     @Test
     void deniedDescribeOnAReceivedTopicDoesNotReleaseHeldMessages() throws Exception {
         createTopics("aclr-in", "aclr-x");
@@ -330,31 +410,5 @@ class IdentityIntegrationTest {
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason(),
                 "nothing was removed from the declaration: the topic's identity changed, and the remedy is a"
                         + " deliberate reset, not a declaration fix");
-    }
-
-    /**
-     * A frontier id the admin client deems unrepresentable — the reserved zero id, which
-     * the client answers locally with {@code InvalidTopicException}, never sending a
-     * request — must degrade to "no facts for that channel", not abort the round: the
-     * round is the only mid-run carrier of verdicts and settling evidence for every other
-     * channel, and ordering state persisted before the decode refusal existed (D83) can
-     * still carry such an id in its restored frontier.
-     */
-    @Test
-    void zeroTopicIdInTheFrontierDoesNotAbortTheFactsRound() throws Exception {
-        createTopics("zid-in");
-        UUID inId = topicId("zid-in");
-        ChannelId received = new ChannelId(inId, 0);
-        AdminFactsSource source = new AdminFactsSource(admin, "zid-group", Map.of(inId, "zid-in"),
-                Map.of("bootstrap.servers", cluster.bootstrapServers()), 1_000L,
-                () -> System.nanoTime() / 1_000_000L);
-
-        var facts = source.gather(Set.of(received), Map.of(),
-                Set.of(new ChannelId(new UUID(0, 0), 0)));
-
-        assertEquals(Map.of(received, 0L), facts.logStart(),
-                "the round must still settle the live channel's facts despite the unanswerable frontier id");
-        assertTrue(facts.deadChannels().isEmpty(),
-                "an unanswerable id is not evidence of death");
     }
 }

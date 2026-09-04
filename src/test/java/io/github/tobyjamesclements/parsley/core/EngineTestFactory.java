@@ -16,13 +16,11 @@ public final class EngineTestFactory {
         UNDECODABLE_AS_ABSENT,
         SKIP_RECEIPT_MERGE,
         DROP_HELD,
-        IGNORE_TRUNCATION,
         IGNORE_REMOVED_CHANNELS,
         SILENT_DROP,
         OVEREXPRESS,
         IGNORE_RECREATION,
-        DELIVER_PAST_DEAD_HOLDS,
-        TREAT_COVERED_FEED_AS_REPLAY
+        DELIVER_PAST_DEAD_HOLDS
     }
 
     private EngineTestFactory() {
@@ -30,10 +28,22 @@ public final class EngineTestFactory {
 
     public static ProcessEngine create(
             String processName, Map<ChannelId, String> receivedChannels, OrderingStore store, SabotageMode mode) {
+        return create(processName, receivedChannels, store, mode, Map.of());
+    }
+
+    /**
+     * Builds an engine under a sabotage mode, with the positions the host feeds from (SPEC
+     * Host obligation 2): the simulated host passes its committed read positions here the
+     * way the Kafka host passes the bootstrap's.
+     */
+    public static ProcessEngine create(
+            String processName, Map<ChannelId, String> receivedChannels, OrderingStore store, SabotageMode mode,
+            Map<ChannelId, Long> startPositions) {
         Sabotage sabotage = mode == SabotageMode.NONE
                 ? Sabotage.NONE
                 : new Sabotage(Set.of(Sabotage.Mode.valueOf(mode.name())));
-        return new ProcessEngine(processName, receivedChannels, store, sabotage);
+        return new ProcessEngine(processName, receivedChannels, store,
+                ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES, sabotage, startPositions);
     }
 
     /**

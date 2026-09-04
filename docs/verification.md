@@ -16,9 +16,12 @@ vector. The purity scan runs again over the `session` sources, with the Kafka ad
 ([Session consistency](session.md)).
 
 **Simulation.** A simulated substrate and host honouring the host obligations drives many
-engines over randomised topologies, interleavings, gaps, aborted-transaction runs, crashes,
-restarts and read-position reports. Runs are seeded and deterministic, so a failure
-reproduces exactly from its seed. `CausalOrderPropertyTest` sweeps seeds 1 to 300.
+engines over randomised topologies, interleavings, gaps, aborted-transaction runs, crashes
+and restarts, with start positions reported at each execution start. The simulated host
+refuses a fetch below the log start — the process fails closed `POSITIONS_DISCARDED_UNREAD`,
+as under `auto.offset.reset=none` — and re-initialises the receivers of a topic that is
+killed or recreated, so the identity report runs. Runs are seeded and deterministic, so a
+failure reproduces exactly from its seed. `CausalOrderPropertyTest` sweeps seeds 1 to 300.
 
 An oracle tracks real happened-before outside the engine and asserts causal order, absence of
 duplicates, FIFO per channel, and quiescent liveness, meaning everything received is
@@ -32,30 +35,31 @@ itself advanced the clamp that later drops the cause.
 **Sabotage meta-tests.** The same suite runs against deliberately broken engines through a
 test-only hook, asserting that the oracle fails. The `Sabotage` modes each disable one
 guarantee: the dependency check, the FIFO hold, the duplicate drop on refeed, the treatment
-of undecodable metadata, persistence of held messages, truncation handling, and others.
+of undecodable metadata, persistence of held messages, and others.
 
 This is the evidence that the tests would catch a violation. `SabotageMetaTest` pins one
 targeted case per mode — for the refusal-disarming modes, both that the sabotage disarms the
 refusal and a pinned seed on which the oracle catches the resulting violation — and a
-randomised sweep records the margin by which the oracle catches each broken engine. Two modes
-are the exception: `DELIVER_PAST_DEAD_HOLDS` is reached by no random seed (calibrated at 0 in
-300), so its oracle evidence is a deterministic scenario constructing the causal inversion;
-and `TREAT_COVERED_FEED_AS_REPLAY` disarms a refusal the sweep cannot provoke, because the
-harness derives every read-position report from a process's own progress (D91), so its
-evidence is the honest and sabotaged engines staged side by side over the same
-report-then-feed contradiction. Neither carries a sweep floor.
+randomised sweep records the margin by which the oracle catches each broken engine. One mode
+is the exception: `DELIVER_PAST_DEAD_HOLDS` is reached by no random seed (calibrated at 0 in
+300), so its oracle evidence is a deterministic scenario constructing the causal inversion,
+and it carries no sweep floor. A host fault rather than an engine mode,
+`RESET_PAST_LOG_START`, models an `auto.offset.reset=earliest` host resetting past discarded
+positions, and the sweep runs it against the honest engine with its own floor, the catch
+arriving as Safety 8 or the delivery-time causal-order check.
 
 **Streams wiring.** `TopologyTestDriver` tests for the header format on the wire, byte-exact
-key and value pass-through, Schema-Registry-format serdes, and punctuator fact ingestion
-through an injected facts source.
+key and value pass-through, Schema-Registry-format serdes, the identity report at task
+initialisation through an injected identity source, and the status punctuation.
 
 **Integration.** Embedded KRaft broker tests for commit and abort behaviour under
 exactly-once semantics, restart with state restore, restart after a state-dir wipe with the
 ordering state rebuilt entirely from its changelog, migration of a task holding an
 undelivered effect between two live instances, a full broker bounce with a held message
-neither lost nor freed by the outage, aborted-transaction gaps and trailing
-runs, log truncation, and a plain `read_committed` consumer decoding output with application
-serdes alone.
+neither lost nor freed by the outage, aborted-transaction gaps and a cause naming an aborted
+position held and visible until a later record settles it, log truncation refused at the
+fetch, a held message retention discarded delivering from the changelog, and a plain
+`read_committed` consumer decoding output with application serdes alone.
 
 ## Standard of evidence
 

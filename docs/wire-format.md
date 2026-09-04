@@ -70,6 +70,16 @@ Every constraint below is mandatory. Violating any one makes the value undecodab
    records a deleted channel with it. (A reader-side tightening in the manner of
    constraint 5: no conforming writer has ever produced such a pair; D105 records the
    reasoning.)
+8. `position` is the offset of a committed record on that channel: a record the substrate
+   has stored and serves to a `read_committed` reader — never a control record, a record
+   of an aborted transaction, or an offset at or beyond the log's end. A Parsley process
+   satisfies this by construction, since its frontier holds only positions it received
+   records at and positions it learned from received metadata, and so does every
+   `CausalPast` token. A writer naming any other position — the log-end offset is the
+   natural naive stamp — is out of contract: no reader is obliged to settle it, and a
+   receiver holds the message, visibly in its status, until a later record on that
+   channel settles the position (D115). Unlike constraints 1–7 this one is not decidable
+   from the bytes, so no reader refuses it; it is the contract a writer signs.
 
 ## Meaning
 
@@ -79,9 +89,10 @@ so a topic deleted and recreated under the same name is a different channel. The
 stands for every cause of this message on that channel whose position is at or below
 `position`.
 
-A message's metadata expresses every cause of the message whose position is at or above its
-channel's earliest retained position at send time. This includes causes known to the sender
-only from the metadata of messages it had received and not yet delivered.
+A message's metadata expresses every cause of the message, other than causes on channels the
+sender has learned no longer exist. This includes causes known to the sender only from the
+metadata of messages it had received and not yet delivered, and causes whose records
+retention has since discarded: a cause is dropped only with its channel, never for its age.
 
 Entries never name the sending process, and never name a position that had not been assigned
 when the message was sent. A message sent to a channel its sender also receives from never
@@ -89,10 +100,15 @@ carries an entry for its own channel at or above its own position.
 
 A receiver may deliver a message only when, for every entry naming a channel in the receiver's
 received-channel set, every position on that channel up to and including the entry's position
-has either been delivered at that receiver or will never yield a message it receives. Entries
-naming channels outside that set impose no constraint there, which includes dead incarnations
-of recreated topics. The receiver still re-expresses them on its own sends while they can
-still matter.
+has either been delivered at that receiver or will never yield a message it receives. Receipt
+of a record at an offset establishes that for every offset below it, since a channel is fed in
+order; the channel's deletion establishes it for every offset; and the position the receiver
+started reading the channel from establishes it for every offset below that. Nothing else
+does, and an entry naming an offset no committed record occupies (constraint 8) holds the
+message until a later record on the channel settles it. Entries naming channels outside the
+received-channel set impose no constraint there, which includes dead incarnations of
+recreated topics. The receiver still re-expresses them on its own sends while they can still
+matter.
 
 ## Stability
 

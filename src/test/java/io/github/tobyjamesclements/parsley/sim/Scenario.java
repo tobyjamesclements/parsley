@@ -46,16 +46,22 @@ public final class Scenario {
     }
 
     public static Result run(long seed, SabotageMode mode) {
+        return run(seed, mode, SimProcess.HostFault.NONE);
+    }
+
+    /** Runs a scenario under an engine sabotage and a host fault together. */
+    public static Result run(long seed, SabotageMode mode, SimProcess.HostFault hostFault) {
         List<String> journal = new ArrayList<>();
         try {
-            return runInner(seed, mode, journal);
+            return runInner(seed, mode, hostFault, journal);
         } catch (Throwable t) {
             return new Result(List.of("threw: " + t + "\n  journal tail:\n    " + tail(journal, 40)), null, t,
                     List.copyOf(journal));
         }
     }
 
-    private static Result runInner(long seed, SabotageMode mode, List<String> journal) {
+    private static Result runInner(long seed, SabotageMode mode, SimProcess.HostFault hostFault,
+                                   List<String> journal) {
         Random rng = new Random(seed);
         SimWorld world = new SimWorld(seed);
         Oracle oracle = new Oracle();
@@ -84,6 +90,7 @@ public final class Scenario {
             List<SimChannel> sends = randomSubset(rng, channels, rng.nextInt(3));
             SimProcess process = new SimProcess("p" + i, world, oracle, received, sends,
                     delivered -> emitTargets(delivered, sends), mode);
+            process.hostFault(hostFault);
             processes.add(process);
             process.start();
         }
@@ -111,12 +118,9 @@ public final class Scenario {
                 SimChannel channel = received.get(rng.nextInt(received.size()));
                 journal.add(p.name + " feed " + channel.name + " at " + p.workingNextRead(channel));
                 guard(p, () -> p.feedOne(channel), journal, ledger);
-            } else if (roll < 44) {
+            } else if (roll < 54) {
                 journal.add(p.name + " drain");
                 guard(p, p::drain, journal, ledger);
-            } else if (roll < 54) {
-                journal.add(p.name + " facts");
-                guard(p, p::ingestFacts, journal, ledger);
             } else if (roll < 62) {
                 SimChannel target = channels.get(rng.nextInt(channelCount));
                 if (rng.nextInt(5) == 0) {
@@ -208,19 +212,6 @@ public final class Scenario {
                 }
             }
         }
-        for (SimProcess p : processes) {
-            if (p.failedClosed() || !p.isRunning()) {
-                continue;
-            }
-            for (SimChannel channel : iterate(p.receivedChannels())) {
-                java.util.OptionalLong head = p.engine().headPosition(channel.id());
-                if (!channel.dead && head.isPresent() && head.getAsLong() < channel.logStart) {
-                    violations.add("Safety 8 (held): " + p.name + " still holds " + channel.name + "@"
-                            + head.getAsLong() + " below the earliest retained position " + channel.logStart
-                            + " without failing closed; its senders may have pruned it (D104)");
-                }
-            }
-        }
         for (CorruptSpot spot : corrupted) {
             for (SimProcess p : processes) {
                 if (oracle.committedFeedOf(p.name, spot.instance())) {
@@ -289,8 +280,9 @@ public final class Scenario {
     private static void truncateEvent(SimWorld world, List<SimProcess> processes, List<SimChannel> channels,
                                       Random rng, List<String> journal, RefusalLedger ledger) {
         // Biased toward channels some running process holds messages from, as killEvent is:
-        // retention crossing a held message is the shape D104 refuses, and an unbiased pick
-        // reached it in a handful of seeds.
+        // retention crossing a held message is the shape D104 refused and D115 delivers
+        // from the hold-back buffer in order, and an unbiased pick reached it in a handful
+        // of seeds.
         List<SimChannel> heldFrom = channels.stream()
                 .filter(c -> !c.dead && processes.stream().anyMatch(p ->
                         p.isRunning() && p.engine().receivedChannelSet().contains(c.id())
@@ -310,7 +302,7 @@ public final class Scenario {
             target = reader.committedNextRead(channel) + (shape == 0 ? 0 : 1);
         } else if (shape == 4 && !readers.isEmpty()) {
             // Exactly one past a reader's oldest held message: the smallest retention that
-            // discards something a process still owes (D104).
+            // discards the copy of a message a process still holds (D104, D115).
             SimProcess reader = readers.get(rng.nextInt(readers.size()));
             java.util.OptionalLong head = reader.isRunning()
                     ? reader.engine().headPosition(channel.id()) : java.util.OptionalLong.empty();
@@ -355,6 +347,34 @@ public final class Scenario {
         journal.add("kill topic of " + victim.name);
         ledger.justifiable.add(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES);
         world.killChannel(victim);
+        reinitialiseReceivers(processes, victim, journal, ledger);
+    }
+
+    /**
+     * The host's response to a received topic going missing, as Kafka Streams responds: the
+     * task is re-created, and its initialisation reports the identity change (D115). Only
+     * receivers re-initialise; a process that merely names the topic in its frontier prunes
+     * it whenever it next starts.
+     */
+    private static void reinitialiseReceivers(List<SimProcess> processes, SimChannel victim, List<String> journal,
+                                              RefusalLedger ledger) {
+        for (SimProcess p : processes) {
+            if (!p.isRunning() || p.failedClosed()) {
+                continue;
+            }
+            boolean receives = false;
+            for (SimChannel channel : p.receivedChannels()) {
+                if (channel.id().topicId().equals(victim.id().topicId())) {
+                    receives = true;
+                    break;
+                }
+            }
+            if (receives) {
+                journal.add(p.name + " re-initialised by the host: its received topic " + victim.topicName
+                        + " went missing");
+                guard(p, p::reinitialise, journal, ledger);
+            }
+        }
     }
 
     private static void recreateEvent(SimWorld world, List<SimProcess> processes, List<SimChannel> channels,
@@ -380,6 +400,7 @@ public final class Scenario {
         List<SimChannel> fresh = world.recreateTopic(victim);
         channels.removeIf(c -> c.id().topicId().equals(victim.id().topicId()));
         channels.addAll(fresh);
+        reinitialiseReceivers(processes, victim, journal, ledger);
     }
 
     private static void redeclareEvent(SimProcess p, List<SimChannel> channels, Random rng, List<String> journal,
@@ -508,17 +529,6 @@ public final class Scenario {
                     continue;
                 }
                 Integer drained = guarded(p, p::drain, null, ledger);
-                if (drained == null) {
-                    continue;
-                }
-                if (drained > 0) {
-                    progress = true;
-                }
-                p.commitStep();
-                if (!guard(p, p::ingestFacts, null, ledger)) {
-                    continue;
-                }
-                drained = guarded(p, p::drain, null, ledger);
                 if (drained == null) {
                     continue;
                 }

@@ -185,43 +185,23 @@ class BootstrapPreCheckTest {
     }
 
     /**
-     * The retention-boundary check on re-established read positions is pinned on both sides
-     * of its boundary, over coverage a real engine wrote. A re-established position of
-     * covered + 1 means nothing was discarded (the next unread position is exactly where
-     * retention now begins) and must start; covered + 2 means one position was discarded
-     * unread and must refuse (SPEC Safety 8; D74's {@code offset - 1 > covered} spelling).
-     * The broker test only reaches the wide gap, so an off-by-one that refuses every
-     * legitimate expiry restart at the exact boundary stays green there.
+     * The position an expired committed offset resumes at is the covered position plus one
+     * (D115): the next position the previous execution would have read, whether retention
+     * still holds it being the substrate's to decide at the first fetch. Nothing covered,
+     * and the fed-to-end sentinel a channel settled on its topic's deletion carries, both
+     * fall back to the substrate's earliest or latest position; an off-by-one here would
+     * either re-feed a delivered position (dropped as a replay, so a silent cost) or skip
+     * one unread (a Safety 8 breach the fetch could not see).
      */
     @Test
-    void reEstablishedPositionAtExactlyTheCoveredBoundaryStartsAndOnePastItRefuses() throws Exception {
-        java.util.UUID topicId = new java.util.UUID(300, 1);
-        io.github.tobyjamesclements.parsley.core.ChannelId channel =
-                new io.github.tobyjamesclements.parsley.core.ChannelId(topicId, 0);
-        io.github.tobyjamesclements.parsley.sim.MemoryOrderingStore store =
-                new io.github.tobyjamesclements.parsley.sim.MemoryOrderingStore();
-        io.github.tobyjamesclements.parsley.core.ProcessEngine engine =
-                new io.github.tobyjamesclements.parsley.core.ProcessEngine("p", Map.of(channel, "t"), store);
-        engine.onReceive(io.github.tobyjamesclements.parsley.core.EngineTestFactory.plain(channel, 41, "M"));
-        engine.markDelivered(channel, 41);
-        engine.flushHolds();
-        store.commit();
-        Map<byte[], byte[]> orderingState = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
-        store.scanPrefix(new byte[0], orderingState::put);
-        Map<String, TopicInfo> topics = Map.of("t", new TopicInfo(topicId, 1));
-
-        java.lang.reflect.Method check = ParsleyRuntime.class.getDeclaredMethod(
-                "refusePositionsDiscardedUnread", String.class, Map.class, Map.class, Map.class);
-        check.setAccessible(true);
-        check.invoke(null, APP, topics, orderingState, Map.of(P0, new OffsetAndMetadata(42)));
-
-        java.lang.reflect.InvocationTargetException refused = org.junit.jupiter.api.Assertions.assertThrows(
-                java.lang.reflect.InvocationTargetException.class,
-                () -> check.invoke(null, APP, topics, orderingState, Map.of(P0, new OffsetAndMetadata(43))),
-                "one position discarded beyond coverage must refuse");
-        assertTrue(refused.getCause() instanceof io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException e
-                        && e.reason() == io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.Reason
-                                .POSITIONS_DISCARDED_UNREAD,
-                () -> "expected POSITIONS_DISCARDED_UNREAD, got " + refused.getCause());
+    void anExpiredOffsetResumesAtTheCoveredPositionPlusOneOrFallsBackToTheSubstrate() {
+        assertEquals(java.util.OptionalLong.of(42), ParsleyRuntime.resumePosition(41L),
+                "covered up to 41: 42 is the next unread position");
+        assertEquals(java.util.OptionalLong.of(1), ParsleyRuntime.resumePosition(0L),
+                "covered up to 0: resume at 1");
+        assertEquals(java.util.OptionalLong.empty(), ParsleyRuntime.resumePosition(null),
+                "nothing covered: the substrate's earliest or latest position is taken instead");
+        assertEquals(java.util.OptionalLong.empty(), ParsleyRuntime.resumePosition(Long.MAX_VALUE),
+                "the fed-to-end sentinel is not a position an offset can follow");
     }
 }

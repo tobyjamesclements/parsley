@@ -89,8 +89,9 @@ Consuming raw records, the projector sees the `parsley.causes` header the seam w
 so its clock is the transitively closed delivered past: per delivered message, merge the
 own coordinate and every carried pair — the same fold the engine's `markDelivered`
 performs. In exchange the host owes what Kafka Streams was providing: `read_committed`
-consumption, fencing of zombie writers (a partition epoch plus monotone guards), and
-position facts for pruning. Do not substitute `frontierSnapshot()` from behind a seam: the
+consumption, fencing of zombie writers (a partition epoch plus monotone guards), the start
+position on each channel at every execution start (Host obligation 2), and channel identity
+for pruning dead channels. Do not substitute `frontierSnapshot()` from behind a seam: the
 frontier advances on receipt, before delivery, so it can name coordinates whose effects
 are still held back — telling a client its write is visible when it is not.
 
@@ -144,13 +145,19 @@ encoded width, reject channels the tier does not recognise, and bound positions 
 known-live upper bound: a validated token becomes causes on a produced record, and every
 downstream receiver of those channels holds messages until they settle
 ([failing closed](failing-closed.md)), so an over-broad token affects liveness for everyone
-behind the topic.
+behind the topic. A pair whose position is not the offset of a committed record is worse
+than over-broad: it is an out-of-contract cause ([wire format](wire-format.md), constraint 8)
+that no elapsed time settles — every receiver holds the message, visibly in its status, until
+a later record on that channel settles the position, and nothing asks the broker in the
+meantime. The log-end offset is the natural naive stamp and is exactly this. The gateway
+therefore merges only the coordinate the broker's acknowledgement confirmed, as the table
+above says — never a position it computed or read from a log end.
 
 Client-facing tokens should be encrypted, not merely signed — offsets leak throughput and
 topic ids leak topology — but the encrypted form stops at the gateway: the engine decodes
 only the frozen grammar, so the gateway decrypts, bounds, and stamps a plain header.
 
-Give tokens a TTL well short of retention. A pruned coordinate can otherwise never be
-covered again, and on mirrored estates no log-start evidence ever arrives for foreign
-topics, so expiry is the mitigation that works everywhere. The token also only ever grows;
-expiry is what stops a long session converging on the size of the topology.
+Give tokens a TTL. The token only ever grows — `merge` is a pointwise maximum and nothing
+removes an entry, so a channel the recorder has since pruned as dead still sits in the
+token, and fails coverage against a past that no longer records it — and a long session
+converges on the size of the topology. Expiry is the only bound.

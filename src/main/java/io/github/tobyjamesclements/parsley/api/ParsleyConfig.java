@@ -49,7 +49,7 @@ public final class ParsleyConfig {
     private final String bootstrapServers;
     private final String applicationIdPrefix;
     private final String stateDir;
-    private final Duration factsInterval;
+    private final Duration statusInterval;
     private final int metadataBudgetBytes;
     private final Map<String, Object> extraProperties;
 
@@ -57,7 +57,7 @@ public final class ParsleyConfig {
         this.bootstrapServers = builder.bootstrapServers;
         this.applicationIdPrefix = builder.applicationIdPrefix;
         this.stateDir = builder.stateDir;
-        this.factsInterval = builder.factsInterval;
+        this.statusInterval = builder.statusInterval;
         this.metadataBudgetBytes = builder.metadataBudgetBytes;
         this.extraProperties = Map.copyOf(builder.extraProperties);
     }
@@ -107,12 +107,12 @@ public final class ParsleyConfig {
     }
 
     /**
-     * Returns how often broker position facts are refreshed.
+     * Returns how often each task publishes its delivery state for {@link Parsley#status()}.
      *
-     * @return how often broker position facts are refreshed
+     * @return how often each task publishes its status
      */
-    public Duration factsInterval() {
-        return factsInterval;
+    public Duration statusInterval() {
+        return statusInterval;
     }
 
     /**
@@ -138,7 +138,7 @@ public final class ParsleyConfig {
         private final String bootstrapServers;
         private final String applicationIdPrefix;
         private String stateDir;
-        private Duration factsInterval = Duration.ofSeconds(1);
+        private Duration statusInterval = Duration.ofSeconds(1);
         private int metadataBudgetBytes = io.github.tobyjamesclements.parsley.core.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES;
         private final Map<String, Object> extraProperties = new LinkedHashMap<>();
 
@@ -173,31 +173,32 @@ public final class ParsleyConfig {
         }
 
         /**
-         * Sets how often broker position facts are refreshed.
+         * Sets how often each task publishes its delivery state for {@link Parsley#status()}.
          *
-         * <p>Position facts are what let a process distinguish a cause that has not arrived
-         * yet from one that will never arrive, so this interval bounds how long a settled
-         * frontier takes to advance while a channel is idle.
+         * <p>The status snapshot is the only periodic work a task does. It touches no
+         * broker and settles nothing: a held message is released by receiving the message
+         * its cause names, never by the passage of time, so this interval bounds only how
+         * old a {@link TaskStatus} reading can be.
          *
-         * @param factsInterval a positive duration
+         * @param statusInterval a positive duration
          * @return this builder
-         * @throws IllegalArgumentException if {@code factsInterval} is null, zero or negative
+         * @throws IllegalArgumentException if {@code statusInterval} is null, zero or negative
          */
-        public Builder factsInterval(Duration factsInterval) {
-            if (factsInterval == null) {
-                throw new IllegalArgumentException("factsInterval must be non-null");
+        public Builder statusInterval(Duration statusInterval) {
+            if (statusInterval == null) {
+                throw new IllegalArgumentException("statusInterval must be non-null");
             }
-            if (factsInterval.isNegative() || factsInterval.isZero()) {
-                throw new IllegalArgumentException("factsInterval must be positive");
+            if (statusInterval.isNegative() || statusInterval.isZero()) {
+                throw new IllegalArgumentException("statusInterval must be positive");
             }
-            if (factsInterval.toMillis() < 1) {
+            if (statusInterval.toMillis() < 1) {
                 // Kafka Streams punctuation has millisecond granularity; a finer value
                 // passes here only to crash the stream thread at task initialisation,
                 // unattributed, after the bootstrap has already committed (D87).
-                throw new IllegalArgumentException("factsInterval must be at least one millisecond: "
-                        + factsInterval.toNanos() + "ns cannot be scheduled");
+                throw new IllegalArgumentException("statusInterval must be at least one millisecond: "
+                        + statusInterval.toNanos() + "ns cannot be scheduled");
             }
-            this.factsInterval = factsInterval;
+            this.statusInterval = statusInterval;
             return this;
         }
 

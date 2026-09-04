@@ -83,21 +83,29 @@ append order.
 
 ## Pruning and growth
 
-A pair `(c, p)` is dropped when *p* falls below *c*'s log-start offset, or when *c*'s topic
-identity no longer resolves. Log-start facts may be stale, and a stale fact is a lower bound,
-so staleness delays pruning without over-pruning.
+A pair `(c, p)` is dropped only when *c*'s topic identity no longer resolves: the topic was
+deleted, or deleted and recreated under its name so that the id names a dead incarnation.
+That is checked once per task initialisation, when the process asks the broker about every
+topic its state names. A denied or unavailable answer is never death, and the pair stays
+until an initialisation finds the topic gone. Nothing is dropped for a position's age: a
+cause whose record retention has discarded still matters to any process holding a message
+that names it (D115).
 
-Pruning is what makes retention a safety matter for a holder. A process that delivered a
-message prunes it once retention discards it, and its later sends then express nothing about
-it; a process still holding that message can no longer tell which later arrivals depend on
-it. Retention must therefore cover hold-back time, not only consumer lag: where it does not,
-the holder stops with `POSITIONS_DISCARDED_UNREAD` rather than deliver past the hold
-([Failing closed](failing-closed.md)).
+What retention threatens is a process's read position, not what it holds. Where retention
+passes the position a stopped or lagging process reads next, the fetch refuses under
+`auto.offset.reset=none` and the process stops with `POSITIONS_DISCARDED_UNREAD` (SPEC
+Safety 8; [Failing closed](failing-closed.md)). A held message whose copy retention removed
+from its source channel is unaffected: the message is in the ordering changelog, its senders
+keep expressing it, and it delivers from there in order once its causes settle. Retention
+need cover the longest stop and lag, not hold-back time.
 
 Frontier size follows the causal graph rather than a process's own declaration. Receipt
 merges every pair a message carried, including channels the receiving process never receives,
 which is required for downstream re-expression. Steady-state size approaches the sum of
-partition counts over the transitive upstream closure.
+partition counts over the transitive upstream closure. Entries for topics deleted during a
+run survive until an initialisation confirms the topic gone; an id whose name the process
+never learned is never confirmed dead and lingers, costing expression size and never safety.
+Growth is therefore bounded by topology churn, not by time.
 
 Encoded size depends on the frontier's shape: a topic's first partition costs 26 bytes and
 each further partition of the same topic 9 (a byte more per field once partition ids or
@@ -106,5 +114,5 @@ roughly 40,000 entries when every topic contributes one partition and 116,000 wh
 topics contribute many. Reaching it inside the producer would stop the process with no
 diagnosis from Parsley, so a metadata budget is applied first:
 `ParsleyConfig.metadataBudgetBytes`, 256 KiB by default. Exceeding it stops the process with
-an attributable reason. Frontier size and encoded width are logged each facts round, and
-again at 80% of budget.
+an attributable reason. Frontier size and encoded width are logged at each status
+punctuation, and again at 80% of budget.

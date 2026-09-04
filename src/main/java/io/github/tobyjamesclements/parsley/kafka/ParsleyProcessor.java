@@ -6,6 +6,7 @@ import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serializer;
 import org.apache.kafka.common.utils.Bytes;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.streams.processor.Cancellable;
 import org.apache.kafka.streams.processor.PunctuationType;
 import org.apache.kafka.streams.processor.api.Processor;
@@ -19,9 +20,12 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
 
 import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Delivery;
@@ -35,6 +39,7 @@ import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.Deliverability;
 import io.github.tobyjamesclements.parsley.core.DeliverableMessage;
 import io.github.tobyjamesclements.parsley.core.HeaderKV;
+import io.github.tobyjamesclements.parsley.core.IdentityReport;
 import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
 import io.github.tobyjamesclements.parsley.core.ProcessEngine;
 import io.github.tobyjamesclements.parsley.core.ReceivedMessage;
@@ -46,10 +51,12 @@ import io.github.tobyjamesclements.parsley.core.ReceivedMessage;
  * decoded, handed to its handler, and the handler's effects are written and forwarded. State
  * writes, sends and consumed positions commit together under {@code exactly_once_v2}.
  *
- * <p>Broker facts are refreshed on a separate executor, so a slow query cannot stall
- * delivery. The result is picked up on the next record or punctuation. Initialisation seeds
- * one round synchronously when the source is free, and waits only a bounded time when it is
- * not — a slow broker must not stack initialising tasks against the poll interval.
+ * <p>Nothing is asked of the broker between deliveries. A cause names the position of a
+ * message that was sent, so receiving that message is what satisfies it (wire-format
+ * constraint 8, D115). Task initialisation asks the substrate one question — which of the
+ * topics its state names still exist — and settles or refuses on the answer; a wall-clock
+ * punctuation then only drains what receipt already released and publishes the task's
+ * status.
  *
  * @see ProcessTopology
  */
@@ -58,42 +65,18 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
 
     private final ProcessDefinition definition;
     private final Map<String, TopicInfo> topics;
-    private final FactsSource factsSource;
-    private final Duration factsInterval;
-    private final java.util.concurrent.Executor factsExecutor;
+    private final TopicIdentitySource identitySource;
+    private final Map<TopicPartition, Long> startPositions;
+    private final Duration statusInterval;
     private final int metadataBudgetBytes;
     private final ProcessDiagnostics diagnostics;
 
-    private final java.util.concurrent.atomic.AtomicLong incarnation =
-            new java.util.concurrent.atomic.AtomicLong();
-    private final java.util.concurrent.atomic.AtomicReference<GatheredRound> pendingRound =
-            new java.util.concurrent.atomic.AtomicReference<>();
-    /**
-     * The gather slot: zero when no gather is in flight, otherwise the incarnation that
-     * launched the one that is. Acquired and freed by compare-and-set, so only the
-     * incarnation that acquired the slot can free it — a superseded gather completing after
-     * a revival cannot free the slot a successor incarnation's own gather holds.
-     */
-    private final java.util.concurrent.atomic.AtomicLong gatherSlot =
-            new java.util.concurrent.atomic.AtomicLong();
     private final BudgetAlarm budgetAlarm = new BudgetAlarm();
-    private Cancellable factsPunctuator;
-
-    /**
-     * A facts round tagged with the incarnation whose in-memory state produced its hints.
-     *
-     * <p>A round is applied only by the incarnation that launched it. A revived task restores
-     * the engine to committed state, so hints taken from the previous incarnation may describe
-     * feed progress that was rolled back; a probe answering them must not reach the restored
-     * engine as durable truth.
-     */
-    private record GatheredRound(long incarnation, io.github.tobyjamesclements.parsley.core.PositionFacts facts) {}
+    private Cancellable statusPunctuator;
 
     private ProcessorContext<byte[], byte[]> context;
     private ProcessEngine engine;
     private int partition;
-    /** Monotonic time facts were last applied to the engine, or zero when none have been. */
-    private long factsAppliedAtNanos;
     private final Map<String, ChannelId> channelByTopic = new HashMap<>();
     private final Map<ChannelId, String> topicByChannel = new HashMap<>();
     private final Map<String, KeyValueStore<Bytes, byte[]>> appStores = new HashMap<>();
@@ -113,65 +96,77 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     /**
      * @param definition          the process this instance runs
      * @param topics              resolved identity and width for every topic it uses
-     * @param factsSource         where broker facts come from
-     * @param factsInterval       how often to refresh them
-     * @param factsExecutor       where the refresh runs
+     * @param identitySource      where topic identity is checked at task initialisation
+     * @param startPositions      per received partition, the position the host feeds first,
+     *                            as the bootstrap established it (SPEC Host obligation 2). A
+     *                            task re-created mid-run is handed the same map; its restored
+     *                            coverage is already at or past it, and coverage is never
+     *                            lowered, so the position matters only to a task with no
+     *                            state behind it
+     * @param statusInterval      how often each task publishes its status
      * @param metadataBudgetBytes the largest causal metadata a message may carry
      * @param diagnostics         where this task publishes its status
      */
     ParsleyProcessor(ProcessDefinition definition, Map<String, TopicInfo> topics,
-                     FactsSource factsSource, Duration factsInterval,
-                     java.util.concurrent.Executor factsExecutor, int metadataBudgetBytes,
-                     ProcessDiagnostics diagnostics) {
+                     TopicIdentitySource identitySource, Map<TopicPartition, Long> startPositions,
+                     Duration statusInterval, int metadataBudgetBytes, ProcessDiagnostics diagnostics) {
         this.definition = definition;
         this.topics = topics;
-        this.factsSource = factsSource;
-        this.factsInterval = factsInterval;
-        this.factsExecutor = factsExecutor;
+        this.identitySource = identitySource;
+        this.startPositions = Map.copyOf(startPositions);
+        this.statusInterval = statusInterval;
         this.metadataBudgetBytes = metadataBudgetBytes;
         this.diagnostics = diagnostics;
     }
 
     /**
-     * Builds the engine for this task and restores its ordering state.
+     * Builds the engine for this task, restores its ordering state, and checks the identity
+     * of every topic that state names.
+     *
+     * <p>Runs on every initialisation of the task on this thread: a first assignment, a
+     * migration, and the host's own re-creation of a task whose source topic went missing.
+     * That is what makes the identity check event-driven rather than periodic (D115).
+     * Nothing is delivered from here (D34): a hold the identity report releases goes on the
+     * next punctuation or record.
      *
      * @param context the task context
-     * @throws ParsleyFailClosedException if restored state cannot be read, or if the task
-     *         width changed so that state no longer matches its partitioning
+     * @throws ParsleyFailClosedException if restored state cannot be read, if the task
+     *         width changed so that state no longer matches its partitioning, if a received
+     *         topic was recreated under its name, or if one was deleted while messages from
+     *         it remain held
      */
     @Override
     public void init(ProcessorContext<byte[], byte[]> context) {
         // A revived task runs close() and then init() on this same instance against restored
-        // state; both perform the same reset, so a lifecycle that re-initialises without
-        // closing is covered too. Anything the previous incarnation left behind describes
-        // rolled-back progress: its facts rounds are invalidated, its punctuator cancelled,
-        // and the gather slot freed.
-        incarnation.incrementAndGet();
-        pendingRound.set(null);
-        gatherSlot.set(0);
-        if (factsPunctuator != null) {
-            factsPunctuator.cancel();
-            factsPunctuator = null;
+        // state; both cancel the previous incarnation's punctuator, so a lifecycle that
+        // re-initialises without closing is covered too.
+        if (statusPunctuator != null) {
+            statusPunctuator.cancel();
+            statusPunctuator = null;
         }
 
         this.context = context;
         partition = context.taskId().partition();
-        factsAppliedAtNanos = 0;
 
         channelByTopic.clear();
         topicByChannel.clear();
+        Map<ChannelId, Long> taskStartPositions = new HashMap<>();
         for (String topic : definition.receivedTopics()) {
             TopicInfo info = topics.get(topic);
             if (partition < info.partitions()) {
                 ChannelId channel = new ChannelId(info.topicId(), partition);
                 channelByTopic.put(topic, channel);
                 topicByChannel.put(channel, topic);
+                Long start = startPositions.get(new TopicPartition(topic, partition));
+                if (start != null) {
+                    taskStartPositions.put(channel, start);
+                }
             }
         }
 
         KeyValueStore<Bytes, byte[]> orderingStore = context.getStateStore(ProcessTopology.ORDERING_STORE);
         engine = new ProcessEngine(definition.name() + "-" + context.taskId(),
-                topicByChannel, new StreamsOrderingStore(orderingStore), metadataBudgetBytes);
+                topicByChannel, new StreamsOrderingStore(orderingStore), metadataBudgetBytes, taskStartPositions);
 
         appStores.clear();
         serdeTopicByStore.clear();
@@ -185,31 +180,65 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         stateReader = new StoreStateReader();
         swallowedSeamViolation = null;
 
-        factsPunctuator = context.schedule(factsInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
-            startGatherIfIdle();
-            applyGatheredFacts();
+        checkIdentity();
+
+        statusPunctuator = context.schedule(statusInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
             drain();
             engine.flushHolds();
             observeFrontier();
             publishStatus();
         });
-
-        ingestFacts();
         publishStatus();
     }
 
-    private void applyGatheredFacts() {
-        GatheredRound round = pendingRound.getAndSet(null);
-        if (round != null && round.incarnation() == incarnation.get()) {
-            engine.onFacts(round.facts());
-            factsAppliedAtNanos = System.nanoTime();
+    /**
+     * Asks the identity source about every topic this task's state names — the received
+     * topics at the identity resolved at start, and every topic in the restored frontier —
+     * and hands the engine what was confirmed gone. A source that cannot answer is not
+     * evidence: the check is skipped for this initialisation with a warning, the causes
+     * stay expressed, and the next initialisation asks again (D44's rule, kept).
+     */
+    private void checkIdentity() {
+        Set<UUID> topicIds = new HashSet<>();
+        for (ChannelId channel : engine.receivedChannelSet()) {
+            topicIds.add(channel.topicId());
         }
+        Set<ChannelId> frontierChannels = engine.frontierSnapshot().byChannel().keySet();
+        for (ChannelId channel : frontierChannels) {
+            topicIds.add(channel.topicId());
+        }
+        TopicIdentityVerdicts verdicts;
+        try {
+            verdicts = identitySource.resolve(topicIds);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        } catch (Exception e) {
+            LOG.warn("{}: topic identity could not be checked at task initialisation; continuing on the"
+                    + " identities resolved at start, the next initialisation asks again", definition.name(), e);
+            return;
+        }
+        if (verdicts.deleted().isEmpty() && verdicts.recreated().isEmpty()) {
+            return;
+        }
+        Set<ChannelId> dead = new HashSet<>();
+        Set<ChannelId> recreated = new HashSet<>();
+        Set<ChannelId> known = new HashSet<>(frontierChannels);
+        known.addAll(engine.receivedChannelSet());
+        for (ChannelId channel : known) {
+            if (verdicts.recreated().contains(channel.topicId())) {
+                recreated.add(channel);
+            } else if (verdicts.deleted().contains(channel.topicId())) {
+                dead.add(channel);
+            }
+        }
+        engine.onIdentityReport(new IdentityReport(dead, recreated));
     }
 
     /**
      * Publishes this task's delivery state for {@code status()} (D103): every channel with
      * holds, what its head waits for, and the frontier's size. Taken on the stream thread,
-     * where the engine lives, once per facts interval — the decision for each head is the
+     * where the engine lives, once per status interval — the decision for each head is the
      * one {@link #drain()} would act on, so the cost is one decision per held channel.
      */
     private void publishStatus() {
@@ -233,11 +262,8 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             heldChannels.add(new TaskStatus.HeldChannel(topicNameOf(channel), channel.partition(), held,
                     engine.headPosition(channel).orElseThrow(), blockers));
         }
-        Optional<Duration> sinceLastFacts = factsAppliedAtNanos == 0
-                ? Optional.empty()
-                : Optional.of(Duration.ofNanos(System.nanoTime() - factsAppliedAtNanos));
         diagnostics.publish(new TaskStatus(partition, engine.frontierSize(), engine.frontierBytes(),
-                heldMessages, heldChannels, sinceLastFacts));
+                heldMessages, heldChannels));
     }
 
     /** A received channel's topic name; a blocker is always on a received channel. */
@@ -246,51 +272,15 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         return topic != null ? topic : channel.toString();
     }
 
-    private void startGatherIfIdle() {
-        long launchIncarnation = incarnation.get();
-        if (!gatherSlot.compareAndSet(0, launchIncarnation)) {
-            return;
-        }
-        java.util.Set<ChannelId> received = java.util.Set.copyOf(engine.receivedChannelSet());
-        Map<ChannelId, Long> hints = probeHints();
-        java.util.Set<ChannelId> frontier = engine.frontierSnapshot().byChannel().keySet();
-        try {
-            factsExecutor.execute(() -> {
-                try {
-                    io.github.tobyjamesclements.parsley.core.PositionFacts facts =
-                            factsSource.gather(received, hints, frontier);
-                    // Best-effort: a deposit racing a concurrent re-initialisation can still
-                    // leave a superseded round behind; the apply-time incarnation check
-                    // discards it.
-                    if (incarnation.get() == launchIncarnation) {
-                        pendingRound.set(new GatheredRound(launchIncarnation, facts));
-                    }
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                } catch (Exception e) {
-                    LOG.warn("{}: position facts unavailable, retrying next round", definition.name(), e);
-                } finally {
-                    gatherSlot.compareAndSet(launchIncarnation, 0);
-                }
-            });
-        } catch (java.util.concurrent.RejectedExecutionException e) {
-            gatherSlot.compareAndSet(launchIncarnation, 0);
-        }
-    }
-
     /**
-     * Invalidates any in-flight facts gather and cancels the facts punctuator, so nothing
-     * from this incarnation can act on a revived successor. On the revival path this runs
-     * before the successor's {@code init}, which repeats the same reset.
+     * Cancels the status punctuator and retires this task's status. On the revival path
+     * this runs before the successor's {@code init}, which repeats the cancellation.
      */
     @Override
     public void close() {
-        incarnation.incrementAndGet();
-        pendingRound.set(null);
-        gatherSlot.set(0);
-        if (factsPunctuator != null) {
-            factsPunctuator.cancel();
-            factsPunctuator = null;
+        if (statusPunctuator != null) {
+            statusPunctuator.cancel();
+            statusPunctuator = null;
         }
         if (engine != null) {
             diagnostics.retire(partition);
@@ -300,7 +290,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     /**
      * The once-per-process latch behind the 80%-of-budget warning (D53): the operator is
      * pointed at the growth law once, ahead of the budget's fail-closed wall, not on every
-     * facts round the frontier spends above the line. Deliberately never reset by
+     * status interval the frontier spends above the line. Deliberately never reset by
      * {@code init} or {@code close}: a revived task is the same process, and D53's "warns
      * once" is per process, not per incarnation. Extracted so the threshold and the latch
      * are pinnable without capturing log output; {@link #observeFrontier()} owns the
@@ -345,9 +335,6 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      */
     @Override
     public void process(Record<byte[], byte[]> record) {
-        if (pendingRound.get() != null) {
-            applyGatheredFacts();
-        }
         RecordMetadata metadata = context.recordMetadata().orElseThrow(() ->
                 new IllegalStateException("record without topic metadata reached " + definition.name()));
         ChannelId channel = channelByTopic.get(metadata.topic());
@@ -362,56 +349,6 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                 channel, metadata.offset(), record.timestamp(), record.key(), record.value(), headers));
         drain();
         engine.flushHolds();
-    }
-
-    /**
-     * The channels worth probing for a trailing never-yielding run: those a held head is
-     * waiting on (D107). A channel that itself holds messages settles at its head whatever
-     * the broker says above it, and a channel nothing waits on has nothing a probe could
-     * release, so probing every received channel — the previous rule — spent a second per
-     * idle channel per round for no fact anyone would act on.
-     */
-    private Map<ChannelId, Long> probeHints() {
-        Map<ChannelId, Long> hints = new java.util.TreeMap<>();
-        if (engine.heldCountTotal() == 0) {
-            return hints;
-        }
-        for (ChannelId channel : engine.receivedChannelSet()) {
-            if (engine.heldCount(channel) == 0) {
-                continue;
-            }
-            engine.headVerdict(channel).ifPresent(verdict -> {
-                if (verdict instanceof Deliverability.Held held) {
-                    for (Deliverability.Blocker blocker : held.blockers()) {
-                        ChannelId blocked = blocker.channel();
-                        if (engine.heldCount(blocked) == 0) {
-                            engine.fedUpTo(blocked).ifPresent(fed -> hints.put(blocked, fed));
-                        }
-                    }
-                }
-            });
-        }
-        return hints;
-    }
-
-    private void ingestFacts() {
-        // Unhinted on purpose (D107): the seed runs on the stream thread inside task
-        // initialisation, and a probe costs a poll loop per round. Facts are lower bounds,
-        // so the first background round probes instead, one interval later.
-        Map<ChannelId, Long> hints = Map.of();
-        io.github.tobyjamesclements.parsley.core.PositionFacts facts;
-        try {
-            facts = factsSource.gatherForSeed(engine.receivedChannelSet(), hints,
-                    engine.frontierSnapshot().byChannel().keySet());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return;
-        } catch (Exception e) {
-            LOG.warn("{}: position facts unavailable, retrying next round", definition.name(), e);
-            return;
-        }
-        engine.onFacts(facts);
-        factsAppliedAtNanos = System.nanoTime();
     }
 
     private void drain() {

@@ -17,14 +17,11 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Properties;
-import java.util.Set;
 import java.util.UUID;
 
 import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Effects;
 import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
-import io.github.tobyjamesclements.parsley.core.ChannelId;
-import io.github.tobyjamesclements.parsley.core.PositionFacts;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -80,7 +77,7 @@ class BudgetWarningTest {
     /**
      * Pins the latch (D53's "warns once"): after the first warning, later consultations
      * above the threshold stay silent, so a frontier sitting above 80% does not repeat the
-     * warning every facts round for the rest of the process's life.
+     * warning every status interval for the rest of the process's life.
      */
     @Test
     void warningFiresExactlyOnceAcrossRepeatedConsultations() {
@@ -88,7 +85,7 @@ class BudgetWarningTest {
         assertTrue(alarm.shouldWarn(800, 1000), "the first crossing warns");
         assertFalse(alarm.shouldWarn(900, 1000),
                 "a second consultation above the threshold must not warn again: D53 promises one"
-                        + " warning per process, not one per facts round");
+                        + " warning per process, not one per status interval");
         assertFalse(alarm.shouldWarn(999, 1000),
                 "the latch holds however close to the wall the frontier grows; the budget itself"
                         + " fails closed with its own diagnosis when reached");
@@ -117,15 +114,13 @@ class BudgetWarningTest {
                 .receives(in1, (delivery, state) -> Effects.none())
                 .receives(in2, (delivery, state) -> Effects.none())
                 .build();
-        FactsSource facts = (Set<ChannelId> received, Map<ChannelId, Long> hints,
-                             Set<ChannelId> frontier) -> PositionFacts.EMPTY;
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "budget-warning-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "unused:9092");
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toString());
         driver = new TopologyTestDriver(
-                ProcessTopology.build(definition, TOPICS, facts, Duration.ofMillis(100),
-                        Runnable::run, 64), props);
+                ProcessTopology.build(definition, TOPICS, TopicIdentitySource.ALL_ALIVE, Map.of(),
+                        Duration.ofMillis(100), 64, new ProcessDiagnostics()), props);
 
         TestInputTopic<byte[], byte[]> in1Topic =
                 driver.createInputTopic("in1", new ByteArraySerializer(), new ByteArraySerializer());

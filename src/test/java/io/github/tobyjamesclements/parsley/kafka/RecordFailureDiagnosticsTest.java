@@ -5,6 +5,7 @@ import org.apache.kafka.clients.consumer.OffsetOutOfRangeException;
 import org.apache.kafka.common.KafkaException;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.errors.RecordTooLargeException;
+import org.apache.kafka.streams.errors.MissingSourceTopicException;
 import org.apache.kafka.streams.errors.StreamsException;
 import org.junit.jupiter.api.Test;
 
@@ -59,6 +60,25 @@ class RecordFailureDiagnosticsTest {
                 ParsleyRuntime.classifyFailure(streamsWrapped(new OffsetOutOfRangeException(Map.of(TP, 5L)))),
                 "an OffsetOutOfRangeException buried under Streams wrappers must be named as"
                         + " retention discarding committed positions, not logged generically");
+    }
+
+    /**
+     * Catches the missing-source-topic diagnosis regressing to the generic fallback (D115):
+     * a received topic deleted, or deleted and recreated, while the process ran surfaces
+     * at the host's next rebalance as {@link MissingSourceTopicException}, by type when the
+     * exception survives Streams' wrapping and by its message when only the text does. It
+     * stays a transient — a restart diagnoses which it was — but names its condition.
+     */
+    @Test
+    void wrappedMissingSourceTopicNamesTheMissingSourceTopic() {
+        assertEquals(ParsleyRuntime.FailureDiagnosis.SOURCE_TOPIC_MISSING,
+                ParsleyRuntime.classifyFailure(streamsWrapped(
+                        new MissingSourceTopicException("One or more source topics were missing during rebalance"))),
+                "a MissingSourceTopicException buried under Streams wrappers must be named");
+        assertEquals(ParsleyRuntime.FailureDiagnosis.SOURCE_TOPIC_MISSING,
+                ParsleyRuntime.classifyFailure(
+                        new StreamsException("One or more source topics were missing during rebalance")),
+                "the message alone names the condition where the type is lost in a wrapper");
     }
 
     /**
@@ -248,6 +268,8 @@ class RecordFailureDiagnosticsTest {
             runtime.recordFailure("p-toolarge", streamsWrapped(new RecordTooLargeException("2097152 bytes")));
             runtime.recordFailure("p-shape", streamsWrapped(
                     new IllegalStateException("assignment failed: invalid partitions for task 0_1")));
+            runtime.recordFailure("p-missing", streamsWrapped(
+                    new MissingSourceTopicException("One or more source topics were missing during rebalance")));
             runtime.recordFailure("p-generic", streamsWrapped(new IllegalStateException("something else")));
         } finally {
             System.setErr(realErr);
@@ -274,6 +296,11 @@ class RecordFailureDiagnosticsTest {
                         && shape.contains("Restart the application"),
                 "the shape-change failure must log D59's condition and the restart remedy on"
                         + " its own process's line: " + shape);
+        String missing = lineNaming(logged, "process p-missing");
+        assertTrue(missing.contains("a received topic was missing when the host rebalanced")
+                        && missing.contains("CHANNEL_IDENTITY_CHANGED"),
+                "the missing-source-topic failure must log D115's condition and what a restart"
+                        + " diagnoses on its own process's line: " + missing);
         assertTrue(lineNaming(logged, "process p-generic")
                         .contains("failed; shutting its application down (failing closed)"),
                 "an unrecognised failure must keep the generic shutting-down line, undressed"

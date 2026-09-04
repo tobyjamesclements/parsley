@@ -2,6 +2,7 @@ package io.github.tobyjamesclements.parsley.kafka;
 
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.state.Stores;
@@ -93,34 +94,35 @@ final class ProcessTopology {
     }
 
     /**
-     * Builds a topology with the default metadata budget, gathering facts on the calling
-     * thread.
+     * Builds a topology with the default metadata budget, no start positions, and fresh
+     * diagnostics.
      *
-     * @param definition    the process to build
-     * @param topics        resolved identity and width for every topic it uses
-     * @param factsSource   where broker facts come from
-     * @param factsInterval how often to refresh them
+     * @param definition     the process to build
+     * @param topics         resolved identity and width for every topic it uses
+     * @param identitySource where topic identity is checked at task initialisation
+     * @param statusInterval how often each task publishes its status
      * @return the topology
      */
     static Topology build(ProcessDefinition definition, Map<String, TopicInfo> topics,
-                          FactsSource factsSource, Duration factsInterval) {
-        return build(definition, topics, factsSource, factsInterval, new ProcessDiagnostics());
+                          TopicIdentitySource identitySource, Duration statusInterval) {
+        return build(definition, topics, identitySource, statusInterval, new ProcessDiagnostics());
     }
 
     /**
-     * Builds a topology with the default metadata budget, gathering facts on the calling
-     * thread and publishing task status into {@code diagnostics}.
+     * Builds a topology with the default metadata budget and no start positions, publishing
+     * task status into {@code diagnostics}.
      *
-     * @param definition    the process to build
-     * @param topics        resolved identity and width for every topic it uses
-     * @param factsSource   where broker facts come from
-     * @param factsInterval how often to refresh them
-     * @param diagnostics   where each task publishes its status
+     * @param definition     the process to build
+     * @param topics         resolved identity and width for every topic it uses
+     * @param identitySource where topic identity is checked at task initialisation
+     * @param statusInterval how often each task publishes its status
+     * @param diagnostics    where each task publishes its status
      * @return the topology
      */
     static Topology build(ProcessDefinition definition, Map<String, TopicInfo> topics,
-                          FactsSource factsSource, Duration factsInterval, ProcessDiagnostics diagnostics) {
-        return build(definition, topics, factsSource, factsInterval, Runnable::run,
+                          TopicIdentitySource identitySource, Duration statusInterval,
+                          ProcessDiagnostics diagnostics) {
+        return build(definition, topics, identitySource, Map.of(), statusInterval,
                 io.github.tobyjamesclements.parsley.core.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES, diagnostics);
     }
 
@@ -129,46 +131,26 @@ final class ProcessTopology {
      *
      * @param definition          the process to build
      * @param topics              resolved identity and width for every topic it uses
-     * @param factsSource         where broker facts come from
-     * @param factsInterval       how often to refresh them
-     * @param factsExecutor       where the refresh runs, kept off the processing thread in
-     *                            production so a slow broker query cannot stall delivery
-     * @param metadataBudgetBytes the largest causal metadata a message may carry
-     * @return the topology
-     */
-    static Topology build(ProcessDefinition definition, Map<String, TopicInfo> topics,
-                          FactsSource factsSource, Duration factsInterval,
-                          java.util.concurrent.Executor factsExecutor, int metadataBudgetBytes) {
-        return build(definition, topics, factsSource, factsInterval, factsExecutor, metadataBudgetBytes,
-                new ProcessDiagnostics());
-    }
-
-    /**
-     * Builds a topology.
-     *
-     * @param definition          the process to build
-     * @param topics              resolved identity and width for every topic it uses
-     * @param factsSource         where broker facts come from
-     * @param factsInterval       how often to refresh them
-     * @param factsExecutor       where the refresh runs, kept off the processing thread in
-     *                            production so a slow broker query cannot stall delivery
+     * @param identitySource      where topic identity is checked at task initialisation
+     * @param startPositions      per received partition, the position the host feeds first,
+     *                            as the bootstrap established it
+     * @param statusInterval      how often each task publishes its status
      * @param metadataBudgetBytes the largest causal metadata a message may carry
      * @param diagnostics         where each task publishes its status, read by
      *                            {@code ParsleyRuntime.status()}
      * @return the topology
      */
     static Topology build(ProcessDefinition definition, Map<String, TopicInfo> topics,
-                          FactsSource factsSource, Duration factsInterval,
-                          java.util.concurrent.Executor factsExecutor, int metadataBudgetBytes,
-                          ProcessDiagnostics diagnostics) {
+                          TopicIdentitySource identitySource, Map<TopicPartition, Long> startPositions,
+                          Duration statusInterval, int metadataBudgetBytes, ProcessDiagnostics diagnostics) {
         Topology topology = new Topology();
         String[] sources = definition.receivedTopics().stream().map(ProcessTopology::sourceName).toArray(String[]::new);
         for (String topic : definition.receivedTopics()) {
             topology.addSource(sourceName(topic), new ByteArrayDeserializer(), new ByteArrayDeserializer(), topic);
         }
         topology.addProcessor(PROCESSOR,
-                () -> new ParsleyProcessor(definition, topics, factsSource, factsInterval,
-                        factsExecutor, metadataBudgetBytes, diagnostics), sources);
+                () -> new ParsleyProcessor(definition, topics, identitySource, startPositions,
+                        statusInterval, metadataBudgetBytes, diagnostics), sources);
         for (String topic : definition.sendTopics()) {
             topology.addSink(sinkName(topic), topic, new ByteArraySerializer(), new ByteArraySerializer(), PROCESSOR);
         }

@@ -91,9 +91,9 @@ class EngineBoundaryTest {
         assertTrue(store.get(StoreCodec.heldKey(C2, 4)) != null, "second flush persists the new suffix");
         store.commit();
 
-        ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
+        ProcessEngine restarted = new ProcessEngine("p", BOTH, store, ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES,
+                Map.of(C1, 101L));
         assertEquals(5, restarted.heldCount(C2), "every flushed hold is restored");
-        restarted.onFacts(new PositionFacts(Map.of(C1, 101L), Map.of(), Set.of()));
         for (long position = 0; position < 5; position++) {
             DeliverableMessage next = restarted.nextDeliverable().orElseThrow(
                     () -> new AssertionError("restored hold must become deliverable"));
@@ -106,17 +106,17 @@ class EngineBoundaryTest {
     }
 
     /**
-     * A read-position report of {@code nextRead = 0} covers nothing: coverage is {@code -1},
-     * a cause at position 0 still blocks, and the record at position 0 is accepted rather than
-     * dropped as covered. A sign slip at this boundary would either release a cause at 0
-     * unsatisfied or drop the channel's first record.
+     * A start position of {@code 0} covers nothing: coverage stays empty, a cause at position
+     * 0 still blocks, and the record at position 0 is accepted rather than dropped as
+     * covered. A sign slip at this boundary would either release a cause at 0 unsatisfied or
+     * drop the channel's first record.
      */
     @Test
-    void committedNextReadOfZeroCoversNothingAndBlocksACauseAtPositionZero() {
+    void aStartPositionOfZeroCoversNothingAndBlocksACauseAtPositionZero() {
         MemoryOrderingStore store = new MemoryOrderingStore();
-        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
-        engine.onFacts(new PositionFacts(Map.of(C1, 0L), Map.of(C1, 0L), Set.of()));
-        assertEquals(OptionalLong.of(-1), engine.fedUpTo(C1), "nextRead 0 covers nothing");
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store, ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES,
+                Map.of(C1, 0L));
+        assertEquals(OptionalLong.empty(), engine.fedUpTo(C1), "a start position of 0 covers nothing");
 
         engine.onReceive(caused(C2, 0, "B", Map.of(C1, 0L)));
         assertTrue(engine.nextDeliverable().isEmpty(), "a cause at position 0 is not covered by -1");
@@ -194,7 +194,7 @@ class EngineBoundaryTest {
                 "after a position-only delivery merge");
 
         engine.onReceive(caused(C1, 2, "C", Map.of(y, 1L)));
-        engine.onFacts(new PositionFacts(Map.of(), Map.of(x, 10L), Set.of()));
+        engine.onIdentityReport(new IdentityReport(Set.of(x), Set.of()));
         assertEquals(Causes.of(Map.of(C1, 1L, y, 1L)), engine.frontierSnapshot(), "staging: x pruned");
         assertArrayEquals(CausesCodec.encode(engine.frontierSnapshot()), engine.causesHeaderForEmission(),
                 "after a prune");

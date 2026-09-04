@@ -58,6 +58,21 @@ class SubstrateDetectedStopStatusTest {
         assertTrue(refusal.getMessage().contains("max.message.bytes"), refusal.getMessage());
     }
 
+    /**
+     * A received topic missing at a rebalance stays transient (D115): a restart either
+     * resumes it — the topic merely lagged in a broker's metadata — or refuses with the
+     * start path's own diagnosis of what became of it, so the stop itself carries no reason.
+     */
+    @Test
+    void aMissingSourceTopicStaysATransientWithNoRefusalReason() {
+        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        runtime.recordFailure("p", new StreamsException("stream thread died",
+                new org.apache.kafka.streams.errors.MissingSourceTopicException(
+                        "One or more source topics were missing during rebalance")));
+        assertNull(ParsleyFailClosedException.findIn(runtime.recordedFailure("p")),
+                "a missing source topic is diagnosed by the restart, so it must not read as a deliberate stop");
+    }
+
     /** A stop a restart resolves stays transient: no refusal reason. */
     @Test
     void aPartitionShapeChangeStaysATransientWithNoRefusalReason() {

@@ -201,9 +201,16 @@ class TargetedScenarioTest {
         assertEquals(List.of(), rig.oracle.violations());
     }
 
-    /** Cause on position that never yields resolves from read position report. */
+    /**
+     * A cause naming a position that never yields a message is out of contract (wire-format
+     * constraint 8): nothing rescues it, and nothing refuses it. The effect is held, its
+     * blocker names the position and what the channel has settled to, and the next message
+     * on that channel — which the substrate places above the dead run — settles the run and
+     * releases the hold, because receipt of a position asserts everything below it was fed
+     * or never will be (D115; the induction that retired the read-position report).
+     */
     @Test
-    void causeOnPositionThatNeverYieldsResolvesFromReadPositionReport() {
+    void causeOnPositionThatNeverYieldsIsHeldAndVisibleUntilALaterMessageSettlesIt() {
         Rig rig = new Rig(SabotageMode.NONE);
         SimChannel c1 = rig.channel("c1");
         SimChannel c2 = rig.channel("c2");
@@ -217,14 +224,25 @@ class TargetedScenarioTest {
         p.feedOne(c1);
         p.drain();
         p.feedOne(c2);
-        assertEquals(0, p.drain(), "B must wait: positions 1..2 are not yet known to be empty");
+        assertEquals(0, p.drain(), "B must wait: no message at c1@2 has been received");
+        assertEquals(SimProcess.FeedResult.NOTHING, p.feedOne(c1), "c1 has nothing more to yield");
+        p.commitStep();
+        assertEquals(0, p.drain(), "an out-of-contract cause is held, not rescued by time or by a report");
+        var verdict = p.engine().headVerdict(c2.id()).orElseThrow();
+        assertTrue(verdict instanceof io.github.tobyjamesclements.parsley.core.Deliverability.Held held
+                        && held.blockers().size() == 1
+                        && held.blockers().get(0).channel().equals(c1.id())
+                        && held.blockers().get(0).requiredPosition() == 2
+                        && held.blockers().get(0).settledPosition().equals(java.util.OptionalLong.of(0)),
+                () -> "the hold is visible as a blocker naming c1@2 against the settled position 0, got: " + verdict);
 
+        rig.external(c1, "E2");
         p.feedOne(c1);
+        assertEquals(2, p.drain(), "E2 at c1@3 settles the dead run below it, so B goes with it");
         p.commitStep();
-        p.ingestFacts();
-        assertEquals(1, p.drain(), "B must deliver once the report covers the dead positions");
-        p.commitStep();
-        assertEquals(List.of("E1", "B"), rig.uidsDelivered("p"));
+        List<String> order = rig.uidsDelivered("p");
+        assertEquals(Set.of("E1", "E2", "B"), Set.copyOf(order), "E1, E2 and B all delivered");
+        assertTrue(order.indexOf("E1") < order.indexOf("B"), "the cause E1 delivered before its effect B");
         rig.assertClean();
     }
 
@@ -296,13 +314,19 @@ class TargetedScenarioTest {
         return rig;
     }
 
-    /** Truncation beyond read position fails closed. */
+    /**
+     * Truncation beyond the read position fails closed at the fetch: the host's read
+     * position lies below the earliest retained position, and the substrate refuses to
+     * serve it rather than skip to the next retained message (D9's {@code auto.offset.reset=none},
+     * which D115 leaves as the only mid-run retention check).
+     */
     @Test
     void truncationBeyondReadPositionFailsClosed() {
         Rig rig = truncation(SabotageMode.NONE);
         ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").ingestFacts());
+                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").feedOne(rig.chans.get("c1")));
         assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, e.reason());
+        assertEquals(List.of("m0", "m1"), rig.uidsDelivered("p"), "nothing delivers past the discarded positions");
     }
 
     static Rig heldSurvivesRestart(SabotageMode mode) {
@@ -427,9 +451,10 @@ class TargetedScenarioTest {
         p.feedOne(c2);
         assertEquals(0, p.drain(), "B waits on c1@1");
 
+        p.commitStep();
         rig.world.killChannel(c1);
-        p.ingestFacts();
-        assertEquals(1, p.drain(), "channel death settles every remaining position");
+        p.reinitialise();
+        assertEquals(1, p.drain(), "channel death, reported at the next initialisation, settles every remaining position");
         p.commitStep();
         assertEquals(List.of("E1", "B"), rig.uidsDelivered("p"));
         rig.assertClean();
@@ -449,12 +474,12 @@ class TargetedScenarioTest {
         return rig;
     }
 
-    /** Deleting a channel with undelivered held messages fails closed. */
+    /** Deleting a channel with undelivered held messages fails closed at the next initialisation. */
     @Test
     void deletingAChannelWithUndeliveredHeldMessagesFailsClosed() {
         Rig rig = deadChannelWithHeldMessages(SabotageMode.NONE);
         ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").ingestFacts());
+                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise());
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
         assertEquals(List.of(), rig.uidsDelivered("p"), "nothing may deliver past the held message");
     }
@@ -486,12 +511,12 @@ class TargetedScenarioTest {
         p.commitStep();
 
         rig.world.killChannel(cx);
-        q.ingestFacts();
+        q.reinitialise();
         q.drain();
         q.commitStep();
 
         ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").ingestFacts());
+                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise());
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
         assertEquals(List.of("X0"), rig.uidsDelivered("p"));
         rig.oracle.finalChecks();
@@ -499,14 +524,12 @@ class TargetedScenarioTest {
     }
 
     /**
-     * Retention crosses a message a process still holds (D104). P receives {b, w, x} and holds
-     * X (x@0, expressing W on w, unfed at P); Q receives {x, t}, delivers X at once (it does
-     * not receive w) and sends to b. Retention then discards x@0 — exactly up to both
-     * readers' committed read position, which the fed-based check could not see — and Q's
-     * facts round prunes (x, 0) from its frontier as Structural 13 permits. Q delivers T and
-     * sends B, which expresses nothing about x. The rig stops before P's facts round: an
-     * honest engine refuses there; an engine ignoring truncation goes on to deliver B past
-     * held X.
+     * Retention crosses a message a process still holds (D104's shape, D115's outcome). P
+     * receives {b, w, x} and holds X (x@0, expressing W on w, unfed at P); Q receives {x, t},
+     * delivers X at once (it does not receive w) and sends to b. Retention then discards x@0
+     * — exactly up to both readers' committed read position — and Q re-initialises, which
+     * prunes nothing: no cause is discarded for retention any more. Q delivers T and sends B,
+     * which still expresses (x, 0). The rig stops before P's re-initialisation.
      */
     static Rig retentionCrossesAHeldMessage(SabotageMode mode) {
         Rig rig = new Rig(mode);
@@ -538,7 +561,7 @@ class TargetedScenarioTest {
         q.commitStep();
 
         rig.world.truncate(x, 1);
-        q.ingestFacts();
+        q.reinitialise();
         rig.external(t, "T");
         q.feedOne(t);
         assertEquals(1, q.drain(), "staging: T delivers and B is sent, expressing nothing about x");
@@ -547,31 +570,31 @@ class TargetedScenarioTest {
     }
 
     /**
-     * Retention discarding a held message fails the holder closed (D104): the facts round
-     * that shows the earliest retained position past the head of the hold-back buffer
-     * refuses with POSITIONS_DISCARDED_UNREAD, naming the held position, before any effect
-     * can be delivered past it. The fed-based check this replaces passed here — the held
-     * message had advanced fedUpTo past itself — and the effect B was then delivered before
-     * its cause X: the retention dual of D46's deleted channel.
+     * Retention discarding a held message no longer stops the holder (D115 supersedes D104):
+     * the hazard D104 refused — senders pruning the discarded message and their later sends
+     * expressing nothing about it — is gone once nothing prunes for retention, so B still
+     * expresses X and waits behind it. The holder keeps X in its hold-back buffer, survives
+     * a re-initialisation, and delivers W, X, B in causal order once W arrives; the copy
+     * retention discarded was the one on the topic, not the one the holder owes.
      */
     @Test
-    void retentionDiscardingAHeldMessageFailsTheHolderClosed() {
+    void retentionDiscardingAHeldMessageStillDeliversItInOrderFromTheHoldBackBuffer() {
         Rig rig = retentionCrossesAHeldMessage(SabotageMode.NONE);
         SimProcess p = rig.proc("p");
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class, p::ingestFacts,
-                "retention past a held message must stop the holder");
-        assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, e.reason());
-        assertTrue(e.getMessage().contains("held message at position 0"),
-                "the diagnosis names the held position, got: " + e.getMessage());
-        assertEquals(List.of(), rig.uidsDelivered("p"), "nothing was delivered past the hold");
-        rig.oracle.finalChecks();
-        assertEquals(List.of(), rig.oracle.violations(), "no safety violation: the refusal preserved causal order");
+        assertDoesNotThrow(p::reinitialise, "retention past a held message is not the holder's to refuse");
+        p.feedOne(rig.chans.get("b"));
+        assertEquals(0, p.drain(), "B expresses X, which P still holds, so B waits behind it");
+        p.feedOne(rig.chans.get("w"));
+        assertEquals(3, p.drain(), "W releases X, and X releases B");
+        p.commitStep();
+        assertEquals(List.of("W", "X", "T>q>" + rig.chans.get("b").name), rig.uidsDelivered("p"),
+                "cause before effect, from the buffer");
+        rig.assertClean();
     }
 
     /**
      * Retention up to exactly the held message's position is ordinary retention: the hold
-     * survives and delivers once its cause arrives. Pins the boundary of the D104 check so
-     * it cannot loosen into refusing a retained hold.
+     * survives and delivers once its cause arrives.
      */
     @Test
     void retentionUpToExactlyTheHeldMessageIsRetention() {
@@ -589,7 +612,7 @@ class TargetedScenarioTest {
         p.commitStep();
 
         rig.world.truncate(x, 1);
-        assertDoesNotThrow(p::ingestFacts, "retention up to the held message itself discards nothing owed");
+        assertDoesNotThrow(p::reinitialise, "retention up to the held message itself discards nothing owed");
         p.feedOne(w);
         p.drain();
         p.commitStep();
@@ -609,12 +632,12 @@ class TargetedScenarioTest {
         return rig;
     }
 
-    /** Recreated received topic fails closed mid run. */
+    /** A recreated received topic fails closed at the next initialisation, where identity is checked (D115). */
     @Test
-    void recreatedReceivedTopicFailsClosedMidRun() {
+    void recreatedReceivedTopicFailsClosedAtTheNextInitialisation() {
         Rig rig = recreatedTopic(SabotageMode.NONE);
         ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").ingestFacts());
+                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise());
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
         assertEquals(List.of("m0"), rig.uidsDelivered("p"), "delivery stops at the recreation, nothing is lost");
     }
@@ -746,7 +769,10 @@ class TargetedScenarioTest {
         p.drain();
         p.feedOne(c1);
         p.commitStep();
-        p.ingestFacts();
+        // A restart hands the engine c1's committed read position, past the dead run: the
+        // coverage an over-expressing engine would stamp, and an honest one never does.
+        p.stopCleanly();
+        p.start();
         p.feedOne(c2);
         p.drain();
         p.commitStep();
@@ -776,7 +802,8 @@ class TargetedScenarioTest {
         p.commitStep();
         rig.world.truncate(c1, 3);
         ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, p::ingestFacts);
+                assertThrows(ParsleyFailClosedException.class, () -> p.feedOne(c1),
+                        "the fetch at the discarded position 2 must refuse");
         assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, e.reason());
     }
 
@@ -794,7 +821,6 @@ class TargetedScenarioTest {
         p.drain();
         p.commitStep();
         rig.world.truncate(c1, 2);
-        p.ingestFacts();
         Scenario.quiesce(List.of(p));
         assertEquals(List.of("m0", "m1", "m2", "m3", "m4"), rig.uidsDelivered("p"));
         rig.assertClean();
@@ -823,7 +849,6 @@ class TargetedScenarioTest {
         p.commitStep();
 
         rig.world.truncate(c1, 2);
-        p.ingestFacts();
         p.commitStep();
         p.stopCleanly();
 

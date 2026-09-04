@@ -580,30 +580,30 @@ class ApiValidationTest {
         }
     }
 
-    /** A null facts interval is refused. */
+    /** A null status interval is refused. */
     @Test
-    void nullFactsIntervalIsRefused() {
+    void nullStatusIntervalIsRefused() {
         assertThrows(IllegalArgumentException.class,
-                () -> ParsleyConfig.builder("broker:9092", "p").factsInterval(null),
-                "factsInterval(null) would otherwise NPE on isNegative() inside the builder");
+                () -> ParsleyConfig.builder("broker:9092", "p").statusInterval(null),
+                "statusInterval(null) would otherwise NPE on isNegative() inside the builder");
     }
 
     /**
-     * A zero or negative facts interval takes the positivity refusal, not the sibling
-     * sub-millisecond diagnosis: {@code factsInterval} runs two checks in sequence
+     * A zero or negative status interval takes the positivity refusal, not the sibling
+     * sub-millisecond diagnosis: {@code statusInterval} runs two checks in sequence
      * (non-positive, then sub-millisecond — D87), and zero and negative durations both
      * satisfy {@code toMillis() < 1}, so deleting the positivity check would silently
      * reroute them to "cannot be scheduled" — a diagnosis suggesting a coarser unit
      * when the actual mistake is a direction-of-time error (a zero interval would spin
-     * the facts executor; the cadence is D20's).
+     * the stream thread on status snapshots; the cadence is D115's).
      */
     @Test
-    void nonPositiveFactsIntervalIsRefused() {
+    void nonPositiveStatusIntervalIsRefused() {
         for (Duration bad : new Duration[] {Duration.ZERO, Duration.ofSeconds(-1)}) {
             IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> ParsleyConfig.builder("broker:9092", "p").factsInterval(bad),
-                    "factsInterval " + bad + " would spin or never run the facts round");
-            assertTrue(e.getMessage().contains("factsInterval must be positive"),
+                    () -> ParsleyConfig.builder("broker:9092", "p").statusInterval(bad),
+                    "statusInterval " + bad + " would spin or never publish a status");
+            assertTrue(e.getMessage().contains("statusInterval must be positive"),
                     "zero and negative take the positivity refusal, not the sub-millisecond"
                             + " \"cannot be scheduled\" diagnosis their toMillis() also"
                             + " satisfies: " + e.getMessage());
@@ -611,15 +611,15 @@ class ApiValidationTest {
     }
 
     /**
-     * A positive but sub-millisecond facts interval is refused at declaration: Kafka
+     * A positive but sub-millisecond status interval is refused at declaration: Kafka
      * Streams punctuation has millisecond granularity, so the value would pass build()
      * only to crash the stream thread at task initialisation, unattributed, after the
      * bootstrap had already committed initial positions (D87).
      */
     @Test
-    void subMillisecondFactsIntervalIsRefusedAtDeclaration() {
+    void subMillisecondStatusIntervalIsRefusedAtDeclaration() {
         assertThrows(IllegalArgumentException.class,
-                () -> ParsleyConfig.builder("broker:9092", "p").factsInterval(Duration.ofNanos(500_000)),
+                () -> ParsleyConfig.builder("broker:9092", "p").statusInterval(Duration.ofNanos(500_000)),
                 "a sub-millisecond interval cannot be scheduled and must fail here, not on the stream thread");
     }
 
@@ -656,10 +656,10 @@ class ApiValidationTest {
                         java.util.Optional.empty(), java.util.Optional.empty()).tasks(),
                 "the four-component form reports no task detail");
         assertThrows(IllegalArgumentException.class,
-                () -> new TaskStatus(0, 0, 0, 0, null, java.util.Optional.empty()),
+                () -> new TaskStatus(0, 0, 0, 0, null),
                 "a task status refuses null held channels");
         assertThrows(IllegalArgumentException.class,
-                () -> new TaskStatus(0, 0, -1, 0, java.util.List.of(), java.util.Optional.empty()),
+                () -> new TaskStatus(0, 0, -1, 0, java.util.List.of()),
                 "a task status refuses a negative count");
         assertThrows(IllegalArgumentException.class,
                 () -> new TaskStatus.Blocker(null, 0, 1L, java.util.OptionalLong.empty()),

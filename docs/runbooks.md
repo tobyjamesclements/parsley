@@ -17,11 +17,11 @@ deliver past a message.
 None of the following can be added once a process has stopped.
 
 **Log the status.** `Parsley.status()` is the diagnosis surface. Its per-task detail — what
-is held, which cause each head waits for, the frontier's width, how long since broker facts
-were applied — is published by a task while it runs and retired when the task closes. After
-a stop, `status()` still carries the process's `refusalReason` and `failureDetail`, but no
-task detail: what was held at the moment of the stop is no longer readable from the process.
-Log the status on a timer while the application runs, and once more when the wait ends:
+is held, which cause each head waits for, the frontier's width — is published by a task while
+it runs and retired when the task closes. After a stop, `status()` still carries the
+process's `refusalReason` and `failureDetail`, but no task detail: what was held at the
+moment of the stop is no longer readable from the process. Log the status on a timer while
+the application runs, and once more when the wait ends:
 
 ```java
 try (Parsley parsley = Parsley.start(config, shipper)) {
@@ -42,8 +42,8 @@ bootstrap, re-fails, and pages nobody. The rule to wire in:
 | `status()` shows | Restart? |
 |---|---|
 | `refusalReason` present, other than `COVERED_POSITION_FED` | No. It recurs. Follow the reason's runbook and page a person. |
-| `refusalReason` of `COVERED_POSITION_FED` | Once. A superseded execution recovers on restart; a recurrence at the same position is a false report ([runbook](#covered_position_fed)). |
-| `refusalReason` absent, `failureDetail` naming a broker, timeout or partition condition | Yes, with backoff, once the cluster is reachable ([runbooks](#restart-resolves-it)). |
+| `refusalReason` of `COVERED_POSITION_FED` | Once. An engine invariant guard with no known trigger: the restart resumes from the committed record, and a recurrence means the invariant broke — report it with the logs rather than restart again ([runbook](#covered_position_fed)). |
+| `refusalReason` absent, `failureDetail` naming a broker, timeout, topic or partition condition | Yes, with backoff, once the cluster is reachable ([runbooks](#restart-resolves-it)). |
 | `refusalReason` absent, `failureDetail` naming the handler's own exception | No. The same message is fed again and the handler throws again ([runbook](#a-handler-that-throws)). |
 
 Nothing in `status()` separates the last two shapes for a supervisor; only the text of
@@ -60,11 +60,13 @@ cluster: `kafka-consumer-groups`, `kafka-topics`, `kafka-get-offsets`, `kafka-co
 `kafka-console-consumer`. A reset needs Delete on the process's group and on its changelogs,
 rights the running application deliberately does not hold; keep them with the operator.
 
-**Set retention with hold-back in mind.** A message held for a cause is still on its topic,
-and that topic's retention keeps moving. Retention on every received topic must cover the
-longest a message can wait for its cause, plus the longest the process may be stopped, not
-merely consumer lag ([Operations](operations.md#sizing)). The
-[retention clock](#the-retention-clock) below says how to see it running down.
+**Set retention with stops and lag in mind.** A message held for a cause is safe: it is in
+the ordering changelog, and retention discarding its copy on the topic does not touch it.
+What retention must cover is the process's read position. Retention on every received topic
+must cover the longest the process may be stopped and the longest it may lag, since a
+committed read position that retention passes refuses at the fetch
+([Operations](operations.md#sizing)). The [retention clock](#the-retention-clock) below says
+how to see it running down.
 
 ## Triage
 
@@ -99,7 +101,7 @@ The reasons, and what each asks for:
 
 | Reason | A restart alone | A reset | Runbook |
 |---|---|---|---|
-| `COVERED_POSITION_FED` | Once | No | [Restart resolves it](#covered_position_fed) |
+| `COVERED_POSITION_FED` | Once; a recurrence is reported, not restarted | No | [Restart resolves it](#covered_position_fed) |
 | `HANDLER_RETURNED_NULL_EFFECTS` | After the code fix | No | [The application](#handler_returned_null_effects) |
 | `EMISSION_TO_UNDECLARED_CHANNEL` | After the declaration fix | No | [The application](#emission_to_undeclared_channel) |
 | `STATE_ACCESS_TO_UNDECLARED_STORE` | After the declaration fix | No | [The application](#state_access_to_undeclared_store) |
@@ -141,8 +143,11 @@ What else is affected, in the order to check it.
 
 - Move the group's offsets with `kafka-consumer-groups --reset-offsets`. A commit the
   bootstrap did not write, with no ordering records behind it, refuses the next start with
-  `ORDERING_STATE_LOST`; one made while the process runs can stop it with
-  `COVERED_POSITION_FED`, and the positions it jumped are never delivered.
+  `ORDERING_STATE_LOST`. Otherwise the next start adopts the moved offset as its start
+  position, with no refusal: moved forward, the positions it jumped are covered as never
+  arriving and are never delivered; moved backwards, the records fed again below the
+  session floor are dropped as replays. Neither reaches a running process — the tool moves
+  offsets only in an inactive group.
 - Delete the ordering changelog alone, or the offsets alone. Each produces a different
   refusal, not a reset.
 - Run the Kafka Streams application reset tool by itself. It resets offsets and deletes
@@ -161,27 +166,22 @@ and whether anything must be reset.
 
 #### COVERED_POSITION_FED
 
-**Shape.** `fed <channel>@<n> which a read-position report already covered as
-fed-or-never-arriving (fedUpTo=<m>). Either the report was false, or this execution has been
-superseded ...`
+**Shape.** `fed <channel>@<n> which this execution's own coverage already records as fed or
+never arriving (fedUpTo=<m>), above the session floor of <f>; the host's feed and the
+engine's record contradict each other. A restart resumes from the committed record, and this
+refusal then does not recur.`
 
-**What happened.** A facts round read the group's committed position for the channel, which
-covered position *n*, and the host then fed *n*. Either this execution had been superseded —
-a rebalance moved the task to another instance, which committed progress this execution then
-observed — or the committed position was moved from outside the process.
+**What happened.** An engine invariant broke. Above the session floor — the coverage a task
+initialises with — coverage is raised only by this execution's own receipts, or to the
+fed-to-end sentinel by the identity check for a channel whose topic is gone, and a feed
+below either is refused first as `OUT_OF_ORDER_FEED`. This branch is kept so that a
+contradiction between the host's feed and the engine's record can never fall through to a
+silent drop or a delivery; nothing known reaches it (D115).
 
-**Check.** The log around the stop for a rebalance or a second instance joining;
-`kafka-consumer-groups --describe --group <app-id> --members` for who is in the group.
-Whether anything else commits to this group: a script, a tool, a consumer configured with
-the application id as its `group.id`.
+**Check.** The log around the stop, in full, and the last logged status before it.
 
-**Do.** Restart the instance. It resumes from the successor's committed progress, and the
-refusal does not recur. If it recurs at the same channel and position with no supersession
-in sight, something outside Parsley is committing to the group: stop it. The positions
-between the process's true position and the foreign commit were covered as
-fed-or-never-arriving, and this process never delivers them. That is a liveness loss, never
-a misordered delivery; whether it warrants a [reset](#resetting-a-process) depends on
-whether the application needs those messages.
+**Do.** Restart the instance once. It resumes from the committed record, and the refusal
+does not recur. If it recurs, keep the logs and report it; do not keep restarting.
 
 #### A partition was added while the process ran
 
@@ -199,6 +199,26 @@ begins a new partition at earliest. If the widened topic was the process's wides
 topic, the restart refuses with [`TASK_WIDTH_CHANGED`](#task_width_changed) instead. Either
 way, adding partitions changes which partition a key lands on, so state kept per key under
 the old count is now split across two shards ([Runtime](runtime.md#keys-partitions-and-state)).
+
+#### A received topic went missing during a rebalance
+
+**Shape.** No `refusalReason`. The `ERROR` line says that a received topic was missing when
+the host rebalanced — deleted, or deleted and recreated under its name, while the process
+ran — and names the remedy; `failureDetail` carries the host's own message, "One or more
+source topics were missing during rebalance", beneath the wrapping.
+
+**What happened.** A rebalance found a source topic gone. A received topic is assumed not to
+be deleted and recreated under its name while a process that receives it runs, and not to be
+deleted while anything from it is still owed (SPEC Assumption 17); when a rebalance finds it
+missing, Kafka Streams stops the thread with this transient, and whether the topic is gone
+or merely renewed is judged at the next start, not here.
+
+**Do.** Restart the application. A topic still missing refuses the start at resolution until
+it is restored or removed from the declaration, and the removal is refused with
+[`CHANNEL_REMOVED_WITH_HELD_MESSAGES`](#channel_removed_with_held_messages) while messages
+from it remain held; one recreated under its name refuses with
+[`CHANNEL_IDENTITY_CHANGED`](#channel_identity_changed); one that merely lagged in a broker's
+metadata resumes, and nothing is lost.
 
 #### The cluster was unreachable
 
@@ -423,29 +443,32 @@ a new causal lifetime deliberately.
 
 #### POSITIONS_DISCARDED_UNREAD
 
-**Shape.** Four sites, one condition. At start: `<topic-partition> earliest retained position
-<x> is beyond this process's covered position <y>; positions this process cannot show it
-covered were discarded while its committed offsets were missing`. Mid-run: `earliest
-retained position <x> is beyond this process's covered position <y>`, or `earliest retained
-position <x> is beyond the held message at position <h>, which this process received but has
-not delivered`. From the consumer: `the broker no longer retains this process's committed
-read position`.
+**Shape.** One site, the consumer's fetch: `the broker no longer retains this process's
+committed read position; positions were discarded before they were read`. The log line's
+cause, beneath the runtime's message, is the consumer's own `OffsetOutOfRangeException`,
+which names the partition and the position that could not be fetched.
 
-**What happened.** Retention discarded positions this process had not read, or a message it
-had read and was still holding. The start-time shape follows a long stop: the group's
-committed offsets expired, the process was to resume at the log start, and the log start had
-passed what the process had covered. The held-message shape is retention crossing a hold —
-a message waited for its cause longer than its topic retains records.
+**What happened.** Retention passed the process's committed read position on a received
+partition while the process was stopped or lagging. Under `auto.offset.reset=none` the
+consumer refuses the fetch rather than skipping to the log start, and the runtime names the
+refusal. It is met while running, when retention passes a lagging read position; on the
+first fetch after a start whose group offsets had expired, which resumes at the ordering
+state's covered position plus one; or on the first fetch after a stop long enough for
+retention to pass the committed position. A held message is never the position at risk: it
+is in the ordering changelog and delivers from there once its causes settle, whatever its
+topic still retains.
 
-**Check.** The topic's `retention.ms` and `retention.bytes` against how long the process was
-stopped, or how long the message was held. `kafka-get-offsets --topic <topic> --time
-earliest` for the current log start against the positions the diagnosis names. Whether the
-topic's data survives anywhere else — a mirror, a backup — which is rare.
+**Check.** `kafka-consumer-groups --describe --group <app-id>` for the group's committed
+offset on the partition the cause names, and `kafka-get-offsets --topic <topic>
+--partitions <p> --time earliest` for the current log start; the positions between them are
+what was discarded. The topic's `retention.ms` and `retention.bytes` against how long the process was
+stopped, or how far behind it ran. Whether the topic's data survives anywhere else — a
+mirror, a backup — which is rare.
 
-**Do.** Record the gap the diagnosis names: those positions are what the application has
-lost, and its own reconciliation may need them. Then reset. Afterwards, set retention on
-every received topic to cover the longest stop and the longest hold-back the application
-can see, and alert on the [retention clock](#the-retention-clock) before it runs out.
+**Do.** Record the gap: those positions are what the application has lost, and its own
+reconciliation may need them. Then reset. Afterwards, set retention on every received topic
+to cover the longest stop and the longest lag the application can see, and alert on the
+[retention clock](#the-retention-clock) before it runs out.
 
 #### ORDERING_STATE_LOST
 
@@ -471,16 +494,21 @@ positions and accepts no others ([what the library does not do](#what-the-librar
 
 #### CHANNEL_IDENTITY_CHANGED
 
-**Shape.** At start: `topics [<names>] now resolve to different identities than this
-process's state was built against`. At task initialisation: `topic '<name>' now resolves to
-<channel> but this process's state was built against a previous incarnation`. Mid-run: `the
-topic of received channel <channel> was deleted and recreated under the same name while this
+**Shape.** Three sites. At start: `topics [<names>] now resolve to different identities than
+this process's state was built against`. At task initialisation, from the stored name
+binding: `topic '<name>' now resolves to <channel> but this process's state was built
+against a previous incarnation`. At task initialisation, from the identity check: `the topic
+of received channel <channel> was deleted and recreated under the same name while this
 process ran`.
 
 **What happened.** A received topic was deleted and recreated under the same name. Positions
-in the old log mean nothing in the new one. The mid-run verdict matures over an unbroken
-window of affirmative answers, three facts intervals or three seconds, whichever is longer;
-a verdict the topic's continued existence rescinds is logged as such and never refuses.
+in the old log mean nothing in the new one. The third verdict comes from the identity check
+every task initialisation runs: the old id no longer resolves, and the name resolves to
+another id in three answers half a second apart. A recreation while a task runs is detected
+when the task next initialises — Kafka Streams re-creates the task once the commit against
+the deleted topic times out, or stops the thread with the
+[missing-source-topic transient](#a-received-topic-went-missing-during-a-rebalance) — and
+what the process delivered in between is outside the guarantee (SPEC Assumption 17).
 
 **Check.** `kafka-topics --describe` shows the topic's current id; the diagnosis names the
 one the state was built against. Whether the recreation was intended.
@@ -498,7 +526,9 @@ topic no longer exists; their place in causal order can no longer be preserved`.
 **What happened.** A received topic was deleted while this process held messages from it,
 which breaches the deletion-hygiene assumption: a topic is deleted only once nothing holds
 an undelivered message from it. The held messages cannot be delivered in order, and cannot
-be skipped. The verdict matures over the same window as a recreation.
+be skipped. The refusal is raised at task initialisation, by the identity check that finds
+the topic gone — its name unknown in three answers half a second apart — while the task
+still holds messages from it.
 
 **Check.** The last logged status before the stop for what was held on that channel, since
 the process can no longer say. Whether the topic is coming back under the same name; if so
@@ -572,11 +602,11 @@ Kafka Streams does not do. Restart: the check is per execution, so a restart tha
 order clears it. If it recurs at the same positions, keep the logs and report it.
 
 **On a channel recorded as gone.** `fed <channel>@<p> on a channel recorded as no longer
-existing`. The process had concluded, over the debounce window, that the channel's topic was
-deleted, recorded it as fed to its end, and records then arrived from that identity. A topic
-id never returns once deleted, so the verdict was wrong; the window that matured it is the
-suspect, and the refusal is durable. Reset, keep the facts-round logs from before the verdict,
-and report it.
+existing`. An identity check at a task initialisation had concluded that the channel's topic
+was deleted, the process recorded it as fed to its end, and records then arrived from that
+identity. A topic id never returns once deleted, so the verdict was wrong; the check that
+gave it is the suspect, and the refusal is durable. Reset, keep the logs from the
+initialisation that gave the verdict, and report it.
 
 ### Reading a stopped process's state
 
@@ -589,7 +619,7 @@ map is the operator's work; nothing in the library does it for a stopped process
 ## A message is held and not moving
 
 A held message is not a failure. It is waiting for a cause, and the diagnosis is which
-cause and why it has not arrived. `status()` names both, once per facts interval, for every
+cause and why it has not arrived. `status()` names both, once per status interval, for every
 task the instance runs ([Failing closed](failing-closed.md#diagnosis)).
 
 ### Confirm it is a hold
@@ -597,8 +627,7 @@ task the instance runs ([Failing closed](failing-closed.md#diagnosis)).
 `state` is `RUNNING`, `refusalReason` is empty, and a task's `heldMessages` is above zero
 and not falling. A `state` of `REBALANCING` that persists is the host, not a hold: a member
 that cannot join, or a task restoring a large changelog, which for a deep hold-back backlog
-takes time. A `sinceLastFacts` that keeps growing is a
-[starved facts source](#facts-are-not-arriving), which stalls every hold on the task.
+takes time.
 
 ### Read the head's blockers
 
@@ -608,13 +637,13 @@ position required and the position the cause's channel has settled to. The shape
 blocker says what to do.
 
 **No blockers.** The head is deliverable and goes on the next drain, which runs on the next
-record fed or the next facts tick. A head that stays deliverable across ticks means the
-task's thread is not running its punctuator: check `sinceLastFacts` and the thread.
+record fed or the next status punctuation. A head that stays deliverable across status
+intervals means the task's thread is not running: check the thread.
 
-**Settled position empty.** The task has heard nothing of the cause's channel: no message
-fed from it and no committed position reported. On a task that has just started, wait a
-facts interval. Otherwise the [facts source is starved](#facts-are-not-arriving), or the
-partition does not exist — check the topic's partition count.
+**Settled position empty.** The task starts that channel at position 0 and has received
+nothing on it yet, so nothing on it is settled. Check that the partition exists — the
+topic's partition count from `kafka-topics --describe` — and whether the group's offset on
+it is moving, from `kafka-consumer-groups --describe --group <app-id>`.
 
 **Settled below required, and the required position exists.** Compare the required position
 with the channel's end from `kafka-get-offsets --topic <topic> --partitions <p> --time
@@ -626,10 +655,9 @@ reached it. Two sub-cases:
   chain until a blocker's channel holds nothing. That channel is the root.
 - The cause's channel holds nothing. This task is behind on it. `kafka-consumer-groups
   --describe --group <app-id>` shows the group's current offset and lag on the partition;
-  the task drains what it is fed, so lag here is throughput, a paused partition, or a
-  thread that has stopped polling. If the group's offset is already past the required
-  position and settled still trails it, the settled position advances on the next facts
-  round: check `sinceLastFacts`.
+  the task's settled position is what it has been fed, and lag is what closes it, so lag
+  here is throughput, a paused partition, or a thread that has stopped polling. An offset
+  already past the required position with settled still below it is the shape after next.
 
 **Settled below required, and the required position does not exist yet.** Required beyond
 the channel's end means the cause has not been produced. Nothing a process expresses names
@@ -639,38 +667,73 @@ resolves when the transaction commits or the broker aborts it at its timeout, te
 under the Kafka Streams defaults. Or the metadata is stale or forged: a token minted against
 another cluster, a hand-stamped header. Read the held record's header and find its producer.
 
+**Required at an offset no committed record occupies.** The group's offset on the partition
+stands past the required position with no lag, and settled still trails it. The cause names
+a position no `read_committed` reader is ever served: a transaction marker, an aborted
+batch's offset, the log-end offset at the moment of stamping. That is an out-of-contract
+cause ([wire format](wire-format.md#grammar), constraint 8): no receipt settles it, elapsed
+time never does, and the hold stays, visibly, until a later record on the channel arrives. A
+Parsley process never stamps one. Read the held record's header and find the producer of
+the stamp — a gateway minting a token from a producer's log-end offset is the natural
+mistake — and fix it; the next record on the channel releases the hold.
+
+**The blocker's channel's topic no longer exists.** `kafka-topics --describe` does not find
+the topic, or finds it under another id. A cause on a deleted channel is settled by the
+deletion, and a task learns of a deletion from the identity check at its next
+initialisation, never while it runs. On Kafka Streams the deletion of a received topic
+reaches the process within a minute or two — the commit times out and the host re-creates
+the task, or a rebalance stops the thread
+([runbook](#a-received-topic-went-missing-during-a-rebalance)) — and the check at that
+initialisation settles the channel to its end, sending the hold on at the next punctuation,
+provided the task holds nothing from that channel itself; a topic recreated under its name
+refuses [`CHANNEL_IDENTITY_CHANGED`](#channel_identity_changed) instead. If the process has
+stopped, restart it: a start with the topic still missing refuses at resolution until the
+topic is removed from the declaration, and a channel outside the received set no longer
+constrains this process. If the check could not be made, the log
+[says so](#the-identity-check-could-not-be-made).
+
 **The blocker's topic is another Parsley process's output.** Look at that process. If it has
 stopped, its refusal is the root cause, and this hold clears when it is fixed. If it is
 holding, follow its blockers upstream. A stopped process stalls every process downstream of
 it, and the stall is visible in each downstream status as a blocker on the stopped process's
 output topic.
 
-### Facts are not arriving
+### The identity check could not be made
 
-`sinceLastFacts` empty on a task past its first interval, or growing without bound, means
-the facts round is failing. Its log line is "position facts unavailable, retrying next
-round", with the cause. The usual causes: the application's principal lacks Describe on a
-declared topic or the group, or Read on the group; the admin client cannot reach the
-cluster; a topic in the frontier was deleted and its describe fails in a way the round does
-not classify. While facts do not arrive, settled positions never advance past what the host
-feeds, and a cause on a channel with a trailing run of positions that never yield a message
-is never settled. Restore the rights or the connectivity; nothing needs restarting.
+Every task initialisation asks the cluster about every topic its state names — the received
+topics and every topic in the frontier — and settles or prunes the channels whose topics are
+confirmed gone. Two log lines say the asking failed. "topic identity could not be checked at
+task initialisation; continuing on the identities resolved at start, the next initialisation
+asks again", with the cause, means the check was abandoned for that initialisation: the
+admin client could not reach the cluster, or a describe failed in a way that is not the
+broker's unknown-topic answer. "describe denied for topic '<name>' (<id>); treating as
+denied, not dead" means the application's principal lacks Describe on that topic, which
+the check declines to read as deletion. Neither is evidence: no channel is settled or pruned
+on the strength of either, so a dead channel a hold waits on stays unsettled, and its causes
+stay expressed on every send, until an initialisation gets an answer. Restore the rights or
+the connectivity, then restart the application so that its tasks initialise and ask again.
 
 ### The retention clock
 
-A held message is still on its topic, and the topic's retention keeps moving while it waits.
-When the log start passes the head's position the process stops with
-[`POSITIONS_DISCARDED_UNREAD`](#positions_discarded_unread), and the message is gone.
-The status does not show how close that is. To see it:
+A held message is not what retention threatens: it is in the ordering changelog, and
+retention discarding its copy on the topic changes nothing. What retention runs against is
+the task's committed read position on each received partition. When the log start passes
+that position the next fetch refuses with
+[`POSITIONS_DISCARDED_UNREAD`](#positions_discarded_unread), and the positions between are
+gone. The clock matters for a process that is stopped, or one that lags; a process that
+keeps up stays ahead of it. The status does not show how close it is. To see it:
 
-1. Take the held channel's `headPosition` from the status.
+1. `kafka-consumer-groups --describe --group <app-id>` gives the group's committed offset on
+   the partition. After a stop long enough for the group's offsets to expire, the read
+   position is the ordering state's covered position plus one, which `OrderingStateInspector`
+   reads from the changelog.
 2. `kafka-get-offsets --topic <topic> --partitions <p> --time earliest` gives the log
    start. The distance between the two, in positions, is the headroom.
-3. `kafka-console-consumer --topic <topic> --partition <p> --offset <headPosition>
-   --max-messages 1 --property print.timestamp=true` gives the head's timestamp; with the
-   topic's `retention.ms`, that is the time left.
+3. `kafka-console-consumer --topic <topic> --partition <p> --offset <committed>
+   --max-messages 1 --property print.timestamp=true` gives the timestamp of the record at
+   the committed offset; with the topic's `retention.ms`, that is the time left.
 
-Raising `retention.ms` on the held topic is the one action that buys time without touching
+Raising `retention.ms` on the topic is the one action that buys time without touching
 order:
 
 ```
@@ -678,16 +741,19 @@ kafka-configs --bootstrap-server <servers> --alter --entity-type topics \
     --entity-name <topic> --add-config retention.ms=<longer>
 ```
 
-Do it before the log start reaches the head. Once it has, nothing recovers the message.
+Do it before the log start reaches the committed offset. Once it has, nothing recovers the
+positions between, and the process refuses at its next fetch.
 
 ### Do not
 
 - Restart expecting the hold to clear. A restart rebuilds the same hold from the changelog.
   It is harmless, and it changes nothing.
-- Move the group's offsets on the blocker's channel to "unblock" it. The facts round reports
-  the moved position as fed-or-never-arriving, the hold releases, and the messages the move
-  jumped are never delivered — a false report, which is the one thing the guarantee cannot
-  survive.
+- Move the group's offsets on the blocker's channel to "unblock" it. The group must be
+  inactive for the tool to act, and the next start adopts the moved offset as the start
+  position. Moved forward, the positions it jumped are covered as never arriving: the hold
+  releases, and the messages between are never delivered. Moved backwards, the records fed
+  again below the session floor are dropped as replays, and the hold is exactly where it
+  was.
 - Delete and recreate a topic to clear it. That is a new channel, and the process stops
   with `CHANNEL_IDENTITY_CHANGED`.
 
@@ -743,15 +809,15 @@ position, and creates fresh changelogs. The transactional ids Kafka Streams deri
 action; a new producer under the same id fences the old.
 
 Doing it in another order produces a different refusal rather than a reset: offsets deleted
-with the changelog kept resumes at the log start against the old coverage and refuses with
-`POSITIONS_DISCARDED_UNREAD` if retention has moved; the changelog deleted with offsets kept
-refuses with `ORDERING_STATE_LOST`. The Kafka Streams application reset tool deletes internal
+with the changelog kept resumes at the covered position plus one and refuses at the first
+fetch with `POSITIONS_DISCARDED_UNREAD` if retention has moved past it; the changelog deleted
+with offsets kept refuses with `ORDERING_STATE_LOST`. The Kafka Streams application reset tool deletes internal
 topics and resets offsets but leaves local state; use the steps above.
 
 ### After
 
 - The log carries `committed initial positions for [...]` for every received partition.
-- `status()` reports `RUNNING`, and `sinceLastFacts` is set within an interval.
+- `status()` reports `RUNNING`, and each task's entry appears within a status interval.
 - Under `EARLIEST`, `heldMessages` rises and falls as the retained log is re-read; under
   `LATEST` it stays near zero.
 - Downstream processes that were holding on this process's output clear as it sends. What
@@ -760,7 +826,7 @@ topics and resets offsets but leaves local state; use the steps above.
 
 ## What the library does not do
 
-Facts an operator should know before an incident, each the boundary of a runbook above.
+Limits an operator should know before an incident, each the boundary of a runbook above.
 
 - **Start from a chosen position.** A channel starts at `EARLIEST` or `LATEST`, and the
   bootstrap refuses committed offsets it did not write. There is no way to resume a process
@@ -772,8 +838,8 @@ Facts an operator should know before an incident, each the boundary of a runbook
 - **Reset from the API.** The reset is four commands across two tools and every instance's
   filesystem, and the order matters. Nothing in the library performs it or checks it.
 - **Report a hold's age or its retention headroom.** The status carries the head's position,
-  not its timestamp, the channel's log start or its end; the retention clock and the
-  lagging-or-not-produced distinction are computed from the Kafka tools.
+  not its timestamp, and not the channel's committed offset, log start or end; the retention
+  clock and the lagging-or-not-produced distinction are computed from the Kafka tools.
 - **Push anything.** The status is pull-only: no metrics, no listener, no callback. A stop
   is observed through `awaitStopped()` or by polling `healthy()`.
 - **Separate an application failure from a substrate transient.** Both stop the process

@@ -32,7 +32,6 @@ import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
-import io.github.tobyjamesclements.parsley.core.PositionFacts;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -46,7 +45,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Establishes the Kafka Streams wiring through {@code TopologyTestDriver}.
  *
  * <p>Covers the header on the wire, byte-exact pass-through of key and value, holding across
- * channels, fact ingestion, and each condition that fails a step.
+ * channels, the identity check at task initialisation, the status a task publishes, and each
+ * condition that fails a step.
  */
 class TopologyWiringTest {
     private static final UUID IN1_ID = new UUID(100, 1);
@@ -59,16 +59,15 @@ class TopologyWiringTest {
     private static final ChannelId IN1 = new ChannelId(IN1_ID, 0);
     private static final ChannelId IN2 = new ChannelId(IN2_ID, 0);
 
-    static final class FakeFacts implements FactsSource {
-        volatile PositionFacts facts = PositionFacts.EMPTY;
-        /** The hints each round was given, in order, for the probe-hint pins. */
-        final List<Map<ChannelId, Long>> hintsSeen = new java.util.concurrent.CopyOnWriteArrayList<>();
+    static final class FakeIdentity implements TopicIdentitySource {
+        volatile TopicIdentityVerdicts verdicts = TopicIdentityVerdicts.NONE;
+        /** The ids each initialisation asked about, in order. */
+        final List<Set<UUID>> asked = new java.util.concurrent.CopyOnWriteArrayList<>();
 
         @Override
-        public PositionFacts gather(Set<ChannelId> receivedChannels, Map<ChannelId, Long> fedUpToHints,
-                                    Set<ChannelId> frontierChannels) {
-            hintsSeen.add(Map.copyOf(fedUpToHints));
-            return facts;
+        public TopicIdentityVerdicts resolve(Set<UUID> topicIds) {
+            asked.add(Set.copyOf(topicIds));
+            return verdicts;
         }
     }
 
@@ -84,22 +83,23 @@ class TopologyWiringTest {
         }
     }
 
-    private TopologyTestDriver newDriver(ProcessDefinition definition, FakeFacts facts) {
-        return newDriver(definition, facts, TOPICS);
+    private TopologyTestDriver newDriver(ProcessDefinition definition, FakeIdentity identity) {
+        return newDriver(definition, identity, TOPICS);
     }
 
-    private TopologyTestDriver newDriver(ProcessDefinition definition, FakeFacts facts, Map<String, TopicInfo> topics) {
-        return newDriver(definition, facts, topics, new ProcessDiagnostics());
+    private TopologyTestDriver newDriver(ProcessDefinition definition, FakeIdentity identity,
+                                         Map<String, TopicInfo> topics) {
+        return newDriver(definition, identity, topics, new ProcessDiagnostics());
     }
 
-    private TopologyTestDriver newDriver(ProcessDefinition definition, FakeFacts facts, Map<String, TopicInfo> topics,
-                                         ProcessDiagnostics diagnostics) {
+    private TopologyTestDriver newDriver(ProcessDefinition definition, FakeIdentity identity,
+                                         Map<String, TopicInfo> topics, ProcessDiagnostics diagnostics) {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "wiring-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "unused:9092");
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toString());
         driver = new TopologyTestDriver(
-                ProcessTopology.build(definition, topics, facts, Duration.ofMillis(100), diagnostics), props);
+                ProcessTopology.build(definition, topics, identity, Duration.ofMillis(100), diagnostics), props);
         return driver;
     }
 
@@ -120,7 +120,7 @@ class TopologyWiringTest {
                         .build())
                 .sends(out)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes(), new RecordHeaders(), 1_000L));
 
         TestOutputTopic<byte[], byte[]> outTopic =
@@ -137,42 +137,57 @@ class TopologyWiringTest {
     }
 
     /**
-     * Probe hints name the channels a held head waits on, and nothing else (D107): not the
-     * holding channel, whose settled position is its head whatever lies above it, and not
-     * an idle channel nothing waits on. The seed round at initialisation carries no hints
-     * at all, so task initialisation never probes on the stream thread.
+     * Task initialisation asks the identity source about exactly the topics the task's
+     * state names — the received topics, and every topic in the restored frontier — and
+     * nothing runs between deliveries: no punctuation asks again (D115).
      */
     @Test
-    void probeHintsNameOnlyTheChannelsAHeldHeadWaitsOn() {
+    void initialisationAsksAboutReceivedAndFrontierTopicsAndNothingAsksAgain() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
         ProcessDefinition definition = ProcessDefinition.named("p")
                 .receives(in1, (delivery, state) -> Effects.none())
                 .receives(in2, (delivery, state) -> Effects.none())
                 .build();
-        FakeFacts facts = new FakeFacts();
-        facts.facts = new PositionFacts(Map.of(IN1, 2L, IN2, 0L), Map.of(), Set.of());
-        newDriver(definition, facts);
-        assertEquals(List.of(Map.of()), facts.hintsSeen, "the seed round at initialisation carries no hints");
+        FakeIdentity identity = new FakeIdentity();
+        newDriver(definition, identity);
+        assertEquals(List.of(Set.of(IN1_ID, IN2_ID)), identity.asked,
+                "initialisation asks about the received topics; the frontier is empty on a first start");
 
-        driver.advanceWallClockTime(Duration.ofMillis(200));
-        assertEquals(Map.of(), facts.hintsSeen.get(facts.hintsSeen.size() - 1),
-                "nothing held, nothing to probe");
-
+        UUID foreignId = new UUID(100, 7);
         var headers = new RecordHeaders();
-        headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(IN1, 5L)))));
+        headers.add(new RecordHeader(CausesCodec.HEADER_KEY,
+                CausesCodec.encode(Causes.of(Map.of(new ChannelId(foreignId, 0), 5L)))));
         input("in2").pipeInput(new TestRecord<>("k".getBytes(), "b".getBytes(), headers));
-        driver.advanceWallClockTime(Duration.ofMillis(200));
-        assertEquals(Map.of(IN1, 1L), facts.hintsSeen.get(facts.hintsSeen.size() - 1),
-                "the held head on in2 waits on in1, so in1 is hinted at its fed position and in2 is not");
+        driver.advanceWallClockTime(Duration.ofMillis(500));
+        assertEquals(1, identity.asked.size(), "punctuations never ask: nothing is polled between deliveries");
+    }
+
+    /**
+     * A received topic the identity source reports recreated refuses task initialisation
+     * with CHANNEL_IDENTITY_CHANGED (SPEC Assumption 2): records of the new incarnation must
+     * never be fed under the old identity, and the refusal surfaces the way every
+     * initialisation refusal does — the task fails to initialise, and the stop carries the
+     * reason.
+     */
+    @Test
+    void aRecreatedReceivedTopicRefusesTaskInitialisation() {
+        ProcessDefinition definition = twoInputRecorder(new ArrayList<>());
+        FakeIdentity identity = new FakeIdentity();
+        identity.verdicts = new TopicIdentityVerdicts(Set.of(), Set.of(IN1_ID));
+        Throwable thrown = assertThrows(Throwable.class, () -> newDriver(definition, identity),
+                "a recreated received topic must refuse initialisation");
+        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED),
+                () -> "expected CHANNEL_IDENTITY_CHANGED in " + thrown);
     }
 
     /**
      * A task publishes what it holds and why (D103): the held channel, its head's position,
      * every cause the head waits for with the position required and the position reached,
-     * and the frontier's size — refreshed each facts interval, and cleared as the hold
+     * and the frontier's size — refreshed each status interval, and cleared as the hold
      * releases. An operator asking "what is this process waiting for?" reads it from
-     * {@code status()} rather than from logs.
+     * {@code status()} rather than from logs. The release itself comes from receiving and
+     * delivering the record the cause names, not from a report and not from time (D115).
      */
     @Test
     void taskStatusNamesWhatIsHeldAndWhichCauseItWaitsFor() {
@@ -189,15 +204,14 @@ class TopologyWiringTest {
                     return Effects.none();
                 })
                 .build();
-        FakeFacts facts = new FakeFacts();
+        FakeIdentity identity = new FakeIdentity();
         ProcessDiagnostics diagnostics = new ProcessDiagnostics();
-        newDriver(definition, facts, TOPICS, diagnostics);
+        newDriver(definition, identity, TOPICS, diagnostics);
 
         io.github.tobyjamesclements.parsley.api.TaskStatus initial = diagnostics.snapshot().get(0);
         assertEquals(0, initial.partition(), "the task receives partition 0 of each topic");
         assertEquals(0, initial.heldMessages(), "nothing is held before anything is received");
         assertEquals(List.of(), initial.heldChannels(), "nothing is held before the first receipt");
-        assertTrue(initial.sinceLastFacts().isPresent(), "the seed round applied facts at initialisation");
 
         var headers = new RecordHeaders();
         headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(IN1, 3L)))));
@@ -222,9 +236,18 @@ class TopologyWiringTest {
         assertEquals(CausesCodec.encode(Causes.of(Map.of(IN1, 3L))).length, held.frontierBytes(),
                 "the frontier's width is the encoded header's width");
 
-        facts.facts = new PositionFacts(Map.of(IN1, 4L), Map.of(), Set.of());
+        for (int offset = 0; offset < 3; offset++) {
+            input("in1").pipeInput(new TestRecord<>("k".getBytes(), ("a" + offset).getBytes()));
+        }
         driver.advanceWallClockTime(Duration.ofMillis(200));
-        assertEquals(List.of("b"), delivered, "the facts settled the cause and released the hold");
+        assertEquals(List.of("a0", "a1", "a2"), delivered, "in1@2 does not satisfy a cause at in1@3");
+        assertEquals(java.util.OptionalLong.of(2L),
+                diagnostics.snapshot().get(0).heldChannels().get(0).blockers().get(0).settledPosition(),
+                "the blocker reports how far in1 has settled");
+        input("in1").pipeInput(new TestRecord<>("k".getBytes(), "a3".getBytes()));
+        assertEquals(List.of("a0", "a1", "a2", "a3", "b"), delivered,
+                "receiving and delivering in1@3 released the hold: no report, no clock");
+        driver.advanceWallClockTime(Duration.ofMillis(200));
         io.github.tobyjamesclements.parsley.api.TaskStatus released = diagnostics.snapshot().get(0);
         assertEquals(0, released.heldMessages(), "nothing remains held");
         assertEquals(List.of(), released.heldChannels(), "a channel with nothing held is not listed");
@@ -249,7 +272,7 @@ class TopologyWiringTest {
                         Effects.builder().send(out, delivery.key(), delivery.value(), delivery.headers()).build())
                 .sends(out)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         var headers = new org.apache.kafka.common.header.internals.RecordHeaders();
         headers.add(new org.apache.kafka.common.header.internals.RecordHeader("app.trace", new byte[] {7}));
@@ -279,7 +302,7 @@ class TopologyWiringTest {
         ProcessDefinition definition = ProcessDefinition.named("p")
                 .receives(in1, (delivery, state) -> Effects.none())
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         var thrown = org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
                 () -> input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -309,7 +332,7 @@ class TopologyWiringTest {
                         Effects.builder().send(out, delivery.key(), delivery.value()).build())
                 .sends(out)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -327,7 +350,7 @@ class TopologyWiringTest {
                         Effects.builder().send(out, delivery.key(), delivery.value() + "!").build())
                 .sends(out)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         byte[] keyBytes = new StringSerializer().serialize("in1", "k1");
         byte[] valueBytes = new StringSerializer().serialize("in1", "v1");
@@ -349,7 +372,7 @@ class TopologyWiringTest {
     void effectArrivingBeforeItsCauseIsHeldAcrossChannels() {
         List<String> delivered = new ArrayList<>();
         ProcessDefinition definition = twoInputRecorder(delivered);
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         RecordHeaders headers = new RecordHeaders();
         headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(IN1, 0L)))));
@@ -360,30 +383,47 @@ class TopologyWiringTest {
         assertEquals(List.of("A", "B"), delivered);
     }
 
-    /** Punctuator report ingestion frees messages whose cause never arrives. */
+    /**
+     * A cause naming a position no record has reached is held and visible, and nothing but
+     * a record at or past that position releases it (D115): the punctuation neither
+     * settles nor delivers on its own, however many times it runs. The hand-built header
+     * here is exactly what an out-of-contract stamper produces (wire-format constraint 8);
+     * once records reach in1@5 the hold goes, because receipt of a position asserts
+     * everything below it was fed or never will be.
+     */
     @Test
-    void punctuatorReportIngestionFreesMessagesWhoseCauseNeverArrives() {
+    void aCauseNamingAnUnreceivedPositionIsHeldAndVisibleUntilARecordReachesIt() {
         List<String> delivered = new ArrayList<>();
         ProcessDefinition definition = twoInputRecorder(delivered);
-        FakeFacts facts = new FakeFacts();
-        newDriver(definition, facts);
+        FakeIdentity identity = new FakeIdentity();
+        ProcessDiagnostics diagnostics = new ProcessDiagnostics();
+        newDriver(definition, identity, TOPICS, diagnostics);
 
         RecordHeaders headers = new RecordHeaders();
         headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(IN1, 5L)))));
         input("in2").pipeInput(new TestRecord<>("B".getBytes(), "B".getBytes(), headers));
-        driver.advanceWallClockTime(Duration.ofMillis(200));
-        assertEquals(List.of(), delivered, "positions 0..5 of in1 are not yet known to be empty");
+        for (int tick = 0; tick < 5; tick++) {
+            driver.advanceWallClockTime(Duration.ofMillis(200));
+        }
+        assertEquals(List.of(), delivered, "no record has reached in1@5: time settles nothing");
+        io.github.tobyjamesclements.parsley.api.TaskStatus.Blocker blocker =
+                diagnostics.snapshot().get(0).heldChannels().get(0).blockers().get(0);
+        assertEquals("in1", blocker.topic(), "the hold is visible, naming the channel it waits on");
+        assertEquals(5L, blocker.requiredPosition(), "and the position the cause named");
+        assertTrue(blocker.settledPosition().isEmpty(), "and that nothing of in1 has been received");
 
-        facts.facts = new PositionFacts(Map.of(IN1, 6L), Map.of(), Set.of());
-        driver.advanceWallClockTime(Duration.ofMillis(200));
-        assertEquals(List.of("B"), delivered, "the report, not a message and not time, frees the hold");
+        for (int offset = 0; offset <= 5; offset++) {
+            input("in1").pipeInput(new TestRecord<>("k".getBytes(), ("a" + offset).getBytes()));
+        }
+        assertEquals(List.of("a0", "a1", "a2", "a3", "a4", "a5", "B"), delivered,
+                "the record at in1@5 releases the hold, after itself");
     }
 
     /** Undecodable metadata fails the step. */
     @Test
     void undecodableMetadataFailsTheStep() {
         ProcessDefinition definition = twoInputRecorder(new ArrayList<>());
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         RecordHeaders headers = new RecordHeaders();
         headers.add(new RecordHeader(CausesCodec.HEADER_KEY, new byte[] {42, 42}));
@@ -402,7 +442,7 @@ class TopologyWiringTest {
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(undeclared, "k", "v").build())
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -446,7 +486,7 @@ class TopologyWiringTest {
                         Effects.builder().send(lookAlike, "k", "v").build())
                 .sends(declared)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes()));
         TestOutputTopic<byte[], byte[]> outTopic =
@@ -468,7 +508,7 @@ class TopologyWiringTest {
                         Effects.builder().send(outChannel.get(), delivery.key(), delivery.value()).build())
                 .sends(outChannel.get())
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes()));
         TestOutputTopic<byte[], byte[]> outTopic =
@@ -493,7 +533,7 @@ class TopologyWiringTest {
                 })
                 .sends(loop)
                 .build();
-        newDriver(definition, new FakeFacts(), Map.of("loop", new TopicInfo(new UUID(100, 9), 1)));
+        newDriver(definition, new FakeIdentity(), Map.of("loop", new TopicInfo(new UUID(100, 9), 1)));
 
         input("loop").pipeInput(new TestRecord<>("k".getBytes(), "seed".getBytes()));
         assertEquals(List.of("seed", "echo"), delivered,
@@ -517,7 +557,7 @@ class TopologyWiringTest {
                 .sends(declared)
                 .stores(store)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -548,7 +588,7 @@ class TopologyWiringTest {
                 })
                 .stores(declared)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -593,7 +633,7 @@ class TopologyWiringTest {
                 })
                 .stores(declared)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "first".getBytes()));
         Throwable thrown = assertThrows(Throwable.class, () ->
@@ -630,7 +670,7 @@ class TopologyWiringTest {
                 })
                 .stores(declared)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "first".getBytes()));
         Throwable thrown = assertThrows(Throwable.class, () ->
@@ -672,7 +712,7 @@ class TopologyWiringTest {
                 .sends(out)
                 .stores(declared)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -715,7 +755,7 @@ class TopologyWiringTest {
                     return Effects.none();
                 })
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         var headers = new RecordHeaders();
         headers.add(new RecordHeader("app.trace", new byte[] {7}));
@@ -740,7 +780,7 @@ class TopologyWiringTest {
         ProcessDefinition definition = ProcessDefinition.named("p")
                 .receives(in1, (delivery, state) -> null)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -775,7 +815,7 @@ class TopologyWiringTest {
                 })
                 .stores(store)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "first".getBytes()));
         Throwable thrown = assertThrows(Throwable.class, () ->
@@ -807,7 +847,7 @@ class TopologyWiringTest {
                 })
                 .stores(store)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -839,7 +879,7 @@ class TopologyWiringTest {
                         .build())
                 .stores(store)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -884,7 +924,7 @@ class TopologyWiringTest {
                 })
                 .stores(store)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -910,7 +950,7 @@ class TopologyWiringTest {
         ProcessDefinition definition = ProcessDefinition.named("p")
                 .receives(in1, (delivery, state) -> Effects.none())
                 .build();
-        newDriver(definition, new FakeFacts(), Map.of("in1", new TopicInfo(IN1_ID, 0)));
+        newDriver(definition, new FakeIdentity(), Map.of("in1", new TopicInfo(IN1_ID, 0)));
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -929,7 +969,7 @@ class TopologyWiringTest {
                     return Effects.none();
                 })
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -950,7 +990,7 @@ class TopologyWiringTest {
                 })
                 .stores(store)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -972,7 +1012,7 @@ class TopologyWiringTest {
                         .build())
                 .stores(store)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -998,7 +1038,7 @@ class TopologyWiringTest {
                         .build())
                 .stores(declared)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -1024,7 +1064,7 @@ class TopologyWiringTest {
                 })
                 .stores(declared)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -1051,7 +1091,7 @@ class TopologyWiringTest {
                 .sends(out)
                 .stores(store)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "x".getBytes()));
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "y".getBytes()));
@@ -1073,7 +1113,7 @@ class TopologyWiringTest {
                 .receives(in1, (delivery, state) -> Effects.builder().send(out, "k", "v").build())
                 .sends(out)
                 .build();
-        newDriver(upstream, new FakeFacts());
+        newDriver(upstream, new FakeIdentity());
         input("in1").pipeInput(new TestRecord<>("a".getBytes(), "a".getBytes()));
         input("in1").pipeInput(new TestRecord<>("b".getBytes(), "b".getBytes()));
         TestOutputTopic<byte[], byte[]> outTopic = driver.createOutputTopic(
@@ -1098,7 +1138,7 @@ class TopologyWiringTest {
                         : Effects.none())
                 .sends(loop)
                 .build();
-        newDriver(definition, new FakeFacts(), Map.of("loop", new TopicInfo(new UUID(100, 9), 1)));
+        newDriver(definition, new FakeIdentity(), Map.of("loop", new TopicInfo(new UUID(100, 9), 1)));
 
         input("loop").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes()));
         TestOutputTopic<byte[], byte[]> out =
@@ -1128,7 +1168,7 @@ class TopologyWiringTest {
                 .sends(out, out2)
                 .stores(storeA, storeB)
                 .build();
-        newDriver(definition, new FakeFacts());
+        newDriver(definition, new FakeIdentity());
 
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v1".getBytes()));
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v2".getBytes()));
