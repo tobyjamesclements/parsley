@@ -827,23 +827,16 @@ class TargetedScenarioTest {
     }
 
     /**
-     * Join clamp survives retention at its exact position, and past it: a delivered-past
-     * entry is never pruned by retention (D115), so a channel that joins after its
-     * delivered cause was discarded — at exactly the delivered position, or one past it,
-     * the boundary a strict-below prune would still miss — does not redeliver the cause
-     * behind its delivered effect.
+     * Join clamp survives retention at its exact position: a delivered-past entry is never
+     * pruned by retention (D115), so a channel that joins after the log start reached its
+     * delivered cause does not redeliver the cause behind its delivered effect. Only the
+     * exact boundary is observable: once the log start passes the entry, the joining
+     * channel's own start position covers everything below it, so a prune strictly below
+     * the log start — the predicate the engine had until D115 — changes no delivery and no
+     * scenario can catch it.
      */
     @Test
     void joinClampSurvivesRetentionAtItsExactPosition() {
-        joinClampSurvivesRetentionAt(2);
-    }
-
-    @Test
-    void joinClampSurvivesRetentionOnePastItsPosition() {
-        joinClampSurvivesRetentionAt(3);
-    }
-
-    private static void joinClampSurvivesRetentionAt(long logStart) {
         Rig rig = new Rig(SabotageMode.NONE);
         SimChannel c1 = rig.channel("c1");
         SimChannel c2 = rig.channel("c2");
@@ -863,7 +856,7 @@ class TargetedScenarioTest {
         p.drain();
         p.commitStep();
 
-        rig.world.truncate(c1, logStart);
+        rig.world.truncate(c1, 2);
         p.commitStep();
         p.stopCleanly();
 

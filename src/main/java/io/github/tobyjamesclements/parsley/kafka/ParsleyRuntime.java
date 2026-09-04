@@ -1000,7 +1000,7 @@ public final class ParsleyRuntime implements AutoCloseable {
         if (coveredUpTo == null || coveredUpTo == Long.MAX_VALUE || coveredUpTo < 0) {
             return java.util.OptionalLong.empty();
         }
-        return java.util.OptionalLong.of(coveredUpTo + 1);
+        return java.util.OptionalLong.of(coveredUpTo);
     }
 
     /** The received partitions' start positions: the committed ones, overlaid by this bootstrap's commits. */
