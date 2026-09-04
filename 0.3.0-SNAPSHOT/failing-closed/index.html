@@ -594,6 +594,8 @@
       
         
       
+        
+      
     
     
     
@@ -791,6 +793,34 @@
     
   
     Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
   
 
     
@@ -1084,6 +1114,8 @@ undelivered messages must be re-expressed, and an undecodable header conceals ex
 A downstream process acting on an under-expressed frontier could then invert causal order.
 Stopping the process satisfies the requirement to stop at minimum on the affected channel.</p>
 <h2 id="triggers">Triggers</h2>
+<p>This table says when each reason is raised. What an operator does about it is in
+<a href="../runbooks/#runbooks-by-reason">Runbooks</a>, one runbook per reason.</p>
 <table>
 <thead>
 <tr>
@@ -1199,7 +1231,8 @@ this instance no longer runs.</p>
 <p>A head with no blockers listed is deliverable and goes on the next drain. A head whose
 blocker names a position the channel has settled below is waiting on that channel's feed or
 its read-position report; a blocker whose settled position is empty names a channel this
-task has heard nothing of yet.</p>
+task has heard nothing of yet. Turning a blocker's shape into an action is
+<a href="../runbooks/#a-message-is-held-and-not-moving">a runbook</a>.</p>
 
 
 

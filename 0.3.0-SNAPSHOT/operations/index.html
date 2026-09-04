@@ -14,7 +14,7 @@
         <link rel="prev" href="../runtime/">
       
       
-        <link rel="next" href="../session/">
+        <link rel="next" href="../runbooks/">
       
       
         
@@ -594,6 +594,8 @@
       
         
       
+        
+      
     
     
     
@@ -832,6 +834,34 @@
   
 </nav>
       
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../runbooks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Runbooks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
     </li>
   
 
@@ -1104,8 +1134,8 @@
 
 <h1 id="operations">Operations</h1>
 <p>What a running Parsley application looks like from the cluster, what must exist before it
-starts, how it scales, how to reset a process deliberately when a refusal asks for it, and
-how to size the two limits an operator owns.</p>
+starts, how it scales, what a reset discards, and how to size the two limits an operator
+owns. What to do when a process stops or holds is in <a href="../runbooks/">Runbooks</a>.</p>
 <h2 id="names-on-the-cluster">Names on the cluster</h2>
 <p>Every declared process becomes one Kafka Streams application with its own consumer group.
 With <code>ParsleyConfig.builder(bootstrap, "shop")</code> and a process named <code>shipper</code>:</p>
@@ -1162,21 +1192,9 @@ re-resolved on restart. Plan partition counts with the widest topic in mind.</p>
 <h2 id="resetting-a-process">Resetting a process</h2>
 <p>Several refusals end with "reset the process's state and group offsets deliberately". The
 reset discards the process's causal past: messages received after it may deliver before
-causes that were delivered before it, which is the boundary the refusal protects. Do it in
-this order, with every instance of the application stopped:</p>
-<ol>
-<li>Delete the group's committed offsets: <code>kafka-consumer-groups --delete --group &lt;prefix&gt;-&lt;process&gt;</code>.</li>
-<li>Delete the process's changelogs: the ordering changelog and every declared store's.</li>
-<li>Delete the process's local state directory under <code>state.dir</code> on every instance.</li>
-<li>Start again. The bootstrap resolves topics, pre-commits each channel's declared initial
-   position (<code>EARLIEST</code> reprocesses the retained log; <code>LATEST</code> skips it) and creates fresh
-   changelogs.</li>
-</ol>
-<p>Doing it in another order produces a different refusal rather than a reset: offsets deleted
-with the changelog kept resumes against the old coverage and refuses with
-<code>POSITIONS_DISCARDED_UNREAD</code> if retention has moved; the changelog deleted with offsets kept
-refuses with <code>ORDERING_STATE_LOST</code>. The Kafka Streams reset tool deletes internal topics and
-resets offsets but leaves local state; use the steps above.</p>
+causes that were delivered before it, which is the boundary the refusal protects. The checks
+to make before it, the steps in the order that matters, and what to verify afterwards are in
+<a href="../runbooks/#resetting-a-process">Runbooks</a>.</p>
 <h2 id="sizing">Sizing</h2>
 <p><strong>Metadata budget.</strong> Each emission carries the causal frontier: about 26 bytes for a topic's
 first partition and 9 for each further partition, over the transitive upstream closure of
@@ -1198,7 +1216,9 @@ they express (<a href="../failing-closed/">Failing closed</a>).</p>
 deliberately, and per task what is held and which cause each hold waits for, with the
 frontier's size and how long ago broker facts were applied. A held message is not a failure:
 the diagnosis is the named cause. A refusal recurs identically on restart, except
-<code>COVERED_POSITION_FED</code> raised because the execution was superseded, which a restart recovers.</p>
+<code>COVERED_POSITION_FED</code> raised because the execution was superseded, which a restart recovers.
+What to do about each shape the status can show — a refusal, a stop without one, a hold that
+does not move — is in <a href="../runbooks/">Runbooks</a>.</p>
 
 
 
@@ -1251,13 +1271,13 @@ the diagnosis is the named cause. A refusal recurs identically on restart, excep
         
         
           
-          <a href="../session/" class="md-footer__link md-footer__link--next" aria-label="Next: Session consistency">
+          <a href="../runbooks/" class="md-footer__link md-footer__link--next" aria-label="Next: Runbooks">
             <div class="md-footer__title">
               <span class="md-footer__direction">
                 Next
               </span>
               <div class="md-ellipsis">
-                Session consistency
+                Runbooks
               </div>
             </div>
             <div class="md-footer__button md-icon">
