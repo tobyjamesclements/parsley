@@ -131,6 +131,5 @@ restart re-feeds the buffer from the log, so no held message is persisted and no
 limit applies to holds; initial positions commit under the group's generation in the first
 transaction, so no bootstrap member joins; ordering state and application stores live in
 compacted topics at the task width, one partition per task, materialised in memory on
-assignment. The costs the record lists: stores are in memory, a held message stays decoded
-on the heap, and a message discarded by retention while held refuses on restart rather than
-delivering from a changelog copy.
+assignment. The costs the record lists: stores are in memory and a held message stays decoded
+on the heap.

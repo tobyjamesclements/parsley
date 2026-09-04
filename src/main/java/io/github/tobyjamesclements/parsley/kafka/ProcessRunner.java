@@ -70,12 +70,13 @@ final class ProcessRunner implements Runnable {
     private final Admin admin;
     private final KafkaConsumer<byte[], byte[]> consumer;
     private final KafkaConsumer<byte[], byte[]> restoreConsumer;
-    private final KafkaProducer<byte[], byte[]> producer;
+    private KafkaProducer<byte[], byte[]> producer;
     private final FactsSource factsSource;
     private final Executor factsExecutor;
     private final ProcessDiagnostics diagnostics;
     private final Thread thread;
     private final Runnable onStopped;
+    private final Map<String, Object> clientProps;
 
     private final Map<Integer, ProcessTask> tasks = new TreeMap<>();
     private final Map<TopicPartition, Long> lastReported = new HashMap<>();
@@ -113,10 +114,8 @@ final class ProcessRunner implements Runnable {
         this.restoreConsumer = new KafkaConsumer<>(ClientRuntime.restoreConsumerProperties(clientProps),
                 new org.apache.kafka.common.serialization.ByteArrayDeserializer(),
                 new org.apache.kafka.common.serialization.ByteArrayDeserializer());
-        this.producer = new KafkaProducer<>(
-                ClientRuntime.producerProperties(clientProps, applicationId + "-" + UUID.randomUUID()),
-                new org.apache.kafka.common.serialization.ByteArraySerializer(),
-                new org.apache.kafka.common.serialization.ByteArraySerializer());
+        this.clientProps = Map.copyOf(clientProps);
+        this.producer = newProducer();
         this.thread = new Thread(this, "parsley-" + applicationId);
     }
 
@@ -163,22 +162,33 @@ final class ProcessRunner implements Runnable {
             producer.initTransactions();
             consumer.subscribe(definition.receivedTopics(), new Listener());
             while (!stopRequested.get()) {
-                ConsumerRecords<byte[], byte[]> records;
                 try {
-                    records = consumer.poll(POLL);
+                    ConsumerRecords<byte[], byte[]> records = consumer.poll(POLL);
+                    if (stopRequested.get()) {
+                        break;
+                    }
+                    feed(records);
+                    reportPositions();
+                    gatherAndApplyFacts();
+                    maybeCommit();
                 } catch (WakeupException e) {
                     break;
+                } catch (RuntimeException e) {
+                    if (!isSupersession(e)) {
+                        throw e;
+                    }
+                    recoverFromSupersession(e);
                 }
-                if (stopRequested.get()) {
-                    break;
-                }
-                feed(records);
-                reportPositions();
-                gatherAndApplyFacts();
-                maybeCommit();
             }
             if (transactionOpen) {
-                commit();
+                // A graceful stop commits the interval in flight; a commit the coordinator
+                // refuses rolls that interval back, which a restart re-feeds — not a failure.
+                try {
+                    commit();
+                } catch (RuntimeException e) {
+                    LOG.warn("{}: the final commit was refused; its steps roll back", applicationId, e);
+                    abortAndDiscard();
+                }
             }
         } catch (Throwable t) {
             fail(t);
@@ -191,7 +201,11 @@ final class ProcessRunner implements Runnable {
         for (TopicPartition tp : sortedPartitions(records)) {
             ProcessTask task = tasks.get(tp.partition());
             if (task == null) {
-                throw new IllegalStateException(applicationId + ": records for unassigned " + tp);
+                // Between a recovery's discard and the rebalance it forced, a poll can still
+                // return records for a partition with no task: rewind to the first of them so
+                // the task rebuilt on assignment reads them again, and feed nothing.
+                consumer.seek(tp, records.records(tp).get(0).offset());
+                continue;
             }
             for (var record : records.records(tp)) {
                 task.receive(record);
@@ -291,19 +305,90 @@ final class ProcessRunner implements Runnable {
      */
     private void commit() {
         Map<TopicPartition, OffsetAndMetadata> offsets = new HashMap<>();
-        try {
-            for (ProcessTask task : tasks.values()) {
-                task.flushWrites();
-                offsets.putAll(task.offsetsToCommit(consumer::position));
-            }
-            producer.sendOffsetsToTransaction(offsets, consumer.groupMetadata());
-            producer.commitTransaction();
-            transactionOpen = false;
-        } catch (CommitFailedException | InvalidProducerEpochException e) {
-            LOG.warn("{}: commit refused by the group coordinator; discarding the tasks for the rebalance",
-                    applicationId, e);
-            abortAndDiscard();
+        for (ProcessTask task : tasks.values()) {
+            task.flushWrites();
+            offsets.putAll(task.offsetsToCommit(consumer::position));
         }
+        producer.sendOffsetsToTransaction(offsets, consumer.groupMetadata());
+        producer.commitTransaction();
+        transactionOpen = false;
+    }
+
+    /**
+     * Whether a failure is the substrate telling this execution it has been superseded:
+     * the group moved on without it (a stale generation at the offset commit, or a member
+     * kicked for exceeding its poll interval), or the transaction coordinator bumped its
+     * producer's epoch (a transaction that timed out while a step ran, or a fence). None
+     * of these is a breach of the guarantee — the superseded step cannot commit — so the
+     * process recovers in place rather than stopping (D115): the transaction is aborted,
+     * the tasks discarded, the producer replaced where it is fenced for good, and a
+     * rebalance forced so every task is rebuilt from committed state.
+     */
+    static boolean isSupersession(Throwable exception) {
+        Throwable cause = exception;
+        for (int depth = 0; cause != null && depth < 64; depth++, cause = cause.getCause()) {
+            if (cause instanceof CommitFailedException
+                    || cause instanceof InvalidProducerEpochException
+                    || cause instanceof org.apache.kafka.common.errors.ProducerFencedException
+                    || cause instanceof org.apache.kafka.common.errors.OutOfOrderSequenceException
+                    || cause instanceof org.apache.kafka.common.errors.UnknownProducerIdException
+                    || cause instanceof org.apache.kafka.common.errors.InvalidPidMappingException
+                    || cause instanceof org.apache.kafka.common.errors.TransactionAbortedException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void recoverFromSupersession(RuntimeException e) {
+        LOG.warn("{}: this execution was superseded ({}); aborting its transaction and rebuilding every task"
+                + " from committed state", applicationId, e.toString());
+        boolean aborted = false;
+        if (transactionOpen) {
+            try {
+                producer.abortTransaction();
+                aborted = true;
+            } catch (RuntimeException abortFailure) {
+                LOG.warn("{}: abort after supersession failed; replacing the producer", applicationId, abortFailure);
+            }
+            transactionOpen = false;
+        } else {
+            aborted = true;
+        }
+        if (!aborted || isFatalForProducer(e)) {
+            replaceProducer();
+        }
+        discardTasks();
+        consumer.enforceRebalance("superseded execution rebuilding its tasks");
+    }
+
+    private static boolean isFatalForProducer(Throwable exception) {
+        Throwable cause = exception;
+        for (int depth = 0; cause != null && depth < 64; depth++, cause = cause.getCause()) {
+            if (cause instanceof org.apache.kafka.common.errors.ProducerFencedException
+                    || cause instanceof org.apache.kafka.common.errors.OutOfOrderSequenceException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private KafkaProducer<byte[], byte[]> newProducer() {
+        return new KafkaProducer<>(
+                ClientRuntime.producerProperties(clientProps, applicationId + "-" + UUID.randomUUID()),
+                new org.apache.kafka.common.serialization.ByteArraySerializer(),
+                new org.apache.kafka.common.serialization.ByteArraySerializer());
+    }
+
+    /** Closes a producer the coordinator has fenced for good and opens a fresh one. */
+    private void replaceProducer() {
+        try {
+            producer.close(Duration.ofSeconds(5));
+        } catch (RuntimeException closeFailure) {
+            LOG.warn("{}: fenced producer failed to close", applicationId, closeFailure);
+        }
+        producer = newProducer();
+        producer.initTransactions();
     }
 
     private void abortAndDiscard() {
@@ -373,7 +458,18 @@ final class ProcessRunner implements Runnable {
         public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
             state = ProcessStatus.State.REBALANCING;
             if (transactionOpen) {
-                commit();
+                try {
+                    commit();
+                } catch (RuntimeException e) {
+                    if (!isSupersession(e)) {
+                        throw e;
+                    }
+                    LOG.warn("{}: the commit on revoke was refused; its steps roll back", applicationId, e);
+                    abortAndDiscard();
+                    if (isFatalForProducer(e)) {
+                        replaceProducer();
+                    }
+                }
             }
             discardTasks();
         }

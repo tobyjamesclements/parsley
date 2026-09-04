@@ -4848,10 +4848,12 @@ offset, since a host committing at the head never advances the offset past a hol
   host does not yet.
 * A held message stays decoded on the heap: D102's skeleton discipline relied on the store
   holding the body. Deep hold-back buffers cost heap here where they cost RocksDB before.
-* A message held while retention discards it from its source topic was deliverable after a
-  restart under Streams, since the changelog held a copy; here the restart re-feeds from
-  the log and refuses with `POSITIONS_DISCARDED_UNREAD`. `docs/operations.md` already
-  requires retention to cover hold-back time, so this narrows a case rather than opens one.
+* A message held while retention discards it from its source topic is re-fed from the log
+  here, where the Streams changelog held a copy — but the outcome is the same on both
+  hosts: D104 refuses a log start beyond a held head with `POSITIONS_DISCARDED_UNREAD`,
+  since the message's senders may have pruned it. The clients host reaches the same refusal
+  through the consumer's out-of-range fetch. `HostTortureIntegrationTest#retentionCrossingAHeldMessageRefusesRatherThanSkips`
+  pins this on both (D115); an earlier draft of this record called it a divergence.
 * The assignor is a classic-protocol client-side assignor; KIP-848 does not run it. The
   Streams host has the same constraint today (D87 pins `group.protocol`).
 * Rebalances are eager and rebuild every task; cooperative rebalancing is not attempted.
@@ -4871,3 +4873,78 @@ Kafka's consumer and producer instead, Substrate 3 should be restated as transac
 produce with the read positions committed in the transaction under `read_committed`, and
 the Host obligations become the implementation's own — enforceable rather than merely
 detectable — since the implementation now owns the consumer.
+
+### D115 — The host-torture contract, run against both hosts; a superseded execution recovers in place
+
+**Context**
+
+D114 left the kafka-clients host with the end-to-end suite as its only evidence, and named
+the failure matrix that would have to pass before "battle-tested" could be answered: a step
+aborted part-way through a burst, tasks migrating under load, a member stalled past its
+poll interval and its transaction timeout while another instance takes over, a restore
+that must read past an open transaction on the state topic, a deep hold-back buffer
+migrating, retention crossing a hold, a broker bounce, and a concurrent cold start. The
+Streams host had tests for two of these (the bounce, the cold start) and none for the rest,
+so the matrix was also the first time the established host was put through it.
+
+**Decision**
+
+`HostTortureIntegrationTest` is the contract: eight cases, each driving only the public
+API and the broker and reading its outcome from committed output and `status()`, with
+`host()` selecting the host. `ClientHostTortureIntegrationTest` runs the same eight against
+the kafka-clients host. The broker-bounce case absorbs `BrokerBounceIntegrationTest`'s
+scenario under the host-neutral held premise; the Streams-specific cold-start suite stays,
+since it pins D108's mechanism rather than the contract.
+
+Running it changed the clients host in one way. A stalled member's step, resuming after
+the coordinator has moved the group on and aborted its transaction, met the offset commit
+with `CommitFailedException` and stopped the process as an ordinary failure — correct, since
+nothing was committed, but a restart-recoverable stop where the Streams host recovers in
+place through `TaskMigratedException`. `ProcessRunner` now classifies that family — a
+stale generation at the offset commit, an epoch the transaction coordinator bumped, a fence
+— as supersession: the transaction is aborted, the tasks discarded, the producer replaced
+where it is fenced for good, and a rebalance forced so every task is rebuilt from committed
+state. The same handling covers the commit on revoke and the final commit on a graceful
+stop, neither of which may fail the process for a refusal that only rolls an interval back.
+
+Both hosts pass all eight. Two things the run established beyond the pass:
+
+* *The stall case exercised the fence on both hosts, not a quiet path.* The Streams log
+  shows `TaskMigratedException: Producer got fenced trying to add offsets to a transaction`;
+  the clients log shows `CommitFailedException: ... The coordinator is not aware of this
+  member` at the offset commit, followed by the abort and rebuild. Eleven outputs, each
+  once, and the stalled instance healthy afterwards on both.
+* *The Streams host refuses a scale-out under load; the clients host does not.* The second
+  instance joining mid-stream refused its start with D88's `RetryableStartException`
+  ("ordering records appeared while this start was determining prior state ... Retry this
+  start"), because the Streams host determines prior state by reading the whole ordering
+  changelog before its application starts, and the first instance was committing while it
+  read. The contract now retries that one refusal, as D88 instructs an operator to, and
+  logs each retry; the clients host, which reads state per task after assignment, never
+  raised it. The window is a race: the first run hit it and two later runs missed it, so
+  the retry is what keeps the case deterministic rather than a certainty per run. This is
+  the cost D114 predicted for start-time changelog reads, observed.
+
+**Alternatives**
+
+* Leaving the stall case as a restart-recoverable stop on the clients host. Rejected: a
+  process that stops on every rebalance it loses is not a host, and the Streams host sets
+  the bar at in-place recovery.
+* Widening the retry in the contract to any start failure. Rejected: only the refusal a
+  record documents as retryable is retried, so a genuine start failure on either host still
+  fails the case.
+
+**Cost**
+
+* The matrix is not the whole space, and the class Javadoc says so: a crash between the
+  offset commit and the transaction commit cannot be injected from outside either host,
+  and a transaction-coordinator failover is not exercised.
+* Each suite takes about two minutes on an embedded broker, dominated by deliberate stalls
+  and session timeouts; both run in `./mvnw verify`.
+* The supersession classification walks a cause chain for seven exception types; a client
+  upgrade that adds an eighth would stop the process instead of recovering it — the same
+  exposure `ParsleyRuntime.classifyFailure` carries for the Streams host.
+
+**Specification gap**
+
+None beyond D114's.
