@@ -4921,8 +4921,8 @@ Both hosts pass all eight. Two things the run established beyond the pass:
   changelog before its application starts, and the first instance was committing while it
   read. The contract now retries that one refusal, as D88 instructs an operator to, and
   logs each retry; the clients host, which reads state per task after assignment, never
-  raised it. The window is a race: the first run hit it and two later runs missed it, so
-  the retry is what keeps the case deterministic rather than a certainty per run. This is
+  raised it. The window is a race: two of four runs hit it and two missed it, so the retry
+  is what keeps the case deterministic rather than a certainty per run. This is
   the cost D114 predicted for start-time changelog reads, observed.
 
 **Alternatives**
