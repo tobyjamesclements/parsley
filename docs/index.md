@@ -90,6 +90,7 @@ Pick the release unless you are tracking unreleased work.
 | [Failing closed](failing-closed.md) | What stops a process, and why the blast radius is the process |
 | [Runtime](runtime.md) | Wiring into Kafka Streams |
 | [Operations](operations.md) | Names, prerequisites, scaling, resets and sizing |
+| [Runbooks](runbooks.md) | What an operator does when a process stops or holds, reason by reason, and how to reset one |
 | [Session consistency](session.md) | Carrying the causal frontier past the last consumer, out to clients |
 | [Wire format](wire-format.md) | The frozen on-wire definition of causal metadata |
 | [Verification](verification.md) | How the guarantee is tested |

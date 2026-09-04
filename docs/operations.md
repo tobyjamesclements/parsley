@@ -1,8 +1,8 @@
 # Operations
 
 What a running Parsley application looks like from the cluster, what must exist before it
-starts, how it scales, how to reset a process deliberately when a refusal asks for it, and
-how to size the two limits an operator owns.
+starts, how it scales, what a reset discards, and how to size the two limits an operator
+owns. What to do when a process stops or holds is in [Runbooks](runbooks.md).
 
 ## Names on the cluster
 
@@ -50,21 +50,9 @@ re-resolved on restart. Plan partition counts with the widest topic in mind.
 
 Several refusals end with "reset the process's state and group offsets deliberately". The
 reset discards the process's causal past: messages received after it may deliver before
-causes that were delivered before it, which is the boundary the refusal protects. Do it in
-this order, with every instance of the application stopped:
-
-1. Delete the group's committed offsets: `kafka-consumer-groups --delete --group <prefix>-<process>`.
-2. Delete the process's changelogs: the ordering changelog and every declared store's.
-3. Delete the process's local state directory under `state.dir` on every instance.
-4. Start again. The bootstrap resolves topics, pre-commits each channel's declared initial
-   position (`EARLIEST` reprocesses the retained log; `LATEST` skips it) and creates fresh
-   changelogs.
-
-Doing it in another order produces a different refusal rather than a reset: offsets deleted
-with the changelog kept resumes against the old coverage and refuses with
-`POSITIONS_DISCARDED_UNREAD` if retention has moved; the changelog deleted with offsets kept
-refuses with `ORDERING_STATE_LOST`. The Kafka Streams reset tool deletes internal topics and
-resets offsets but leaves local state; use the steps above.
+causes that were delivered before it, which is the boundary the refusal protects. The checks
+to make before it, the steps in the order that matters, and what to verify afterwards are in
+[Runbooks](runbooks.md#resetting-a-process).
 
 ## Sizing
 
@@ -93,3 +81,5 @@ deliberately, and per task what is held and which cause each hold waits for, wit
 frontier's size and how long ago broker facts were applied. A held message is not a failure:
 the diagnosis is the named cause. A refusal recurs identically on restart, except
 `COVERED_POSITION_FED` raised because the execution was superseded, which a restart recovers.
+What to do about each shape the status can show — a refusal, a stop without one, a hold that
+does not move — is in [Runbooks](runbooks.md).

@@ -20,6 +20,9 @@ Stopping the process satisfies the requirement to stop at minimum on the affecte
 
 ## Triggers
 
+This table says when each reason is raised. What an operator does about it is in
+[Runbooks](runbooks.md#runbooks-by-reason), one runbook per reason.
+
 | Reason | Condition |
 |---|---|
 | `UNDECODABLE_METADATA` | Metadata present and not decodable |
@@ -79,4 +82,5 @@ this instance no longer runs.
 A head with no blockers listed is deliverable and goes on the next drain. A head whose
 blocker names a position the channel has settled below is waiting on that channel's feed or
 its read-position report; a blocker whose settled position is empty names a channel this
-task has heard nothing of yet.
+task has heard nothing of yet. Turning a blocker's shape into an action is
+[a runbook](runbooks.md#a-message-is-held-and-not-moving).
