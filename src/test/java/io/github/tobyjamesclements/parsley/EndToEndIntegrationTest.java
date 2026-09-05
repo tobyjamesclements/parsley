@@ -430,7 +430,7 @@ class EndToEndIntegrationTest {
                     "nothing may be delivered past the discarded positions");
             await("the consumer's out-of-range stop to reach status() with its reason",
                     () -> parsley.status().get("pt").refusalReason().isPresent(), Duration.ofSeconds(30));
-            assertEquals(io.github.tobyjamesclements.parsley.FailClosedException.Reason
+            assertEquals(FailClosedException.Reason
                             .POSITIONS_DISCARDED_UNREAD,
                     parsley.status().get("pt").refusalReason().orElseThrow(),
                     "the fetch is the one judge of retention, and its stop names Safety 8's condition (D109)");

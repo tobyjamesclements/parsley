@@ -52,31 +52,36 @@ public final class OrderingStateInspector {
     }
 
     /**
-     * Recovers how far each channel was covered as fed-or-never-arriving.
+     * Reports whether a covered position is the fed-to-end sentinel.
      *
-     * <p>This is the durable record of a previous execution's read coverage. A start that
-     * must re-establish a lost read position resumes at this coverage plus one — the next
-     * position the previous execution would have read — and leaves it to the substrate's
-     * fetch, under {@code auto.offset.reset=none}, to refuse the position if retention has
-     * since discarded it (D115).
+     * <p>A channel settled on its topic's confirmed deletion carries this value, which no
+     * offset can follow.
      *
-     * <p>A channel settled on its topic's confirmed deletion carries the engine's
-     * fed-to-end sentinel, {@code Long.MAX_VALUE} — everything covered. It is returned
-     * verbatim; arithmetic on a returned value must not assume it can be incremented
-     * without overflow.
-     *
-     * @param latestPerKey the ordering state, as the latest value per key
-     * @return per channel, the highest position covered as fed-or-never-arriving
-     * @throws FailClosedException if a coverage entry is corrupt
-     */
-    /**
-     * Whether a covered position is the engine's fed-to-end sentinel: the value a channel
-     * settled on its topic's confirmed deletion carries, which no offset can follow.
+     * @param coveredUpTo a position from {@link #coveredPositions}
+     * @return {@code true} when the channel was covered to the end
      */
     public static boolean isFedToEnd(long coveredUpTo) {
         return coveredUpTo == ProcessEngine.FED_TO_END_OF_CHANNEL;
     }
 
+    /**
+     * Recovers how far each channel was covered as fed-or-never-arriving.
+     *
+     * <p>This is the durable record of a previous execution's read coverage. A start that
+     * must re-establish a lost read position resumes at this coverage plus one, the next
+     * position the previous execution would have read, and leaves it to the substrate's
+     * fetch, under {@code auto.offset.reset=none}, to refuse the position if retention has
+     * since discarded it (D115).
+     *
+     * <p>A channel settled on its topic's confirmed deletion carries the fed-to-end
+     * sentinel, {@code Long.MAX_VALUE}, returned verbatim. Arithmetic on a returned value
+     * must not assume it can be incremented without overflow. Test it with
+     * {@link #isFedToEnd}.
+     *
+     * @param latestPerKey the ordering state, as the latest value per key
+     * @return per channel, the highest position covered as fed-or-never-arriving
+     * @throws FailClosedException if a coverage entry is corrupt
+     */
     public static Map<ChannelId, Long> coveredPositions(Map<byte[], byte[]> latestPerKey) {
         Map<ChannelId, Long> covered = new HashMap<>();
         latestPerKey.forEach((key, value) -> {

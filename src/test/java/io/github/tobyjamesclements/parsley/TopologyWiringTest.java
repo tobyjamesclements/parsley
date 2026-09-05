@@ -207,10 +207,10 @@ class TopologyWiringTest {
 
         var thrown = org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
                 () -> input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        io.github.tobyjamesclements.parsley.FailClosedException refusal =
-                io.github.tobyjamesclements.parsley.FailClosedException.findIn(thrown);
+        FailClosedException refusal =
+                FailClosedException.findIn(thrown);
         assertNotNull(refusal, "the step must fail closed, not skip the message");
-        assertEquals(io.github.tobyjamesclements.parsley.FailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
+        assertEquals(FailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
                 refusal.reason());
     }
 
@@ -487,13 +487,13 @@ class TopologyWiringTest {
      */
     @Test
     void deserializerLatchedRefusalFailsTheStepEvenWhenSwallowed() {
-        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.State> captured =
+        java.util.concurrent.atomic.AtomicReference<State> captured =
                 new java.util.concurrent.atomic.AtomicReference<>();
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
         org.apache.kafka.common.serialization.Serde<String> capturingSerde = Serdes.serdeFrom(
                 new StringSerializer(), (topic, data) -> {
-                    io.github.tobyjamesclements.parsley.State reader = captured.get();
+                    State reader = captured.get();
                     if (reader != null) {
                         try {
                             reader.get(lookAlike, "k");
@@ -528,13 +528,13 @@ class TopologyWiringTest {
      */
     @Test
     void unswallowedReaderRefusalInADeserializerKeepsItsReason() {
-        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.State> captured =
+        java.util.concurrent.atomic.AtomicReference<State> captured =
                 new java.util.concurrent.atomic.AtomicReference<>();
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
         org.apache.kafka.common.serialization.Serde<String> readingSerde = Serdes.serdeFrom(
                 new StringSerializer(), (topic, data) -> {
-                    io.github.tobyjamesclements.parsley.State reader = captured.get();
+                    State reader = captured.get();
                     if (reader != null) {
                         reader.get(lookAlike, "k");
                     }
@@ -567,7 +567,7 @@ class TopologyWiringTest {
      */
     @Test
     void serializerLatchedRefusalDuringPlanningFailsTheStep() {
-        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.State> captured =
+        java.util.concurrent.atomic.AtomicReference<State> captured =
                 new java.util.concurrent.atomic.AtomicReference<>();
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());

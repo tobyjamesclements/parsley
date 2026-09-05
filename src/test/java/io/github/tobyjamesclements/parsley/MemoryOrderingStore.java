@@ -6,7 +6,7 @@ import java.util.TreeMap;
 
 
 /**
- * An {@link io.github.tobyjamesclements.parsley.OrderingStore} in memory, with commit
+ * An {@link OrderingStore} in memory, with commit
  * and rollback, standing in for a transactional store.
  */
 final class MemoryOrderingStore implements OrderingStore {

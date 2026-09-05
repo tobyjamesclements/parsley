@@ -215,8 +215,8 @@ class ChangelogReadStallTest {
     @Test
     void heldMessageBodiesAreKeptAsPresenceMarkersNotRetained() {
         ScriptedConsumer consumer = new ScriptedConsumer(List.of(P0));
-        io.github.tobyjamesclements.parsley.ChannelId channel =
-                new io.github.tobyjamesclements.parsley.ChannelId(new java.util.UUID(5, 5), 0);
+        ChannelId channel =
+                new ChannelId(new java.util.UUID(5, 5), 0);
         byte[] heldKey = heldKey(channel, 7L);
         byte[] otherHeldKey = heldKey(channel, 9L);
         byte[] body = new byte[64 * 1024];
@@ -230,13 +230,13 @@ class ChangelogReadStallTest {
         assertEquals(0, view.latest().get(heldKey).length,
                 "a held message's body is replaced by an empty presence marker");
         assertEquals(Set.of(channel),
-                io.github.tobyjamesclements.parsley.OrderingStateInspector.heldChannels(view.latest()),
+                OrderingStateInspector.heldChannels(view.latest()),
                 "the marker still counts as a held message for the stranded-hold scan");
         assertNull(view.latest().get(otherHeldKey), "a tombstone clears a held entry as before");
         assertArrayEquals(bytes("covered"), view.latest().get(bytes("task0")), "other tags keep their values");
     }
 
-    private static byte[] heldKey(io.github.tobyjamesclements.parsley.ChannelId channel, long position) {
+    private static byte[] heldKey(ChannelId channel, long position) {
         java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(1 + 20 + 8);
         buffer.put((byte) 'h');
         channel.writeTo(buffer);

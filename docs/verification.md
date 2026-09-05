@@ -1,12 +1,13 @@
 # Verification
 
-The suite runs under `./mvnw verify` in roughly four minutes and requires no Docker.
+The suite runs under `./mvnw verify` in roughly five minutes and requires no Docker.
 
 ## Layers
 
-**Pure core.** Codec round-trip tests, decision-unit table tests, and engine unit tests. A
-purity scan — `PurityScan`, the one spelling of the fence — fails on any reference to a
-clock, randomness, the network, or the substrate in the `core` sources.
+**Pure protocol.** Codec round-trip tests, decision-unit table tests, and engine unit
+tests. `ProtocolPurityTest` fails on any reference to a clock, randomness, the network or
+the substrate in a protocol source, on a protocol source naming a Kafka Streams runtime
+type, and on a main source belonging to neither list.
 
 **Simulation.** A simulated substrate and host honouring the host obligations drives many
 engines over randomised topologies, interleavings, gaps, aborted-transaction runs, crashes

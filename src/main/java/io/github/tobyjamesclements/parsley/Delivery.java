@@ -31,7 +31,7 @@ public final class Delivery<K, V> {
         this.key = key;
         this.value = value;
         this.headers = headers.stream()
-                .filter(header -> !header.key().startsWith(io.github.tobyjamesclements.parsley.CausesCodec.RESERVED_HEADER_PREFIX))
+                .filter(header -> !header.key().startsWith(CausesCodec.RESERVED_HEADER_PREFIX))
                 .toList();
     }
 

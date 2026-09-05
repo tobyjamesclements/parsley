@@ -23,7 +23,7 @@ public interface State {
      * @param <V>   value type
      * @return the stored value, or {@code null} when the key is absent
      * @throws IllegalArgumentException if {@code store} or {@code key} is null
-     * @throws io.github.tobyjamesclements.parsley.FailClosedException if
+     * @throws FailClosedException if
      *         {@code store} is not the instance the process declared
      *         ({@code STATE_ACCESS_TO_UNDECLARED_STORE}), or the key or the stored value
      *         cannot be coded by the declared serdes; the refusal is latched, so the step

@@ -37,7 +37,7 @@ import java.util.concurrent.TimeUnit;
  * <p>Configuration carrying the guarantee is set here and cannot be overridden:
  * {@code exactly_once_v2}, {@code read_committed}, and no automatic offset reset.
  *
- * @see io.github.tobyjamesclements.parsley.Parsley
+ * @see Parsley
  */
 final class StreamsRuntime implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(StreamsRuntime.class);
@@ -755,7 +755,7 @@ final class StreamsRuntime implements AutoCloseable {
                     // put the whole hold-back backlog on the heap at every start.
                     byte[] value = record.value();
                     latest.put(record.key(), value != null
-                            && io.github.tobyjamesclements.parsley.OrderingStateInspector.isHeldKey(record.key())
+                            && OrderingStateInspector.isHeldKey(record.key())
                             ? HELD_PRESENCE : value);
                     partitionsWithRecords.add(record.partition());
                 });
@@ -861,7 +861,7 @@ final class StreamsRuntime implements AutoCloseable {
         }
         Map<String, UUID> resolvedIds = new HashMap<>();
         ProcessTopology.inputTopics(definition).forEach(topic -> resolvedIds.put(topic, topics.get(topic).topicId()));
-        List<String> identityChanged = io.github.tobyjamesclements.parsley.OrderingStateInspector
+        List<String> identityChanged = OrderingStateInspector
                 .identityChangedTopics(orderingState, resolvedIds);
         if (!identityChanged.isEmpty()) {
             throw new FailClosedException(
@@ -870,15 +870,15 @@ final class StreamsRuntime implements AutoCloseable {
                             + " this process's state was built against; their read positions for those names cannot"
                             + " be trusted. Reset the process's state and group offsets deliberately to proceed.");
         }
-        java.util.Set<io.github.tobyjamesclements.parsley.ChannelId> declared = new java.util.TreeSet<>();
+        java.util.Set<ChannelId> declared = new java.util.TreeSet<>();
         for (String topic : ProcessTopology.inputTopics(definition)) {
             ResolvedTopic info = topics.get(topic);
             for (int partition = 0; partition < info.partitions(); partition++) {
-                declared.add(new io.github.tobyjamesclements.parsley.ChannelId(info.topicId(), partition));
+                declared.add(new ChannelId(info.topicId(), partition));
             }
         }
-        java.util.Set<io.github.tobyjamesclements.parsley.ChannelId> stranded =
-                new java.util.TreeSet<>(io.github.tobyjamesclements.parsley.OrderingStateInspector
+        java.util.Set<ChannelId> stranded =
+                new java.util.TreeSet<>(OrderingStateInspector
                         .heldChannels(orderingState));
         stranded.removeAll(declared);
         if (!stranded.isEmpty()) {
@@ -929,7 +929,8 @@ final class StreamsRuntime implements AutoCloseable {
         }
 
         try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, applicationId)) {
-            committer.join(Set.copyOf(ProcessTopology.inputTopics(definition)), sessionTimeout(clientProps, java.time.Duration.ofSeconds(45)).multipliedBy(2));
+            committer.join(Set.copyOf(ProcessTopology.inputTopics(definition)),
+                    sessionTimeout(clientProps, java.time.Duration.ofSeconds(45)).multipliedBy(2));
             Map<TopicPartition, OffsetAndMetadata> committed = committer.committed(received);
             // Re-checked against the member's fetch: the admin listing above silently
             // omits any partition whose offset has a pending transactional commit
@@ -938,10 +939,10 @@ final class StreamsRuntime implements AutoCloseable {
             // member's committed() is a stable fetch that retries until the transaction
             // resolves, so what it returns is authoritative.
             refuseLostOrderingState(applicationId, orderingView, committed, recheck);
-            Map<io.github.tobyjamesclements.parsley.ChannelId, Long> covered =
-                    io.github.tobyjamesclements.parsley.OrderingStateInspector.coveredPositions(orderingView.latest());
+            Map<ChannelId, Long> covered =
+                    OrderingStateInspector.coveredPositions(orderingView.latest());
             java.util.Set<String> receivedBefore =
-                    io.github.tobyjamesclements.parsley.OrderingStateInspector.nameBindings(orderingView.latest())
+                    OrderingStateInspector.nameBindings(orderingView.latest())
                             .keySet();
             Map<TopicPartition, OffsetAndMetadata> toCommit = new HashMap<>();
             Map<TopicPartition, OffsetSpec> wanted = new HashMap<>();
@@ -949,7 +950,7 @@ final class StreamsRuntime implements AutoCloseable {
                 if (committed.get(tp) != null) {
                     continue;
                 }
-                Long coveredUpTo = covered.get(new io.github.tobyjamesclements.parsley.ChannelId(
+                Long coveredUpTo = covered.get(new ChannelId(
                         topics.get(tp.topic()).topicId(), tp.partition()));
                 java.util.OptionalLong resume = resumePosition(coveredUpTo, receivedBefore.contains(tp.topic()));
                 if (resume.isPresent()) {
@@ -1004,7 +1005,7 @@ final class StreamsRuntime implements AutoCloseable {
         if (coveredUpTo == null) {
             return receivedBefore ? java.util.OptionalLong.of(0) : java.util.OptionalLong.empty();
         }
-        if (io.github.tobyjamesclements.parsley.OrderingStateInspector.isFedToEnd(coveredUpTo)) {
+        if (OrderingStateInspector.isFedToEnd(coveredUpTo)) {
             return java.util.OptionalLong.empty();
         }
         return java.util.OptionalLong.of(Math.max(coveredUpTo, -1) + 1);

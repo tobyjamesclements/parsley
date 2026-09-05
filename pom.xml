@@ -10,9 +10,9 @@
   <packaging>jar</packaging>
 
   <name>Parsley</name>
-  <description>Causal delivery order for Kafka Streams processors. A host-independent protocol core — the
-    causal frontier, hold-back buffer and a pure deliverability decision — with a Kafka Streams adapter,
-    verified by a deterministic simulator checked against a happened-before oracle.</description>
+  <description>Causal delivery order for Kafka Streams processors. A causal frontier, a hold-back buffer
+    and a pure deliverability decision, verified by a deterministic simulator checked against a
+    happened-before oracle.</description>
   <url>https://github.com/tobyjamesclements/parsley</url>
 
   <licenses>

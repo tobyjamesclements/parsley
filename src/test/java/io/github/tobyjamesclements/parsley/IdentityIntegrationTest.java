@@ -179,7 +179,7 @@ class IdentityIntegrationTest {
             assertEquals(List.of(), List.copyOf(delivered), "nothing may be delivered past the held message");
             await("the stop to be recorded in the status surface",
                     () -> parsley.status().get("dh").failureDetail().isPresent(), Duration.ofSeconds(30));
-            io.github.tobyjamesclements.parsley.ProcessStatus status = parsley.status().get("dh");
+            ProcessStatus status = parsley.status().get("dh");
             boolean refusedAtInitialisation = status.refusalReason()
                     .map(reason -> reason == FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES)
                     .orElse(false);
@@ -299,7 +299,7 @@ class IdentityIntegrationTest {
                     "nothing of the new incarnation is delivered under the old identity");
             await("the stop to be recorded in the status surface",
                     () -> parsley.status().get("rr").failureDetail().isPresent(), Duration.ofSeconds(30));
-            io.github.tobyjamesclements.parsley.ProcessStatus status = parsley.status().get("rr");
+            ProcessStatus status = parsley.status().get("rr");
             boolean hostStop = status.refusalReason().isEmpty()
                     && status.failureDetail().orElseThrow().contains("source topics");
             boolean fetchRefused = status.refusalReason()
@@ -339,7 +339,7 @@ class IdentityIntegrationTest {
                 var status = parsley.status().get("sr");
                 return status != null && status.refusalReason().isPresent();
             }, Duration.ofSeconds(60));
-            io.github.tobyjamesclements.parsley.ProcessStatus status = parsley.status().get("sr");
+            ProcessStatus status = parsley.status().get("sr");
             assertEquals(FailClosedException.Reason.METADATA_BUDGET_EXCEEDED,
                     status.refusalReason().orElseThrow());
             assertTrue(status.refused(),

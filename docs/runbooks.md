@@ -26,7 +26,7 @@ the application runs, and once more when the wait ends:
 try (Parsley parsley = Parsley.start(config, shipper)) {
     parsley.awaitStopped();
     parsley.status().forEach((name, status) -> log.error("{}: {} refusal={} detail={}",
-            name, status.state(), status.refusalReason(), status.failureDetail()));
+            name, status.lifecycle(), status.refusalReason(), status.failureDetail()));
 }
 ```
 
@@ -87,14 +87,14 @@ The start is all-or-nothing, so an exception from it means nothing is running.
 
 Read `status()` for the process. There are three shapes.
 
-1. `state` is `STOPPED` and `refusalReason` is present: a deliberate refusal.
+1. `lifecycle` is `STOPPED` and `refusalReason` is present: a deliberate refusal.
    `failureDetail` carries the diagnosis, which names the process, usually the topic,
    partition and position, and where one exists the remedy. Go to the reason's runbook.
-2. `state` is `STOPPED` and `refusalReason` is absent: an application failure or a substrate
+2. `lifecycle` is `STOPPED` and `refusalReason` is absent: an application failure or a substrate
    failure. `failureDetail` is the outermost exception's message; the host's wrapping names
    the task, topic, partition and offset of the record in flight. See
    [restart resolves it](#restart-resolves-it) and [a handler that throws](#a-handler-that-throws).
-3. `state` is `STOPPED` and nothing is recorded: the application closed the handle.
+3. `lifecycle` is `STOPPED` and nothing is recorded: the application closed the handle.
 
 The reasons, and what each asks for:
 
@@ -611,7 +611,7 @@ initialisation that gave the verdict, and report it.
 ### Reading a stopped process's state
 
 No runbook above can ask the stopped process what it holds. What can be read is its
-ordering changelog: `OrderingStateInspector` in the `core` package answers, from the
+ordering changelog: `OrderingStateInspector` answers, from the
 changelog's latest value per key, which channels hold messages, how far each channel was
 covered, and which topic identity each name was bound to. Reading the changelog into that
 map is the operator's work; nothing in the library does it for a stopped process.
@@ -626,8 +626,8 @@ is the ordering changelog and the held record itself.
 
 ### Confirm it is a hold
 
-`state` is `RUNNING`, `refusalReason` is empty, the group's offsets on the received
-partitions advance, and an expected output does not appear. A `state` of `REBALANCING` that
+`lifecycle` is `RUNNING`, `refusalReason` is empty, the group's offsets on the received
+partitions advance, and an expected output does not appear. A `lifecycle` of `REBALANCING` that
 persists is the host, not a hold: a member that cannot join, or a task restoring a large
 changelog, which for a deep hold-back backlog takes time.
 

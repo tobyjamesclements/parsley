@@ -224,7 +224,7 @@ class TargetedScenarioTest {
         p.commitStep();
         assertEquals(0, p.drain(), "an out-of-contract cause is held, not rescued by time or by a report");
         var verdict = p.engine().headVerdict(c2.id()).orElseThrow();
-        assertTrue(verdict instanceof io.github.tobyjamesclements.parsley.Deliverability.Held held
+        assertTrue(verdict instanceof Deliverability.Held held
                         && held.blockers().size() == 1
                         && held.blockers().get(0).channel().equals(c1.id())
                         && held.blockers().get(0).requiredPosition() == 2

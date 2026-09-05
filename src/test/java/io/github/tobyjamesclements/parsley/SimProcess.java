@@ -351,7 +351,7 @@ public final class SimProcess {
                 excused.add(cause);
             }
         }
-        io.github.tobyjamesclements.parsley.Causes meta = decodeMeta(causesHeader);
+        Causes meta = decodeMeta(causesHeader);
 
         Map<ChannelId, Long> lastAssigned = new TreeMap<>();
         meta.byChannel().keySet().forEach(channelId -> {
@@ -368,7 +368,7 @@ public final class SimProcess {
                 excused));
     }
 
-    private static io.github.tobyjamesclements.parsley.Causes decodeMeta(byte[] causesHeader) {
+    private static Causes decodeMeta(byte[] causesHeader) {
         try {
             return CausesCodec.decode(causesHeader);
         } catch (CausesCodec.UndecodableMetadataException e) {

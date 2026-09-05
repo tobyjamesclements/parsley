@@ -43,31 +43,46 @@ into it.
 
 ## Map
 
-- `…/parsley/core`, the host-independent protocol: the causal frontier (`Causes`), its wire
-  codec (`CausesCodec`), the hold-back buffer and the pure deliverability decision
-  (`Deliverability.decide`), driven by `ProcessEngine` over an `OrderingStore`. This package
-  names no host type, and `CorePurityTest` enforces it by scanning the directory: no clock,
-  no network, no Kafka (SPEC Structural 9). Keep it that way.
-- `…/parsley/api`, the public, statically-typed declaration surface: `Parsley`,
-  `ParsleyConfig`, `Process`, `Channel`, `Store`, `Handler`, `Delivery`,
-  `Effects`, `State` and `ProcessStatus`.
-- `…/parsley/kafka`, the Kafka Streams adapter: byte topologies (`ProcessTopology`,
-  `ProcessNode`), topic identity at task initialisation (`TopicIdentitySource`,
-  `AdminTopicIdentitySource`), the store over a Streams state store
-  (`StreamsOrderingStore`), and the EOS lifecycle (`StreamsRuntime`).
+Everything lives in one package, `io.github.tobyjamesclements.parsley`. Kafka Streams is
+the only host the spec allows (SPEC Substrate 1 and 2), so the declaration surface is
+written in Kafka's own terms — topics, Serdes, Streams properties — by design, and there is
+no seam for a second runtime.
 
-`Sabotage` lives in `core` but is package-private on purpose: the public API offers no way
-to construct an engine with a mode enabled (SPEC Structural 9). It exists so the suite can
-prove it catches each violation class.
+Fourteen types are public. Ten are the declaration surface: `Parsley`, `ParsleyConfig`,
+`Process`, `Channel`, `Store`, `Handler`, `Delivery`, `Effects`, `State` and
+`ProcessStatus`. Four more an application or an operator handles rather than declares:
+`Header`, `FailClosedException`, and `OrderingStateInspector` with `ChannelId`, which two
+of its signatures expose.
+
+The rest is package-private, and divides in two:
+
+- **The protocol.** The causal frontier (`Causes`), its wire codec (`CausesCodec`), the
+  hold-back buffer and the pure deliverability decision (`Deliverability.decide`), driven
+  by `ProcessEngine` over an `OrderingStore`. It names no clock, no thread and no Kafka
+  type, which is what lets the simulator drive the real engine with no broker (SPEC
+  Structural 7). Keep it that way.
+- **The runtime.** Byte topologies (`ProcessTopology`, `ProcessNode`), topic identity at
+  task initialisation (`TopicIdentitySource`, `AdminTopicIdentitySource`), the store over a
+  Streams state store (`StreamsOrderingStore`), and the EOS lifecycle (`StreamsRuntime`).
+
+`ProtocolPurityTest` holds the line the package used to. It declares which sources are
+protocol and which are runtime, then checks that no protocol source names a host facility,
+that none names a runtime type, and that every source is classified — so a file added to
+the package is fenced as protocol until someone deliberately says otherwise. When you add a
+main source, put it in one of those two lists.
+
+`Sabotage` is package-private on purpose: the public API offers no way to construct an
+engine with a mode enabled (SPEC Structural 9). It exists so the suite can prove it catches
+each violation class.
 
 ## Verifying anything
 
-- `./mvnw verify` is the full gate: **the whole suite, green, roughly five minutes** (the
-  surefire summary prints the count; it was 716 at D113 and 698 at D115, after the facts
-  round's suites went with the round). It must be green at every commit, and it grows. It
-  shrinks only when a mechanism is deleted with its pins, and the record that deletes it
-  says so.
-- Three layers. Unit tests over the pure core. A **simulation harness** driving real engines
+- `./mvnw verify` is the full gate: **the whole suite, green, roughly eleven minutes** (the
+  surefire summary prints the count; it was 716 at D113, 698 at D115 after the facts round's
+  suites went with the round, and 660 once the packages collapsed into one). It must be
+  green at every commit, and it grows. It shrinks only when a mechanism is deleted with its
+  pins, and the record that deletes it says so.
+- Three layers. Unit tests over the pure protocol. A **simulation harness** driving real engines
   under a simulated host that honours the spec's Host obligations, over randomised topologies,
   interleavings, gaps from aborted transactions, crashes, restarts and offset rewinds,
   checked against a happened-before `Oracle` maintained outside the engine. And integration tests
@@ -116,7 +131,8 @@ an operator does with that diagnosis, one runbook per refusal reason. A reason a
 
 ## Conventions if you modify the code
 
-- Keep `core` pure. `CorePurityTest` will tell you if you did not.
+- Keep the protocol pure, and classify every main source you add. `ProtocolPurityTest` will
+  tell you if you did not.
 - No mock frameworks; hand-rolled test doubles behind the narrow seams (`OrderingStore`,
   `TopicIdentitySource`).
 - Every test that builds a Kafka Streams instance takes its `state.dir` from a JUnit

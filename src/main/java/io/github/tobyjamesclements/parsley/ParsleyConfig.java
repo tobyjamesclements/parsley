@@ -125,7 +125,7 @@ public final class ParsleyConfig {
         private final String bootstrapServers;
         private final String applicationIdPrefix;
         private String stateDir;
-        private int metadataBudgetBytes = io.github.tobyjamesclements.parsley.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES;
+        private int metadataBudgetBytes = ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES;
         private final Map<String, Object> streamsProperties = new LinkedHashMap<>();
 
         private Builder(String bootstrapServers, String applicationIdPrefix) {
