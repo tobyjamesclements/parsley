@@ -1234,8 +1234,9 @@ the specification's Host obligations runs real engines.</p>
 so its clock is the transitively closed delivered past: per delivered message, merge the
 own coordinate and every carried pair — the same fold the engine's <code>markDelivered</code>
 performs. In exchange the host owes what Kafka Streams was providing: <code>read_committed</code>
-consumption, fencing of zombie writers (a partition epoch plus monotone guards), and
-position facts for pruning. Do not substitute <code>frontierSnapshot()</code> from behind a seam: the
+consumption, fencing of zombie writers (a partition epoch plus monotone guards), the start
+position on each channel at every execution start (Host obligation 2), and channel identity
+for pruning dead channels. Do not substitute <code>frontierSnapshot()</code> from behind a seam: the
 frontier advances on receipt, before delivery, so it can name coordinates whose effects
 are still held back — telling a client its write is visible when it is not.</p>
 <h2 id="clocks-are-per-partition-collections-gate-on-the-meet">Clocks are per partition; collections gate on the meet</h2>
@@ -1277,14 +1278,20 @@ encoded width, reject channels the tier does not recognise, and bound positions 
 known-live upper bound: a validated token becomes causes on a produced record, and every
 downstream receiver of those channels holds messages until they settle
 (<a href="../failing-closed/">failing closed</a>), so an over-broad token affects liveness for everyone
-behind the topic.</p>
+behind the topic. A pair whose position is not the offset of a committed record is worse
+than over-broad: it is an out-of-contract cause (<a href="../wire-format/">wire format</a>, constraint 8)
+that no elapsed time settles — every receiver holds the message, visibly in its status, until
+a later record on that channel settles the position, and nothing asks the broker in the
+meantime. The log-end offset is the natural naive stamp and is exactly this. The gateway
+therefore merges only the coordinate the broker's acknowledgement confirmed, as the table
+above says — never a position it computed or read from a log end.</p>
 <p>Client-facing tokens should be encrypted, not merely signed — offsets leak throughput and
 topic ids leak topology — but the encrypted form stops at the gateway: the engine decodes
 only the frozen grammar, so the gateway decrypts, bounds, and stamps a plain header.</p>
-<p>Give tokens a TTL well short of retention. A pruned coordinate can otherwise never be
-covered again, and on mirrored estates no log-start evidence ever arrives for foreign
-topics, so expiry is the mitigation that works everywhere. The token also only ever grows;
-expiry is what stops a long session converging on the size of the topology.</p>
+<p>Give tokens a TTL. The token only ever grows — <code>merge</code> is a pointwise maximum and nothing
+removes an entry, so a channel the recorder has since pruned as dead still sits in the
+token, and fails coverage against a past that no longer records it — and a long session
+converges on the size of the topology. Expiry is the only bound.</p>
 
 
 

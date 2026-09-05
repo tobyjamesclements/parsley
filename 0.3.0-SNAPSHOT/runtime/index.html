@@ -770,10 +770,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#facts-ingestion" class="md-nav__link">
+  <a href="#identity-at-task-initialisation" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Facts ingestion
+        Identity at task initialisation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#the-status-punctuation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        The status punctuation
       
     </span>
   </a>
@@ -1152,12 +1163,19 @@ initialisation on the host's threads surfaces through <code>Parsley.status()</co
 <ol>
 <li>Resolves topic identities through the admin client, and fails where any declared topic,
    received or sent, is missing.</li>
-<li>Reads the group's committed positions. For received partitions with none, it pre-commits
-   the declared initial position, taking earliest as the log start and latest as the end.
-   The commit goes through a generation-fenced group membership rather than an admin
-   alteration, so a stale paused bootstrap cannot overwrite a newer lifetime's positions.
-   This gives <code>auto.offset.reset=none</code> a defined starting point and establishes the
-   first-receipt baseline. On later starts, existing commits win.</li>
+<li>Reads the group's committed positions and establishes, for each received partition, the
+   position Kafka Streams will feed first, which every task takes as its start position at
+   initialisation. Where prior state exists and a partition's committed position is missing
+   — expired during a long stop — it pre-commits the ordering state's covered position plus
+   one, the next position the previous execution would have read. Whether retention still
+   holds it is decided at the first fetch: <code>auto.offset.reset=none</code> refuses a position below
+   the log start, and the process stops with <code>POSITIONS_DISCARDED_UNREAD</code> (D115). Without
+   prior state it pre-commits the declared initial position through one <code>listOffsets</code>, taking
+   earliest as the log start and latest as the end. The commit goes through a
+   generation-fenced group membership rather than an admin alteration, so a stale paused
+   bootstrap cannot overwrite a newer lifetime's positions. This gives <code>auto.offset.reset=none</code>
+   a defined starting point and establishes the first-receipt baseline. On later starts,
+   existing commits win.</li>
 <li>Builds the topology and starts Kafka Streams with <code>processing.guarantee=exactly_once_v2</code>,
    from which <code>isolation.level=read_committed</code> follows. Before starting, it waits for any
    other instance's bootstrap member to leave the group, so two instances cold-starting
@@ -1169,13 +1187,15 @@ count, so a width-changing declaration refuses with its remedy rather than faili
 host's internal-topic validation.</p>
 <p>A channel that rejoins the received set resumes rather than re-entering delivered past. This
 is backed by the <code>fedUpTo</code> record even where group positions have expired. A missing position
-alongside prior state re-establishes earliest rather than the declared latest.</p>
+alongside prior state re-establishes coverage plus one rather than the declared latest, and
+earliest where the ordering state covers nothing on the channel.</p>
 <h2 id="observing-a-process">Observing a process</h2>
 <p><code>Parsley.status()</code> reports each process's lifecycle state and, when it has stopped to
 preserve the guarantee, the refusal and its diagnosis. For a running process it also reports
 each task's delivery state: what is held, which cause each head is waiting for, and the size
 of the causal frontier every emission carries (<a href="../failing-closed/#diagnosis">Failing closed</a>).
-The snapshot is taken on the task's thread once per facts interval, so the call itself never
+The snapshot is taken on the task's thread once per status interval
+(<code>ParsleyConfig.statusInterval</code>) and asks nothing of a broker, so the call itself never
 touches a stream thread or a broker.</p>
 <h2 id="configuration-lockdown">Configuration lockdown</h2>
 <p>Configuration carrying the guarantee is set by the runtime and cannot be overridden.
@@ -1183,36 +1203,68 @@ touches a stream thread or a broker.</p>
 <code>processing.guarantee</code>, <code>isolation.level</code>, <code>auto.offset.reset</code>, <code>group.id</code> and
 <code>transactional.id</code>. Neither the <code>Topology</code> nor raw configuration is exposed, so no documented
 operation runs the topology without exactly-once semantics.</p>
-<h2 id="facts-ingestion">Facts ingestion</h2>
-<p>Inside the processor, a punctuator periodically ingests position facts: committed positions,
-log-start positions, and topic existence and identity. A name resolving to a different
-identity is affirmative evidence of recreation. An unknown identity is corroborated against
-its last-known name and debounced in time. An authorization denial is treated as denial
-rather than death.</p>
-<p>Gathering runs on one background thread per runtime. The punctuator snapshots the inputs,
-applies each completed round exactly once on the stream thread, and never blocks on the
-cluster. Every fact is a per-position lower bound, so a round applied one interval late
-releases and prunes exactly what a fresh one would.</p>
-<p>Where a task holds messages, the round also probes the channels their heads wait on, under
-<code>read_committed</code>, for a trailing run of positions that will never yield a message — an
-aborted transaction at the end of a channel, which the host's committed position never
-covers after a restart. The probe assigns every such channel at once and runs one bounded
-poll loop, so it costs about a second per round however many channels are hinted; a channel
-that itself holds messages is never probed, since its settled position is its head. The seed
-round at task initialisation does not probe, so initialisation never waits on the broker for
-it.</p>
-<p>The dead-topic and recreation verdicts mature over an unbroken window of affirmative
-answers; the window's continuity is judged on the time no round was asking, from one
-round's end to the next round's first question, so a round's own queries and probes never
-restart it.</p>
-<p>This punctuator is internal plumbing for ingesting the host's read-position reports, which is
-the only transport Kafka Streams offers for them. It delivers nothing that was not received
-from a channel, and the decision it triggers remains the pure function described in
-<a href="../delivery/">Delivery</a>. Time never appears among that function's inputs. The public API
-offers no timers and no scheduled callbacks.</p>
+<h2 id="identity-at-task-initialisation">Identity at task initialisation</h2>
+<p>Nothing is asked of the broker between deliveries; the periodic round that once gathered
+committed positions, log starts and topic identity is gone (D115). A cause names the offset
+of a committed record, so receiving that record is what satisfies it, and the positions
+between records that yield no message are settled by receipt of the next record on the
+channel. The one question a task puts to the substrate is asked at its initialisation —
+<code>ParsleyProcessor.init</code>, which Kafka Streams runs on the stream thread inside the rebalance,
+at every creation and re-creation of the task.</p>
+<p>There, <code>ParsleyProcessor.init</code> asks a <code>TopicIdentitySource</code> — in production
+<code>AdminTopicIdentitySource</code>, backed by the admin client — about every topic id the task's state
+names: the received topics at the identities resolved at start, and every topic in the
+restored frontier. Each id is described by id. One that resolves is alive, and its name is
+learned for later initialisations of the process's tasks. One the broker does not know is not
+yet dead — a describe denial masks a live topic as unknown by id, and a broker's metadata view
+can lag — so it is judged by its last-known name over three answers half a second apart. The
+name gone in all three confirms deletion; the name resolving to another id in all three
+confirms recreation; a denial, an unavailable answer, or the name resolving to the very id
+asked about keeps it alive. A denial is denial, never death. An id whose name was never
+learned is never confirmed dead: it lingers in the frontier, costing expression size and
+never safety. A describe failure that is not the substrate's unknown-topic answer — a timeout,
+an outage, whether by id or by name mid-corroboration — is not evidence about any id: the
+initialisation proceeds with a warning, every cause and every hold stays, and the question
+stays pending — the status punctuation asks it again until it is answered, backing off from
+one status interval to a minute since each attempt can hold the stream thread for the
+describes' shared ten-second deadline, and the answer is applied as the initialisation's
+would have been. The check is event-driven and eventual, never periodic.</p>
+<p>The engine takes the verdicts through <code>ProcessEngine.onIdentityReport</code>. A received channel
+whose topic was recreated under its name refuses <code>CHANNEL_IDENTITY_CHANGED</code>: records fed
+under the old identity can no longer be trusted. A received channel whose topic was deleted
+while messages from it remain held refuses <code>CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES</code>, since
+their place in causal order can no longer be preserved (D46); with nothing held it is settled
+to the end of the channel (D21), and a hold waiting on it goes on the next punctuation or
+record — nothing is delivered from initialisation itself (D34). Dead and recreated channels
+are pruned from the frontier and the delivered past; that is the only pruning, and retention
+never prunes. The runtime keeps no verdict windows, no eviction and no rescission.</p>
+<p>A received topic deleted and recreated under its name while a process that receives it runs
+is SPEC Assumption 17's territory: the recreation is detected at the next task
+initialisation, and what was delivered in between is outside the guarantee. As observed on
+Kafka Streams 4.3, deleting a received topic does not stop the process at once: the next
+transactional commit times out, the host re-creates the task, and its initialisation runs the
+identity check, which refuses. A rebalance that finds a source topic missing instead stops the
+stream thread with the host's <code>MissingSourceTopicException</code>, which the runtime names
+<code>SOURCE_TOPIC_MISSING</code> — a transient, with no <code>refusalReason</code> — and a recreation the first
+fetch meets refuses under <code>auto.offset.reset=none</code>. A recreation that lands entirely between
+two polls, the new log already past the old position, is met by neither: it is detected at
+the next task initialisation and not before, which is what the assumption signs away. Its log line says to restart;
+the start then refuses <code>CHANNEL_IDENTITY_CHANGED</code> for a recreated topic, refuses a
+still-missing one at resolution, and resumes where a broker's metadata merely lagged.</p>
+<h2 id="the-status-punctuation">The status punctuation</h2>
+<p>Each task schedules one wall-clock punctuation, every <code>ParsleyConfig.statusInterval</code> — one
+second by default; the builder refuses a null, non-positive or sub-millisecond value. It
+drains what receipt, or the initialisation's identity report, already released; flushes holds
+to the ordering store, so a message held at the moment of a crash is still held after the
+restart (D102); observes the frontier for the once-only warning at 80% of the metadata budget
+(D53); and publishes the task's <code>TaskStatus</code> for <code>status()</code> (D103). It touches no broker and
+ingests nothing.</p>
+<p>The punctuation delivers nothing that was not received from a channel, and the decision it
+triggers remains the pure function described in <a href="../delivery/">Delivery</a>. Time never appears
+among that function's inputs. The public API offers no timers and no scheduled callbacks.</p>
 <h2 id="zombie-safety">Zombie safety</h2>
-<p>Facts are monotone. Any delivery a superseded execution performs on stale state sits in a
-transaction the host fences and aborts, so it has not occurred.</p>
+<p>Any delivery a superseded execution performs on stale state sits in a transaction the host
+fences and aborts, so it has not occurred.</p>
 <h2 id="the-seam">The seam</h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">Effects</span><span class="w"> </span><span class="nf">handle</span><span class="p">(</span><span class="n">Delivery</span><span class="o">&lt;</span><span class="n">K</span><span class="p">,</span><span class="w"> </span><span class="n">V</span><span class="o">&gt;</span><span class="w"> </span><span class="n">delivery</span><span class="p">,</span><span class="w"> </span><span class="n">StateReader</span><span class="w"> </span><span class="n">state</span><span class="p">)</span>
 </code></pre></div>

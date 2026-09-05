@@ -231,21 +231,29 @@ append order.
 
 ## Pruning and growth
 
-A pair `(c, p)` is dropped when *p* falls below *c*'s log-start offset, or when *c*'s topic
-identity no longer resolves. Log-start facts may be stale, and a stale fact is a lower bound,
-so staleness delays pruning without over-pruning.
+A pair `(c, p)` is dropped only when *c*'s topic identity no longer resolves: the topic was
+deleted, or deleted and recreated under its name so that the id names a dead incarnation.
+That is checked once per task initialisation, when the process asks the broker about every
+topic its state names. A denied or unavailable answer is never death, and the pair stays
+until an initialisation finds the topic gone. Nothing is dropped for a position's age: a
+cause whose record retention has discarded still matters to any process holding a message
+that names it (D115).
 
-Pruning is what makes retention a safety matter for a holder. A process that delivered a
-message prunes it once retention discards it, and its later sends then express nothing about
-it; a process still holding that message can no longer tell which later arrivals depend on
-it. Retention must therefore cover hold-back time, not only consumer lag: where it does not,
-the holder stops with `POSITIONS_DISCARDED_UNREAD` rather than deliver past the hold
-([Failing closed](failing-closed.md)).
+What retention threatens is a process's read position, not what it holds. Where retention
+passes the position a stopped or lagging process reads next, the fetch refuses under
+`auto.offset.reset=none` and the process stops with `POSITIONS_DISCARDED_UNREAD` (SPEC
+Safety 8; [Failing closed](failing-closed.md)). A held message whose copy retention removed
+from its source channel is unaffected: the message is in the ordering changelog, its senders
+keep expressing it, and it delivers from there in order once its causes settle. Retention
+need cover the longest stop and lag, not hold-back time.
 
 Frontier size follows the causal graph rather than a process's own declaration. Receipt
 merges every pair a message carried, including channels the receiving process never receives,
 which is required for downstream re-expression. Steady-state size approaches the sum of
-partition counts over the transitive upstream closure.
+partition counts over the transitive upstream closure. Entries for topics deleted during a
+run survive until an initialisation confirms the topic gone; an id whose name the process
+never learned is never confirmed dead and lingers, costing expression size and never safety.
+Growth is therefore bounded by topology churn, not by time.
 
 Encoded size depends on the frontier's shape: a topic's first partition costs 26 bytes and
 each further partition of the same topic 9 (a byte more per field once partition ids or
@@ -254,8 +262,8 @@ roughly 40,000 entries when every topic contributes one partition and 116,000 wh
 topics contribute many. Reaching it inside the producer would stop the process with no
 diagnosis from Parsley, so a metadata budget is applied first:
 `ParsleyConfig.metadataBudgetBytes`, 256 KiB by default. Exceeding it stops the process with
-an attributable reason. Frontier size and encoded width are logged each facts round, and
-again at 80% of budget.
+an attributable reason. Frontier size and encoded width are logged at each status
+punctuation, and again at 80% of budget.
 
 ---
 
@@ -272,17 +280,25 @@ settled positions, the delivery decision, order and duplicates
 Per received channel *c* the engine tracks two things.
 
 `fedUpTo(c)` is the highest position such that every position at or below it has either been
-fed to this process as a message or will never arrive as one. Two inputs advance it.
+fed to this process as a message or will never arrive as one. Receipt advances it while an
+execution runs; at initialisation the start position raises it once, and a received channel
+whose topic the identity check finds deleted is settled to its end (D21).
 
 Receipt of a record at offset *o* on *c* sets `fedUpTo(c) := max(fedUpTo(c), o)`. Within an
 execution the host feeds each partition in offset order, and Kafka's per-partition order
 means every earlier offset was already fed or will never yield a record. Aborted
 transactions, control records and compaction account for the positions that yield nothing.
+A cause names the offset of a committed record on its channel (wire-format constraint 8), so
+receiving that record is what satisfies it; the markers and aborted batches between records
+are settled by the receipt of the next record on the channel.
 
-Read-position facts contribute the group's committed offset *n*, giving
-`fedUpTo(c) := max(fedUpTo(c), n - 1)`. A committed position asserts that everything below it
-was fed or never will be. This is what advances past a trailing run of positions that never
-arrive, and it rests on the substrate's own report rather than on elapsed time.
+At each execution start the host reports the process's start position *s* on *c* — the
+position it will feed first, as the bootstrap established it at `Parsley.start` — giving
+`fedUpTo(c) := max(fedUpTo(c), s - 1)`. Every position below the start position was fed to an
+earlier execution and committed, or lies below the position the process was started at; a
+start position of 0 covers nothing. Beyond receipt, the start position and a channel's
+deletion, nothing advances `fedUpTo(c)` — in particular not elapsed time, and nothing asked
+of the broker between deliveries (D115).
 
 `held(c)` is the hold-back buffer: received but undelivered messages of *c*, in position
 order, persisted.
@@ -325,8 +341,16 @@ Determinism means replay after a restart reproduces the same order from the same
 ## Baselines and duplicates
 
 Before anything is known of *c*, `settled(c)` is undefined, and any dependency on *c* holds
-the message while *c* is received. The initial committed position established at first start
-initialises `fedUpTo(c)`, so positions below the first receipt count as already satisfied.
+the message while *c* is received. A start position above 0 is what first defines it; at 0
+the first receipt on *c* does. On a first start the start position is the declared initial
+position, resolved against the channel — its earliest retained position or its end. On later
+starts it is the group's committed position. Where prior state exists but the committed
+position has expired, it is the covered position the ordering state holds for *c* — its
+`fedUpTo(c)` — plus one, the next position the previous execution would have read; where the
+ordering state covers nothing on *c*, a channel that has joined the received set, it is the
+channel's earliest retained position (D115). `fedUpTo(c)` is also restored from the ordering
+state at each start, and the start position only ever raises it, so positions below the
+first receipt count as already satisfied.
 
 A record at an offset at or below `fedUpTo(c)` that is not in the buffer was already
 delivered in a committed step. The host re-feeds exactly those records whose read positions
@@ -454,7 +478,9 @@ are each undecodable. The last of these matters even though it looks like more p
 32-bit reader that shifts the surplus away would decode `85 80 80 80 10` to the same value
 as `05`, two spellings for one value that the padding rule alone cannot see.
 
-Every constraint below is mandatory. Violating any one makes the value undecodable.
+Every constraint below is mandatory. Constraints 1–7 are decidable from the bytes, and
+violating any one of them makes the value undecodable. Constraint 8 is not: it binds the
+writer, and its breach shows as a hold in the receiver's status, not as a refusal.
 
 1. The version byte is `0x01`. Any other value is undecodable, and readers must not guess
    forward compatibility.
@@ -477,6 +503,19 @@ Every constraint below is mandatory. Violating any one makes the value undecodab
    records a deleted channel with it. (A reader-side tightening in the manner of
    constraint 5: no conforming writer has ever produced such a pair; D105 records the
    reasoning.)
+8. `position` is the offset at which a committed record was stored on that channel: a
+   record the substrate served to a `read_committed` reader, whether or not retention
+   still holds it — never a control record, a record of an aborted transaction, or an
+   offset at or beyond the log's end at the time of stamping. A Parsley process satisfies
+   this by construction, since its frontier holds only positions it received records at
+   and positions it learned from received metadata; a `CausalPast` token satisfies it when
+   the write tier merges only coordinates the broker's acknowledgement confirmed, as
+   [Session consistency](session.md) requires. A writer naming any other position — the
+   log-end offset is the natural naive stamp — is out of contract: no reader is obliged
+   to settle it, and a receiver holds the message, visibly in its status, until a later
+   record on that channel settles the position (D115). Unlike constraints 1–7 this one is
+   not decidable from the bytes, so no reader refuses it; it is the contract a writer
+   signs.
 
 ## Meaning
 
@@ -486,9 +525,10 @@ so a topic deleted and recreated under the same name is a different channel. The
 stands for every cause of this message on that channel whose position is at or below
 `position`.
 
-A message's metadata expresses every cause of the message whose position is at or above its
-channel's earliest retained position at send time. This includes causes known to the sender
-only from the metadata of messages it had received and not yet delivered.
+A message's metadata expresses every cause of the message, other than causes on channels the
+sender has learned no longer exist. This includes causes known to the sender only from the
+metadata of messages it had received and not yet delivered, and causes whose records
+retention has since discarded: a cause is dropped only with its channel, never for its age.
 
 Entries never name the sending process, and never name a position that had not been assigned
 when the message was sent. A message sent to a channel its sender also receives from never
@@ -496,10 +536,17 @@ carries an entry for its own channel at or above its own position.
 
 A receiver may deliver a message only when, for every entry naming a channel in the receiver's
 received-channel set, every position on that channel up to and including the entry's position
-has either been delivered at that receiver or will never yield a message it receives. Entries
-naming channels outside that set impose no constraint there, which includes dead incarnations
-of recreated topics. The receiver still re-expresses them on its own sends while they can
-still matter.
+has either been delivered at that receiver or will never yield a message it receives. Receipt
+of a record at an offset establishes that for every offset below it, since a channel is fed in
+order; the channel's deletion establishes it for every offset; the position the receiver
+started reading the channel from establishes it for every offset below that; and the
+receiver's own delivered causal past establishes it, for a channel joining its received set,
+for every offset at or below what it had already delivered behind. Nothing else does, and an
+entry naming an offset no committed record occupies (constraint 8) holds the message until a
+later record on the channel settles it. Entries naming channels outside the
+received-channel set impose no constraint there, which includes dead incarnations of
+recreated topics. The receiver still re-expresses them on its own sends while they can still
+matter.
 
 ## Stability
 
@@ -518,8 +565,9 @@ what stops a process, the blast radius, and every refusal reason
 
 Where the guarantee cannot be upheld, a process stops delivering. It stays stopped, and
 re-fails on restart, until an operator intervenes — with one recorded exception:
-`COVERED_POSITION_FED` raised because this execution was superseded does not recur, and a
-restart recovers it (the reason's row below, and its exception message, say so).
+`COVERED_POSITION_FED` is an invariant guard with no known trigger, and a restart resumes
+from the committed record without it recurring (the reason's row below, and its exception
+message, say so).
 
 A fail-closed event throws `ParsleyFailClosedException` out of the processor, which fails the
 task's step. The transaction aborts, and nothing is delivered past the failure.
@@ -542,13 +590,13 @@ This table says when each reason is raised. What an operator does about it is in
 | Reason | Condition |
 |---|---|
 | `UNDECODABLE_METADATA` | Metadata present and not decodable |
-| `POSITIONS_DISCARDED_UNREAD` | Retention discarded positions this process has not delivered: a read position below the log-start offset, whether detected by the engine's log-start check mid-run or at start when a lost read position would be re-established beyond the ordering state's covered position; or a held message — received, not yet delivered — whose position the log start has crossed, since its senders may since have pruned it from the causes they express and its place in causal order can no longer be preserved (the retention counterpart of `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES`). Retention must cover hold-back time |
+| `POSITIONS_DISCARDED_UNREAD` | Retention discarded positions this process has not read: the consumer's fetch under `auto.offset.reset=none` refused a committed read position below the log-start offset, and the runtime classified the stop. That fetch is the one site — while running, when retention passes a lagging read position; on the first fetch after a start that committed, over an expired offset, the ordering state's covered position plus one — 0 for a partition the state names but never covered, and the substrate's earliest only for a topic the state never named; or after a stop long enough for retention to pass the committed position. There is no engine check and no held-message shape: a held message retention discards is in the ordering changelog and delivers from there once its causes settle. Retention must cover the longest stop and lag, not hold-back time |
 | `OUT_OF_ORDER_FEED` | The host fed a channel out of position order within one execution, or fed a channel recorded as no longer existing |
-| `COVERED_POSITION_FED` | A message arrived at a position a read-position report had already covered as fed-or-never-arriving. Either the report was false, or this execution was superseded and a facts round observed its successor's committed progress — a superseded execution's step cannot commit, a restart recovers, and the refusal then does not recur |
+| `COVERED_POSITION_FED` | The host fed a channel at a position this execution's own coverage already records as fed or never arriving, above the session floor — the host's feed and the engine's record contradict each other. An invariant guard with no known trigger: above the session floor, coverage is raised only by this execution's own receipts, which the in-execution order check guards, and by the initialisation's identity report settling a deleted channel to its end, which the dead-channel check guards; a feed inside either is refused first as `OUT_OF_ORDER_FEED`. A restart resumes from the committed record, and the refusal then does not recur |
 | `ORDERING_STATE_LOST` | Committed read positions the bootstrap did not write (a previous Kafka Streams execution's stamp, or bare external commits) exist while the ordering-changelog partition behind them holds no records — the topic absent, or its records purged, in whole or for that one partition. If a prior execution ran, the state of its most recent committed step has been lost and resuming would silently under-express every cause delivered before the loss |
 | `CHANNEL_REMOVED_WITH_HELD_MESSAGES` | A declaration removed a channel that still holds messages |
-| `CHANNEL_IDENTITY_CHANGED` | A topic resolves to an identity other than the one recorded |
-| `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES` | A received topic was deleted while its messages remain held |
+| `CHANNEL_IDENTITY_CHANGED` | A topic resolves to an identity other than the one recorded: at start, where a received topic's name now resolves to an identity other than the one the process's state was built against; and at each task initialisation, where the restored state's binding for a name no longer matches, or where the identity check finds a received channel's topic deleted and recreated under its name. A recreation while a task runs is detected at the task's next initialisation — a received topic is assumed not to be deleted and recreated under its name while a process that receives it runs (SPEC Assumption 17) |
+| `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES` | A received topic was deleted while its messages remain held: the identity check at task initialisation finds the topic gone and the task still holds messages from it, whose place in causal order can no longer be preserved. With nothing held, the channel settles to its end instead |
 | `TASK_WIDTH_CHANGED` | The task count changed, so ordering state no longer matches its partitioning |
 | `UNKNOWN_ORDERING_STATE_FORMAT` | Stored state cannot be trusted: a format version this build cannot read, state present without its version entry (the changelog head has been lost), a corrupt entry — malformed key, wrong-length value, or a held blob whose lengths do not match its bytes — a restored frontier naming the reserved zero topic ID, or held messages restored out of position order |
 | `EMISSION_TO_UNDECLARED_CHANNEL` | A handler emitted on a topic outside its process's declared send set. Membership is by topic name: an emission on a declared topic is sent (serialized with the declared channel's serdes) whatever `Channel` instance carried it |
@@ -566,14 +614,16 @@ message again — but `status()` reports it with no `refusalReason`, only the fa
 message, since nothing about the guarantee was decided. The remedy is in the application:
 catch and record, or fix the code and restart.
 
-Truncation is caught three times. The main consumer runs with `auto.offset.reset=none`, so an
-out-of-range position kills the task rather than silently jumping; the engine independently
-fails when a log-start fact exceeds the channel's settled position plus one — `fedUpTo + 1`
-while nothing is held, the head of the hold-back buffer while something is, so a discarded
-held message is caught as well as a discarded unread one; and a start that would re-establish
-an expired read position beyond the ordering state's covered position refuses before committing
-it — the one shape the other two cannot see, because the re-established position is in range
-and its own report would advance the coverage the engine's check compares against.
+Truncation is caught at the fetch. The main consumer runs with `auto.offset.reset=none`, so a
+read position below the log start refuses the fetch rather than silently jumping, and the
+runtime names the stop `POSITIONS_DISCARDED_UNREAD`. A start with prior state and an expired
+committed offset compares nothing against the log start itself: it commits the ordering
+state's covered position plus one — where the previous execution would have read next — for
+every partition the state covers, 0 for one it names but never covered, and the substrate's
+earliest position only for a topic it never named, and the first fetch decides whether
+retention still holds it. Nothing else looks. The engine
+keeps no check against a log start, and a held message retention discards is not a stop: it
+is in the ordering changelog and delivers from there once its causes settle.
 
 ## Diagnosis
 
@@ -582,24 +632,31 @@ process stopped to preserve the guarantee, and distinguishes that from any other
 includes the two stops the substrate detects that recur identically on restart: the main
 consumer meeting a discarded read position under `auto.offset.reset=none` is reported as
 `POSITIONS_DISCARDED_UNREAD`, and a held message's persisted form exceeding the changelog's
-record limit as `SUBSTRATE_MISCONFIGURED`. A stop a restart resolves — a partition added
-while the process ran — carries no reason.
+record limit as `SUBSTRATE_MISCONFIGURED`. A stop a restart resolves carries no reason: a
+partition added while the process ran, or a received topic missing at a rebalance — the
+runtime classifies it `SOURCE_TOPIC_MISSING`, and the restart then refuses
+`CHANNEL_IDENTITY_CHANGED` for a topic recreated under its name, refuses a still-missing one
+when it resolves topics, or resumes where a broker's metadata merely lagged.
 
 A held message is not a failure. It means a cause has not arrived, and the diagnosis is which
 cause. `ProcessStatus.tasks()` carries that diagnosis for every task the instance runs: per
 channel with held messages, how many are held, the position of the head, and each cause the
 head is waiting for, named by topic and partition with the position required and the
 position the channel has settled to. It also carries the frontier's size in channels and
-bytes, against the metadata budget, and how long ago broker position facts were last
-applied. A task refreshes its entry once per facts interval, on its own thread, and retires
-it when it closes, so what the status shows is at most one interval old and never a task
-this instance no longer runs.
+bytes, against the metadata budget. A task refreshes its entry once per status interval, on
+its own thread, and retires it when it closes, so what the status shows is at most one
+interval old and never a task this instance no longer runs.
 
-A head with no blockers listed is deliverable and goes on the next drain. A head whose
-blocker names a position the channel has settled below is waiting on that channel's feed or
-its read-position report; a blocker whose settled position is empty names a channel this
-task has heard nothing of yet. Turning a blocker's shape into an action is
-[a runbook](runbooks.md#a-message-is-held-and-not-moving).
+A head with no blockers listed is deliverable and goes on the next drain — the next record
+fed, or the next status punctuation. A head whose blocker names a position the channel has
+settled below is waiting on that channel's feed. With the required position at or below the
+channel's end, the task has not reached the cause yet: lag, or a chain of holds. With it
+beyond the end, the cause is not produced yet — inside an open transaction — or the stamp is
+stale or forged. A required position no committed record occupies — a marker, an aborted
+batch's offset, the log-end offset at stamping time — is an out-of-contract cause, held until
+a later record on that channel arrives. A blocker whose settled position is empty names a
+channel the task starts at position 0 and has received nothing on yet. Turning a blocker's
+shape into an action is [a runbook](runbooks.md#a-message-is-held-and-not-moving).
 
 ---
 
@@ -607,7 +664,7 @@ task has heard nothing of yet. Turning a blocker's shape into an action is
 
 Source: https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/runtime.md
 
-start sequence, configuration lockdown, facts ingestion, the handler seam
+start sequence, configuration lockdown, identity at task initialisation, the status punctuation, the handler seam
 
 # Runtime
 
@@ -620,12 +677,19 @@ initialisation on the host's threads surfaces through `Parsley.status()`.
 
 1. Resolves topic identities through the admin client, and fails where any declared topic,
    received or sent, is missing.
-2. Reads the group's committed positions. For received partitions with none, it pre-commits
-   the declared initial position, taking earliest as the log start and latest as the end.
-   The commit goes through a generation-fenced group membership rather than an admin
-   alteration, so a stale paused bootstrap cannot overwrite a newer lifetime's positions.
-   This gives `auto.offset.reset=none` a defined starting point and establishes the
-   first-receipt baseline. On later starts, existing commits win.
+2. Reads the group's committed positions and establishes, for each received partition, the
+   position Kafka Streams will feed first, which every task takes as its start position at
+   initialisation. Where prior state exists and a partition's committed position is missing
+   — expired during a long stop — it pre-commits the ordering state's covered position plus
+   one, the next position the previous execution would have read. Whether retention still
+   holds it is decided at the first fetch: `auto.offset.reset=none` refuses a position below
+   the log start, and the process stops with `POSITIONS_DISCARDED_UNREAD` (D115). Without
+   prior state it pre-commits the declared initial position through one `listOffsets`, taking
+   earliest as the log start and latest as the end. The commit goes through a
+   generation-fenced group membership rather than an admin alteration, so a stale paused
+   bootstrap cannot overwrite a newer lifetime's positions. This gives `auto.offset.reset=none`
+   a defined starting point and establishes the first-receipt baseline. On later starts,
+   existing commits win.
 3. Builds the topology and starts Kafka Streams with `processing.guarantee=exactly_once_v2`,
    from which `isolation.level=read_committed` follows. Before starting, it waits for any
    other instance's bootstrap member to leave the group, so two instances cold-starting
@@ -638,7 +702,8 @@ host's internal-topic validation.
 
 A channel that rejoins the received set resumes rather than re-entering delivered past. This
 is backed by the `fedUpTo` record even where group positions have expired. A missing position
-alongside prior state re-establishes earliest rather than the declared latest.
+alongside prior state re-establishes coverage plus one rather than the declared latest, and
+earliest where the ordering state covers nothing on the channel.
 
 ## Observing a process
 
@@ -646,7 +711,8 @@ alongside prior state re-establishes earliest rather than the declared latest.
 preserve the guarantee, the refusal and its diagnosis. For a running process it also reports
 each task's delivery state: what is held, which cause each head is waiting for, and the size
 of the causal frontier every emission carries ([Failing closed](failing-closed.md#diagnosis)).
-The snapshot is taken on the task's thread once per facts interval, so the call itself never
+The snapshot is taken on the task's thread once per status interval
+(`ParsleyConfig.statusInterval`) and asks nothing of a broker, so the call itself never
 touches a stream thread or a broker.
 
 ## Configuration lockdown
@@ -657,43 +723,77 @@ Configuration carrying the guarantee is set by the runtime and cannot be overrid
 `transactional.id`. Neither the `Topology` nor raw configuration is exposed, so no documented
 operation runs the topology without exactly-once semantics.
 
-## Facts ingestion
+## Identity at task initialisation
 
-Inside the processor, a punctuator periodically ingests position facts: committed positions,
-log-start positions, and topic existence and identity. A name resolving to a different
-identity is affirmative evidence of recreation. An unknown identity is corroborated against
-its last-known name and debounced in time. An authorization denial is treated as denial
-rather than death.
+Nothing is asked of the broker between deliveries; the periodic round that once gathered
+committed positions, log starts and topic identity is gone (D115). A cause names the offset
+of a committed record, so receiving that record is what satisfies it, and the positions
+between records that yield no message are settled by receipt of the next record on the
+channel. The one question a task puts to the substrate is asked at its initialisation —
+`ParsleyProcessor.init`, which Kafka Streams runs on the stream thread inside the rebalance,
+at every creation and re-creation of the task.
 
-Gathering runs on one background thread per runtime. The punctuator snapshots the inputs,
-applies each completed round exactly once on the stream thread, and never blocks on the
-cluster. Every fact is a per-position lower bound, so a round applied one interval late
-releases and prunes exactly what a fresh one would.
+There, `ParsleyProcessor.init` asks a `TopicIdentitySource` — in production
+`AdminTopicIdentitySource`, backed by the admin client — about every topic id the task's state
+names: the received topics at the identities resolved at start, and every topic in the
+restored frontier. Each id is described by id. One that resolves is alive, and its name is
+learned for later initialisations of the process's tasks. One the broker does not know is not
+yet dead — a describe denial masks a live topic as unknown by id, and a broker's metadata view
+can lag — so it is judged by its last-known name over three answers half a second apart. The
+name gone in all three confirms deletion; the name resolving to another id in all three
+confirms recreation; a denial, an unavailable answer, or the name resolving to the very id
+asked about keeps it alive. A denial is denial, never death. An id whose name was never
+learned is never confirmed dead: it lingers in the frontier, costing expression size and
+never safety. A describe failure that is not the substrate's unknown-topic answer — a timeout,
+an outage, whether by id or by name mid-corroboration — is not evidence about any id: the
+initialisation proceeds with a warning, every cause and every hold stays, and the question
+stays pending — the status punctuation asks it again until it is answered, backing off from
+one status interval to a minute since each attempt can hold the stream thread for the
+describes' shared ten-second deadline, and the answer is applied as the initialisation's
+would have been. The check is event-driven and eventual, never periodic.
 
-Where a task holds messages, the round also probes the channels their heads wait on, under
-`read_committed`, for a trailing run of positions that will never yield a message — an
-aborted transaction at the end of a channel, which the host's committed position never
-covers after a restart. The probe assigns every such channel at once and runs one bounded
-poll loop, so it costs about a second per round however many channels are hinted; a channel
-that itself holds messages is never probed, since its settled position is its head. The seed
-round at task initialisation does not probe, so initialisation never waits on the broker for
-it.
+The engine takes the verdicts through `ProcessEngine.onIdentityReport`. A received channel
+whose topic was recreated under its name refuses `CHANNEL_IDENTITY_CHANGED`: records fed
+under the old identity can no longer be trusted. A received channel whose topic was deleted
+while messages from it remain held refuses `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES`, since
+their place in causal order can no longer be preserved (D46); with nothing held it is settled
+to the end of the channel (D21), and a hold waiting on it goes on the next punctuation or
+record — nothing is delivered from initialisation itself (D34). Dead and recreated channels
+are pruned from the frontier and the delivered past; that is the only pruning, and retention
+never prunes. The runtime keeps no verdict windows, no eviction and no rescission.
 
-The dead-topic and recreation verdicts mature over an unbroken window of affirmative
-answers; the window's continuity is judged on the time no round was asking, from one
-round's end to the next round's first question, so a round's own queries and probes never
-restart it.
+A received topic deleted and recreated under its name while a process that receives it runs
+is SPEC Assumption 17's territory: the recreation is detected at the next task
+initialisation, and what was delivered in between is outside the guarantee. As observed on
+Kafka Streams 4.3, deleting a received topic does not stop the process at once: the next
+transactional commit times out, the host re-creates the task, and its initialisation runs the
+identity check, which refuses. A rebalance that finds a source topic missing instead stops the
+stream thread with the host's `MissingSourceTopicException`, which the runtime names
+`SOURCE_TOPIC_MISSING` — a transient, with no `refusalReason` — and a recreation the first
+fetch meets refuses under `auto.offset.reset=none`. A recreation that lands entirely between
+two polls, the new log already past the old position, is met by neither: it is detected at
+the next task initialisation and not before, which is what the assumption signs away. Its log line says to restart;
+the start then refuses `CHANNEL_IDENTITY_CHANGED` for a recreated topic, refuses a
+still-missing one at resolution, and resumes where a broker's metadata merely lagged.
 
-This punctuator is internal plumbing for ingesting the host's read-position reports, which is
-the only transport Kafka Streams offers for them. It delivers nothing that was not received
-from a channel, and the decision it triggers remains the pure function described in
-[Delivery](delivery.md). Time never appears among that function's inputs. The public API
-offers no timers and no scheduled callbacks.
+## The status punctuation
+
+Each task schedules one wall-clock punctuation, every `ParsleyConfig.statusInterval` — one
+second by default; the builder refuses a null, non-positive or sub-millisecond value. It
+drains what receipt, or the initialisation's identity report, already released; flushes holds
+to the ordering store, so a message held at the moment of a crash is still held after the
+restart (D102); observes the frontier for the once-only warning at 80% of the metadata budget
+(D53); and publishes the task's `TaskStatus` for `status()` (D103). It touches no broker and
+ingests nothing.
+
+The punctuation delivers nothing that was not received from a channel, and the decision it
+triggers remains the pure function described in [Delivery](delivery.md). Time never appears
+among that function's inputs. The public API offers no timers and no scheduled callbacks.
 
 ## Zombie safety
 
-Facts are monotone. Any delivery a superseded execution performs on stale state sits in a
-transaction the host fences and aborts, so it has not occurred.
+Any delivery a superseded execution performs on stale state sits in a transaction the host
+fences and aborts, so it has not occurred.
 
 ## The seam
 
@@ -763,14 +863,20 @@ topic refuses the start.
 
 ## What Parsley asks the cluster
 
-Beyond the Streams application's own consumer and producer, each start and each facts round
-uses the admin client and two plain consumers: describing topics by name and by id, listing
-the earliest offsets under `read_committed`, listing the group's committed offsets, and — at
-start when initial positions are missing — joining the group as a short-lived bootstrap
-member to commit them under the group's generation fence. A facts round also assigns a
-groupless consumer to the partitions a held head waits on and polls a few times, a second at
-most. The ACLs those need
-are Describe on every declared topic and on the group, Read on the group and on the received
+Beyond the Streams application's own consumer and producer, each start uses the admin client
+and up to two plain consumers: describing the declared topics by name, reading the ordering
+changelog for prior state where one exists, listing the group's committed offsets, listing
+the earliest or latest offset under `read_committed` — only for received partitions with
+neither a committed position nor a covered position in the ordering state — and, where
+committed positions are missing, joining the group as a short-lived bootstrap member to
+commit the start positions under the group's generation fence. Each task initialisation
+describes by id, once, the topics the task's state names, and corroborates by name any id
+the broker does not know and whose name it has learned — a deletion or recreation is
+confirmed only by three consistent answers half a second apart; an id whose name was never
+learned is left alive. Nothing is asked of the broker between deliveries, and no consumer
+beyond the Streams application's own is assigned to the partitions a held head waits on:
+receipt of the named record is what settles a cause (D115). The ACLs those need are
+Describe on every declared topic and on the group, Read on the group and on the received
 topics, and whatever Streams itself needs to create and write its changelogs. A Describe
 denial is treated as denial, never as a topic's deletion.
 
@@ -810,20 +916,22 @@ budget plus a few hundred bytes of framing. The default 1 MiB record limit and t
 budget are compatible only for records well under 750 KiB; a held message beyond the limit
 stops the process with `SUBSTRATE_MISCONFIGURED` naming the limit to raise.
 
-**Retention.** Retention must cover hold-back time, not only consumer lag: a message held
-behind a lagging cause and then discarded by retention stops the holder with
-`POSITIONS_DISCARDED_UNREAD`, because its senders may since have pruned it from the causes
-they express ([Failing closed](failing-closed.md)).
+**Retention.** A held message survives retention: it is persisted to the ordering changelog
+and delivers from there, in order, once its causes settle, so retention need not cover
+hold-back time. It must cover the longest stop and the longest lag on any received
+partition: a committed read position below the log start — or, where the committed offset
+has expired, the ordering state's covered position plus one — refuses at the fetch with
+`POSITIONS_DISCARDED_UNREAD` ([Failing closed](failing-closed.md)). Add whatever a reset
+that re-reads from `EARLIEST` should still find.
 
 ## Reading the status
 
 `Parsley.status()` reports each process's state, its refusal reason where it stopped
 deliberately, and per task what is held and which cause each hold waits for, with the
-frontier's size and how long ago broker facts were applied. A held message is not a failure:
-the diagnosis is the named cause. A refusal recurs identically on restart, except
-`COVERED_POSITION_FED` raised because the execution was superseded, which a restart recovers.
-What to do about each shape the status can show — a refusal, a stop without one, a hold that
-does not move — is in [Runbooks](runbooks.md).
+frontier's size. A held message is not a failure: the diagnosis is the named cause. Every
+refusal recurs identically on restart, except `COVERED_POSITION_FED`, which has no known
+trigger and which a restart clears. What to do about each shape the status can show — a
+refusal, a stop without one, a hold that does not move — is in [Runbooks](runbooks.md).
 
 ---
 
@@ -852,11 +960,11 @@ deliver past a message.
 None of the following can be added once a process has stopped.
 
 **Log the status.** `Parsley.status()` is the diagnosis surface. Its per-task detail — what
-is held, which cause each head waits for, the frontier's width, how long since broker facts
-were applied — is published by a task while it runs and retired when the task closes. After
-a stop, `status()` still carries the process's `refusalReason` and `failureDetail`, but no
-task detail: what was held at the moment of the stop is no longer readable from the process.
-Log the status on a timer while the application runs, and once more when the wait ends:
+is held, which cause each head waits for, the frontier's width — is published by a task while
+it runs and retired when the task closes. After a stop, `status()` still carries the
+process's `refusalReason` and `failureDetail`, but no task detail: what was held at the
+moment of the stop is no longer readable from the process. Log the status on a timer while
+the application runs, and once more when the wait ends:
 
 ```java
 try (Parsley parsley = Parsley.start(config, shipper)) {
@@ -877,8 +985,8 @@ bootstrap, re-fails, and pages nobody. The rule to wire in:
 | `status()` shows | Restart? |
 |---|---|
 | `refusalReason` present, other than `COVERED_POSITION_FED` | No. It recurs. Follow the reason's runbook and page a person. |
-| `refusalReason` of `COVERED_POSITION_FED` | Once. A superseded execution recovers on restart; a recurrence at the same position is a false report ([runbook](#covered_position_fed)). |
-| `refusalReason` absent, `failureDetail` naming a broker, timeout or partition condition | Yes, with backoff, once the cluster is reachable ([runbooks](#restart-resolves-it)). |
+| `refusalReason` of `COVERED_POSITION_FED` | Once. An engine invariant guard with no known trigger: the restart resumes from the committed record, and a recurrence means the invariant broke — report it with the logs rather than restart again ([runbook](#covered_position_fed)). |
+| `refusalReason` absent, `failureDetail` naming a broker, timeout, topic or partition condition | Yes, with backoff, once the cluster is reachable ([runbooks](#restart-resolves-it)). |
 | `refusalReason` absent, `failureDetail` naming the handler's own exception | No. The same message is fed again and the handler throws again ([runbook](#a-handler-that-throws)). |
 
 Nothing in `status()` separates the last two shapes for a supervisor; only the text of
@@ -895,11 +1003,13 @@ cluster: `kafka-consumer-groups`, `kafka-topics`, `kafka-get-offsets`, `kafka-co
 `kafka-console-consumer`. A reset needs Delete on the process's group and on its changelogs,
 rights the running application deliberately does not hold; keep them with the operator.
 
-**Set retention with hold-back in mind.** A message held for a cause is still on its topic,
-and that topic's retention keeps moving. Retention on every received topic must cover the
-longest a message can wait for its cause, plus the longest the process may be stopped, not
-merely consumer lag ([Operations](operations.md#sizing)). The
-[retention clock](#the-retention-clock) below says how to see it running down.
+**Set retention with stops and lag in mind.** A message held for a cause is safe: it is in
+the ordering changelog, and retention discarding its copy on the topic does not touch it.
+What retention must cover is the process's read position. Retention on every received topic
+must cover the longest the process may be stopped and the longest it may lag, since a
+committed read position that retention passes refuses at the fetch
+([Operations](operations.md#sizing)). The [retention clock](#the-retention-clock) below says
+how to see it running down.
 
 ## Triage
 
@@ -934,7 +1044,7 @@ The reasons, and what each asks for:
 
 | Reason | A restart alone | A reset | Runbook |
 |---|---|---|---|
-| `COVERED_POSITION_FED` | Once | No | [Restart resolves it](#covered_position_fed) |
+| `COVERED_POSITION_FED` | Once; a recurrence is reported, not restarted | No | [Restart resolves it](#covered_position_fed) |
 | `HANDLER_RETURNED_NULL_EFFECTS` | After the code fix | No | [The application](#handler_returned_null_effects) |
 | `EMISSION_TO_UNDECLARED_CHANNEL` | After the declaration fix | No | [The application](#emission_to_undeclared_channel) |
 | `STATE_ACCESS_TO_UNDECLARED_STORE` | After the declaration fix | No | [The application](#state_access_to_undeclared_store) |
@@ -976,8 +1086,11 @@ What else is affected, in the order to check it.
 
 - Move the group's offsets with `kafka-consumer-groups --reset-offsets`. A commit the
   bootstrap did not write, with no ordering records behind it, refuses the next start with
-  `ORDERING_STATE_LOST`; one made while the process runs can stop it with
-  `COVERED_POSITION_FED`, and the positions it jumped are never delivered.
+  `ORDERING_STATE_LOST`. Otherwise the next start adopts the moved offset as its start
+  position, with no refusal: moved forward, the positions it jumped are covered as never
+  arriving and are never delivered; moved backwards, the records fed again below the
+  session floor are dropped as replays. Neither reaches a running process — the tool moves
+  offsets only in an inactive group.
 - Delete the ordering changelog alone, or the offsets alone. Each produces a different
   refusal, not a reset.
 - Run the Kafka Streams application reset tool by itself. It resets offsets and deletes
@@ -996,27 +1109,22 @@ and whether anything must be reset.
 
 #### COVERED_POSITION_FED
 
-**Shape.** `fed <channel>@<n> which a read-position report already covered as
-fed-or-never-arriving (fedUpTo=<m>). Either the report was false, or this execution has been
-superseded ...`
+**Shape.** `fed <channel>@<n> which this execution's own coverage already records as fed or
+never arriving (fedUpTo=<m>), above the session floor of <f>; the host's feed and the
+engine's record contradict each other. A restart resumes from the committed record, and this
+refusal then does not recur.`
 
-**What happened.** A facts round read the group's committed position for the channel, which
-covered position *n*, and the host then fed *n*. Either this execution had been superseded —
-a rebalance moved the task to another instance, which committed progress this execution then
-observed — or the committed position was moved from outside the process.
+**What happened.** An engine invariant broke. Above the session floor — the coverage a task
+initialises with — coverage is raised only by this execution's own receipts, or to the
+fed-to-end sentinel by the identity check for a channel whose topic is gone, and a feed
+below either is refused first as `OUT_OF_ORDER_FEED`. This branch is kept so that a
+contradiction between the host's feed and the engine's record can never fall through to a
+silent drop or a delivery; nothing known reaches it (D115).
 
-**Check.** The log around the stop for a rebalance or a second instance joining;
-`kafka-consumer-groups --describe --group <app-id> --members` for who is in the group.
-Whether anything else commits to this group: a script, a tool, a consumer configured with
-the application id as its `group.id`.
+**Check.** The log around the stop, in full, and the last logged status before it.
 
-**Do.** Restart the instance. It resumes from the successor's committed progress, and the
-refusal does not recur. If it recurs at the same channel and position with no supersession
-in sight, something outside Parsley is committing to the group: stop it. The positions
-between the process's true position and the foreign commit were covered as
-fed-or-never-arriving, and this process never delivers them. That is a liveness loss, never
-a misordered delivery; whether it warrants a [reset](#resetting-a-process) depends on
-whether the application needs those messages.
+**Do.** Restart the instance once. It resumes from the committed record, and the refusal
+does not recur. If it recurs, keep the logs and report it; do not keep restarting.
 
 #### A partition was added while the process ran
 
@@ -1034,6 +1142,29 @@ begins a new partition at earliest. If the widened topic was the process's wides
 topic, the restart refuses with [`TASK_WIDTH_CHANGED`](#task_width_changed) instead. Either
 way, adding partitions changes which partition a key lands on, so state kept per key under
 the old count is now split across two shards ([Runtime](runtime.md#keys-partitions-and-state)).
+
+#### A received topic went missing during a rebalance
+
+**Shape.** No `refusalReason`. The `ERROR` line says that a received topic was missing when
+the host rebalanced — deleted, or deleted and recreated under its name, while the process
+ran — and names the remedy; `failureDetail` carries the host's own `MissingSourceTopicException`
+beneath the wrapping, "One or more source topics were missing during rebalance" or "Missing
+source topics: [...]. Timeout exceeded after ...ms.". A recreation the host meets can also
+stop the process as [`POSITIONS_DISCARDED_UNREAD`](#positions_discarded_unread): the first
+fetch at the old position finds the new log shorter than it.
+
+**What happened.** A rebalance found a source topic gone. A received topic is assumed not to
+be deleted and recreated under its name while a process that receives it runs, and not to be
+deleted while anything from it is still owed (SPEC Assumption 17); when a rebalance finds it
+missing, Kafka Streams stops the thread with this transient, and whether the topic is gone
+or merely renewed is judged at the next start, not here.
+
+**Do.** Restart the application. A topic still missing refuses the start at resolution until
+it is restored or removed from the declaration, and the removal is refused with
+[`CHANNEL_REMOVED_WITH_HELD_MESSAGES`](#channel_removed_with_held_messages) while messages
+from it remain held; one recreated under its name refuses with
+[`CHANNEL_IDENTITY_CHANGED`](#channel_identity_changed); one that merely lagged in a broker's
+metadata resumes, and nothing is lost.
 
 #### The cluster was unreachable
 
@@ -1258,29 +1389,32 @@ a new causal lifetime deliberately.
 
 #### POSITIONS_DISCARDED_UNREAD
 
-**Shape.** Four sites, one condition. At start: `<topic-partition> earliest retained position
-<x> is beyond this process's covered position <y>; positions this process cannot show it
-covered were discarded while its committed offsets were missing`. Mid-run: `earliest
-retained position <x> is beyond this process's covered position <y>`, or `earliest retained
-position <x> is beyond the held message at position <h>, which this process received but has
-not delivered`. From the consumer: `the broker no longer retains this process's committed
-read position`.
+**Shape.** One site, the consumer's fetch: `the broker no longer retains this process's
+committed read position; positions were discarded before they were read`. The log line's
+cause, beneath the runtime's message, is the consumer's own `OffsetOutOfRangeException`,
+which names the partition and the position that could not be fetched.
 
-**What happened.** Retention discarded positions this process had not read, or a message it
-had read and was still holding. The start-time shape follows a long stop: the group's
-committed offsets expired, the process was to resume at the log start, and the log start had
-passed what the process had covered. The held-message shape is retention crossing a hold —
-a message waited for its cause longer than its topic retains records.
+**What happened.** Retention passed the process's committed read position on a received
+partition while the process was stopped or lagging. Under `auto.offset.reset=none` the
+consumer refuses the fetch rather than skipping to the log start, and the runtime names the
+refusal. It is met while running, when retention passes a lagging read position; on the
+first fetch after a start whose group offsets had expired, which resumes at the ordering
+state's covered position plus one; or on the first fetch after a stop long enough for
+retention to pass the committed position. A held message is never the position at risk: it
+is in the ordering changelog and delivers from there once its causes settle, whatever its
+topic still retains.
 
-**Check.** The topic's `retention.ms` and `retention.bytes` against how long the process was
-stopped, or how long the message was held. `kafka-get-offsets --topic <topic> --time
-earliest` for the current log start against the positions the diagnosis names. Whether the
-topic's data survives anywhere else — a mirror, a backup — which is rare.
+**Check.** `kafka-consumer-groups --describe --group <app-id>` for the group's committed
+offset on the partition the cause names, and `kafka-get-offsets --topic <topic>
+--partitions <p> --time earliest` for the current log start; the positions between them are
+what was discarded. The topic's `retention.ms` and `retention.bytes` against how long the process was
+stopped, or how far behind it ran. Whether the topic's data survives anywhere else — a
+mirror, a backup — which is rare.
 
-**Do.** Record the gap the diagnosis names: those positions are what the application has
-lost, and its own reconciliation may need them. Then reset. Afterwards, set retention on
-every received topic to cover the longest stop and the longest hold-back the application
-can see, and alert on the [retention clock](#the-retention-clock) before it runs out.
+**Do.** Record the gap: those positions are what the application has lost, and its own
+reconciliation may need them. Then reset. Afterwards, set retention on every received topic
+to cover the longest stop and the longest lag the application can see, and alert on the
+[retention clock](#the-retention-clock) before it runs out.
 
 #### ORDERING_STATE_LOST
 
@@ -1306,16 +1440,21 @@ positions and accepts no others ([what the library does not do](#what-the-librar
 
 #### CHANNEL_IDENTITY_CHANGED
 
-**Shape.** At start: `topics [<names>] now resolve to different identities than this
-process's state was built against`. At task initialisation: `topic '<name>' now resolves to
-<channel> but this process's state was built against a previous incarnation`. Mid-run: `the
-topic of received channel <channel> was deleted and recreated under the same name while this
+**Shape.** Three sites. At start: `topics [<names>] now resolve to different identities than
+this process's state was built against`. At task initialisation, from the stored name
+binding: `topic '<name>' now resolves to <channel> but this process's state was built
+against a previous incarnation`. At task initialisation, from the identity check: `the topic
+of received channel <channel> was deleted and recreated under the same name while this
 process ran`.
 
 **What happened.** A received topic was deleted and recreated under the same name. Positions
-in the old log mean nothing in the new one. The mid-run verdict matures over an unbroken
-window of affirmative answers, three facts intervals or three seconds, whichever is longer;
-a verdict the topic's continued existence rescinds is logged as such and never refuses.
+in the old log mean nothing in the new one. The third verdict comes from the identity check
+every task initialisation runs: the old id no longer resolves, and the name resolves to
+another id in three answers half a second apart. A recreation while a task runs is detected
+when the task next initialises — Kafka Streams re-creates the task once the commit against
+the deleted topic times out, or stops the thread with the
+[missing-source-topic transient](#a-received-topic-went-missing-during-a-rebalance) — and
+what the process delivered in between is outside the guarantee (SPEC Assumption 17).
 
 **Check.** `kafka-topics --describe` shows the topic's current id; the diagnosis names the
 one the state was built against. Whether the recreation was intended.
@@ -1333,7 +1472,9 @@ topic no longer exists; their place in causal order can no longer be preserved`.
 **What happened.** A received topic was deleted while this process held messages from it,
 which breaches the deletion-hygiene assumption: a topic is deleted only once nothing holds
 an undelivered message from it. The held messages cannot be delivered in order, and cannot
-be skipped. The verdict matures over the same window as a recreation.
+be skipped. The refusal is raised at task initialisation, by the identity check that finds
+the topic gone — its name unknown in three answers half a second apart — while the task
+still holds messages from it.
 
 **Check.** The last logged status before the stop for what was held on that channel, since
 the process can no longer say. Whether the topic is coming back under the same name; if so
@@ -1407,11 +1548,11 @@ Kafka Streams does not do. Restart: the check is per execution, so a restart tha
 order clears it. If it recurs at the same positions, keep the logs and report it.
 
 **On a channel recorded as gone.** `fed <channel>@<p> on a channel recorded as no longer
-existing`. The process had concluded, over the debounce window, that the channel's topic was
-deleted, recorded it as fed to its end, and records then arrived from that identity. A topic
-id never returns once deleted, so the verdict was wrong; the window that matured it is the
-suspect, and the refusal is durable. Reset, keep the facts-round logs from before the verdict,
-and report it.
+existing`. An identity check at a task initialisation had concluded that the channel's topic
+was deleted, the process recorded it as fed to its end, and records then arrived from that
+identity. A topic id never returns once deleted, so the verdict was wrong; the check that
+gave it is the suspect, and the refusal is durable. Reset, keep the logs from the
+initialisation that gave the verdict, and report it.
 
 ### Reading a stopped process's state
 
@@ -1424,7 +1565,7 @@ map is the operator's work; nothing in the library does it for a stopped process
 ## A message is held and not moving
 
 A held message is not a failure. It is waiting for a cause, and the diagnosis is which
-cause and why it has not arrived. `status()` names both, once per facts interval, for every
+cause and why it has not arrived. `status()` names both, once per status interval, for every
 task the instance runs ([Failing closed](failing-closed.md#diagnosis)).
 
 ### Confirm it is a hold
@@ -1432,8 +1573,7 @@ task the instance runs ([Failing closed](failing-closed.md#diagnosis)).
 `state` is `RUNNING`, `refusalReason` is empty, and a task's `heldMessages` is above zero
 and not falling. A `state` of `REBALANCING` that persists is the host, not a hold: a member
 that cannot join, or a task restoring a large changelog, which for a deep hold-back backlog
-takes time. A `sinceLastFacts` that keeps growing is a
-[starved facts source](#facts-are-not-arriving), which stalls every hold on the task.
+takes time.
 
 ### Read the head's blockers
 
@@ -1443,13 +1583,13 @@ position required and the position the cause's channel has settled to. The shape
 blocker says what to do.
 
 **No blockers.** The head is deliverable and goes on the next drain, which runs on the next
-record fed or the next facts tick. A head that stays deliverable across ticks means the
-task's thread is not running its punctuator: check `sinceLastFacts` and the thread.
+record fed or the next status punctuation. A head that stays deliverable across status
+intervals means the task's thread is not running: check the thread.
 
-**Settled position empty.** The task has heard nothing of the cause's channel: no message
-fed from it and no committed position reported. On a task that has just started, wait a
-facts interval. Otherwise the [facts source is starved](#facts-are-not-arriving), or the
-partition does not exist — check the topic's partition count.
+**Settled position empty.** The task starts that channel at position 0 and has received
+nothing on it yet, so nothing on it is settled. Check that the partition exists — the
+topic's partition count from `kafka-topics --describe` — and whether the group's offset on
+it is moving, from `kafka-consumer-groups --describe --group <app-id>`.
 
 **Settled below required, and the required position exists.** Compare the required position
 with the channel's end from `kafka-get-offsets --topic <topic> --partitions <p> --time
@@ -1461,10 +1601,9 @@ reached it. Two sub-cases:
   chain until a blocker's channel holds nothing. That channel is the root.
 - The cause's channel holds nothing. This task is behind on it. `kafka-consumer-groups
   --describe --group <app-id>` shows the group's current offset and lag on the partition;
-  the task drains what it is fed, so lag here is throughput, a paused partition, or a
-  thread that has stopped polling. If the group's offset is already past the required
-  position and settled still trails it, the settled position advances on the next facts
-  round: check `sinceLastFacts`.
+  the task's settled position is what it has been fed, and lag is what closes it, so lag
+  here is throughput, a paused partition, or a thread that has stopped polling. An offset
+  already past the required position with settled still below it is the shape after next.
 
 **Settled below required, and the required position does not exist yet.** Required beyond
 the channel's end means the cause has not been produced. Nothing a process expresses names
@@ -1474,38 +1613,89 @@ resolves when the transaction commits or the broker aborts it at its timeout, te
 under the Kafka Streams defaults. Or the metadata is stale or forged: a token minted against
 another cluster, a hand-stamped header. Read the held record's header and find its producer.
 
+**Required at an offset no committed record occupies.** The group's offset on the partition
+stands past the required position with no lag, and settled still trails it. Two shapes
+share it. The cause names a position no `read_committed` reader is ever served: a
+transaction marker, an aborted batch's offset, the log-end offset at the moment of stamping.
+That is an out-of-contract cause ([wire format](wire-format.md#grammar), constraint 8): no
+receipt settles it, elapsed time never does, and the hold stays, visibly, until a later
+record on the channel arrives. A Parsley process never stamps one. Read the held record's
+header and find the producer of the stamp — a gateway minting a token from a producer's
+log-end offset is the natural mistake — and fix it; the next record on the channel releases
+the hold. Or the channel is a `cleanup.policy=compact` topic and the cause names a record the
+cleaner has since removed, together with the tombstone that superseded it, with nothing
+retained after it: an in-contract cause whose record this process started past. The hold
+lasts until anything follows on that channel. Produce a record on it, and keep received
+topics under time or size retention rather than compaction where holds must not wait on
+that.
+
+**The blocker's channel's topic no longer exists.** `kafka-topics --describe` does not find
+the topic, or finds it under another id. A cause on a deleted channel is settled by the
+deletion, and a task learns of a deletion from the identity check at its next
+initialisation, never while it runs. On Kafka Streams the deletion of a received topic
+reaches the process within a minute or two — the commit times out and the host re-creates
+the task, or a rebalance stops the thread; a topic recreated under its name is stopped at
+once where the host meets it, and not at all until the next task re-creation where it does
+not (SPEC Assumption 17)
+([runbook](#a-received-topic-went-missing-during-a-rebalance)) — and the check at that
+initialisation settles the channel to its end, sending the hold on at the next punctuation,
+provided the task holds nothing from that channel itself; a topic recreated under its name
+refuses [`CHANNEL_IDENTITY_CHANGED`](#channel_identity_changed) instead. If the process has
+stopped, restart it: a start with the topic still missing refuses at resolution until the
+topic is removed from the declaration, and a channel outside the received set no longer
+constrains this process. If the check could not be made, the log
+[says so](#the-identity-check-could-not-be-made).
+
 **The blocker's topic is another Parsley process's output.** Look at that process. If it has
 stopped, its refusal is the root cause, and this hold clears when it is fixed. If it is
 holding, follow its blockers upstream. A stopped process stalls every process downstream of
 it, and the stall is visible in each downstream status as a blocker on the stopped process's
 output topic.
 
-### Facts are not arriving
+### The identity check could not be made
 
-`sinceLastFacts` empty on a task past its first interval, or growing without bound, means
-the facts round is failing. Its log line is "position facts unavailable, retrying next
-round", with the cause. The usual causes: the application's principal lacks Describe on a
-declared topic or the group, or Read on the group; the admin client cannot reach the
-cluster; a topic in the frontier was deleted and its describe fails in a way the round does
-not classify. While facts do not arrive, settled positions never advance past what the host
-feeds, and a cause on a channel with a trailing run of positions that never yield a message
-is never settled. Restore the rights or the connectivity; nothing needs restarting.
+Every task initialisation asks the cluster about every topic its state names — the received
+topics and every topic in the frontier — and settles or prunes the channels whose topics are
+confirmed gone. Three log lines say the asking failed. "topic identity could not be checked
+(...); continuing on the identities resolved at start, and asking again from the status
+punctuation" names a describe by id that failed in a way that is not the broker's
+unknown-topic answer — the admin client could not reach the cluster, or timed out — and
+"topic identity could not be corroborated for [...]; asking again" names a corroborating
+describe by name that timed out or failed. Either means the check could not be made for the
+ids named. The question stays pending and is
+asked again from the status punctuation until it is answered — backing off from one status
+interval to a minute, since each attempt can hold the stream thread for the describe's
+ten-second deadline, so the line repeats at that cadence — and the answer is then applied as
+the initialisation's would have been. "describe denied for topic '<name>' (<id>);
+treating as denied, not dead" means the application's principal lacks Describe on that
+topic, which the check declines to read as deletion; that answer counts as an answer, so it
+is not asked again until the task next initialises. Neither is evidence: no channel is
+settled or pruned on the strength of either, so a dead channel a hold waits on stays
+unsettled, and its causes stay expressed on every send, until the check gets an answer.
+Restore the connectivity and the task asks again by itself; restore the rights, then restart
+the application so that its tasks initialise and ask again.
 
 ### The retention clock
 
-A held message is still on its topic, and the topic's retention keeps moving while it waits.
-When the log start passes the head's position the process stops with
-[`POSITIONS_DISCARDED_UNREAD`](#positions_discarded_unread), and the message is gone.
-The status does not show how close that is. To see it:
+A held message is not what retention threatens: it is in the ordering changelog, and
+retention discarding its copy on the topic changes nothing. What retention runs against is
+the task's committed read position on each received partition. When the log start passes
+that position the next fetch refuses with
+[`POSITIONS_DISCARDED_UNREAD`](#positions_discarded_unread), and the positions between are
+gone. The clock matters for a process that is stopped, or one that lags; a process that
+keeps up stays ahead of it. The status does not show how close it is. To see it:
 
-1. Take the held channel's `headPosition` from the status.
+1. `kafka-consumer-groups --describe --group <app-id>` gives the group's committed offset on
+   the partition. After a stop long enough for the group's offsets to expire, the read
+   position is the ordering state's covered position plus one, which `OrderingStateInspector`
+   reads from the changelog.
 2. `kafka-get-offsets --topic <topic> --partitions <p> --time earliest` gives the log
    start. The distance between the two, in positions, is the headroom.
-3. `kafka-console-consumer --topic <topic> --partition <p> --offset <headPosition>
-   --max-messages 1 --property print.timestamp=true` gives the head's timestamp; with the
-   topic's `retention.ms`, that is the time left.
+3. `kafka-console-consumer --topic <topic> --partition <p> --offset <committed>
+   --max-messages 1 --property print.timestamp=true` gives the timestamp of the record at
+   the committed offset; with the topic's `retention.ms`, that is the time left.
 
-Raising `retention.ms` on the held topic is the one action that buys time without touching
+Raising `retention.ms` on the topic is the one action that buys time without touching
 order:
 
 ```
@@ -1513,16 +1703,19 @@ kafka-configs --bootstrap-server <servers> --alter --entity-type topics \
     --entity-name <topic> --add-config retention.ms=<longer>
 ```
 
-Do it before the log start reaches the head. Once it has, nothing recovers the message.
+Do it before the log start reaches the committed offset. Once it has, nothing recovers the
+positions between, and the process refuses at its next fetch.
 
 ### Do not
 
 - Restart expecting the hold to clear. A restart rebuilds the same hold from the changelog.
   It is harmless, and it changes nothing.
-- Move the group's offsets on the blocker's channel to "unblock" it. The facts round reports
-  the moved position as fed-or-never-arriving, the hold releases, and the messages the move
-  jumped are never delivered — a false report, which is the one thing the guarantee cannot
-  survive.
+- Move the group's offsets on the blocker's channel to "unblock" it. The group must be
+  inactive for the tool to act, and the next start adopts the moved offset as the start
+  position. Moved forward, the positions it jumped are covered as never arriving: the hold
+  releases, and the messages between are never delivered. Moved backwards, the records fed
+  again below the session floor are dropped as replays, and the hold is exactly where it
+  was.
 - Delete and recreate a topic to clear it. That is a new channel, and the process stops
   with `CHANNEL_IDENTITY_CHANGED`.
 
@@ -1578,15 +1771,15 @@ position, and creates fresh changelogs. The transactional ids Kafka Streams deri
 action; a new producer under the same id fences the old.
 
 Doing it in another order produces a different refusal rather than a reset: offsets deleted
-with the changelog kept resumes at the log start against the old coverage and refuses with
-`POSITIONS_DISCARDED_UNREAD` if retention has moved; the changelog deleted with offsets kept
-refuses with `ORDERING_STATE_LOST`. The Kafka Streams application reset tool deletes internal
+with the changelog kept resumes at the covered position plus one and refuses at the first
+fetch with `POSITIONS_DISCARDED_UNREAD` if retention has moved past it; the changelog deleted
+with offsets kept refuses with `ORDERING_STATE_LOST`. The Kafka Streams application reset tool deletes internal
 topics and resets offsets but leaves local state; use the steps above.
 
 ### After
 
 - The log carries `committed initial positions for [...]` for every received partition.
-- `status()` reports `RUNNING`, and `sinceLastFacts` is set within an interval.
+- `status()` reports `RUNNING`, and each task's entry appears within a status interval.
 - Under `EARLIEST`, `heldMessages` rises and falls as the retained log is re-read; under
   `LATEST` it stays near zero.
 - Downstream processes that were holding on this process's output clear as it sends. What
@@ -1595,7 +1788,7 @@ topics and resets offsets but leaves local state; use the steps above.
 
 ## What the library does not do
 
-Facts an operator should know before an incident, each the boundary of a runbook above.
+Limits an operator should know before an incident, each the boundary of a runbook above.
 
 - **Start from a chosen position.** A channel starts at `EARLIEST` or `LATEST`, and the
   bootstrap refuses committed offsets it did not write. There is no way to resume a process
@@ -1607,8 +1800,8 @@ Facts an operator should know before an incident, each the boundary of a runbook
 - **Reset from the API.** The reset is four commands across two tools and every instance's
   filesystem, and the order matters. Nothing in the library performs it or checks it.
 - **Report a hold's age or its retention headroom.** The status carries the head's position,
-  not its timestamp, the channel's log start or its end; the retention clock and the
-  lagging-or-not-produced distinction are computed from the Kafka tools.
+  not its timestamp, and not the channel's committed offset, log start or end; the retention
+  clock and the lagging-or-not-produced distinction are computed from the Kafka tools.
 - **Push anything.** The status is pull-only: no metrics, no listener, no callback. A stop
   is observed through `awaitStopped()` or by polling `healthy()`.
 - **Separate an application failure from a substrate transient.** Both stop the process
@@ -1716,8 +1909,9 @@ Consuming raw records, the projector sees the `parsley.causes` header the seam w
 so its clock is the transitively closed delivered past: per delivered message, merge the
 own coordinate and every carried pair — the same fold the engine's `markDelivered`
 performs. In exchange the host owes what Kafka Streams was providing: `read_committed`
-consumption, fencing of zombie writers (a partition epoch plus monotone guards), and
-position facts for pruning. Do not substitute `frontierSnapshot()` from behind a seam: the
+consumption, fencing of zombie writers (a partition epoch plus monotone guards), the start
+position on each channel at every execution start (Host obligation 2), and channel identity
+for pruning dead channels. Do not substitute `frontierSnapshot()` from behind a seam: the
 frontier advances on receipt, before delivery, so it can name coordinates whose effects
 are still held back — telling a client its write is visible when it is not.
 
@@ -1771,16 +1965,22 @@ encoded width, reject channels the tier does not recognise, and bound positions 
 known-live upper bound: a validated token becomes causes on a produced record, and every
 downstream receiver of those channels holds messages until they settle
 ([failing closed](failing-closed.md)), so an over-broad token affects liveness for everyone
-behind the topic.
+behind the topic. A pair whose position is not the offset of a committed record is worse
+than over-broad: it is an out-of-contract cause ([wire format](wire-format.md), constraint 8)
+that no elapsed time settles — every receiver holds the message, visibly in its status, until
+a later record on that channel settles the position, and nothing asks the broker in the
+meantime. The log-end offset is the natural naive stamp and is exactly this. The gateway
+therefore merges only the coordinate the broker's acknowledgement confirmed, as the table
+above says — never a position it computed or read from a log end.
 
 Client-facing tokens should be encrypted, not merely signed — offsets leak throughput and
 topic ids leak topology — but the encrypted form stops at the gateway: the engine decodes
 only the frozen grammar, so the gateway decrypts, bounds, and stamps a plain header.
 
-Give tokens a TTL well short of retention. A pruned coordinate can otherwise never be
-covered again, and on mirrored estates no log-start evidence ever arrives for foreign
-topics, so expiry is the mitigation that works everywhere. The token also only ever grows;
-expiry is what stops a long session converging on the size of the topology.
+Give tokens a TTL. The token only ever grows — `merge` is a pointwise maximum and nothing
+removes an entry, so a channel the recorder has since pruned as dead still sits in the
+token, and fails coverage against a past that no longer records it — and a long session
+converges on the size of the topology. Expiry is the only bound.
 
 ---
 
@@ -1843,9 +2043,12 @@ vector. The purity scan runs again over the `session` sources, with the Kafka ad
 ([Session consistency](session.md)).
 
 **Simulation.** A simulated substrate and host honouring the host obligations drives many
-engines over randomised topologies, interleavings, gaps, aborted-transaction runs, crashes,
-restarts and read-position reports. Runs are seeded and deterministic, so a failure
-reproduces exactly from its seed. `CausalOrderPropertyTest` sweeps seeds 1 to 300.
+engines over randomised topologies, interleavings, gaps, aborted-transaction runs, crashes
+and restarts, with start positions reported at each execution start. The simulated host
+refuses a fetch below the log start — the process fails closed `POSITIONS_DISCARDED_UNREAD`,
+as under `auto.offset.reset=none` — and re-initialises the receivers of a topic that is
+killed or recreated, so the identity report runs. Runs are seeded and deterministic, so a
+failure reproduces exactly from its seed. `CausalOrderPropertyTest` sweeps seeds 1 to 300.
 
 An oracle tracks real happened-before outside the engine and asserts causal order, absence of
 duplicates, FIFO per channel, and quiescent liveness, meaning everything received is
@@ -1859,30 +2062,35 @@ itself advanced the clamp that later drops the cause.
 **Sabotage meta-tests.** The same suite runs against deliberately broken engines through a
 test-only hook, asserting that the oracle fails. The `Sabotage` modes each disable one
 guarantee: the dependency check, the FIFO hold, the duplicate drop on refeed, the treatment
-of undecodable metadata, persistence of held messages, truncation handling, and others.
+of undecodable metadata, persistence of held messages, and others.
 
 This is the evidence that the tests would catch a violation. `SabotageMetaTest` pins one
 targeted case per mode — for the refusal-disarming modes, both that the sabotage disarms the
 refusal and a pinned seed on which the oracle catches the resulting violation — and a
-randomised sweep records the margin by which the oracle catches each broken engine. Two modes
-are the exception: `DELIVER_PAST_DEAD_HOLDS` is reached by no random seed (calibrated at 0 in
-300), so its oracle evidence is a deterministic scenario constructing the causal inversion;
-and `TREAT_COVERED_FEED_AS_REPLAY` disarms a refusal the sweep cannot provoke, because the
-harness derives every read-position report from a process's own progress (D91), so its
-evidence is the honest and sabotaged engines staged side by side over the same
-report-then-feed contradiction. Neither carries a sweep floor.
+randomised sweep records the margin by which the oracle catches each broken engine. One mode
+is the exception: `DELIVER_PAST_DEAD_HOLDS` is reached by no random seed (calibrated at 0 in
+300), so its oracle evidence is a deterministic scenario constructing the causal inversion,
+and it carries no sweep floor. A host fault rather than an engine mode,
+`RESET_PAST_LOG_START`, models an `auto.offset.reset=earliest` host resetting past discarded
+positions, and the sweep runs it against the honest engine with its own floor. Its catch is
+Safety 8 judged from world truth the host cannot launder — a committed record the process
+owed between where it first read the channel and where it committed reading to, never fed to
+it — or, where a message depending on a skipped record is later delivered, the delivery-time
+causal-order check. A recreation is judged the same way, at the moment a process commits a
+step while receiving a dead incarnation whose name is bound to a live other id.
 
 **Streams wiring.** `TopologyTestDriver` tests for the header format on the wire, byte-exact
-key and value pass-through, Schema-Registry-format serdes, and punctuator fact ingestion
-through an injected facts source.
+key and value pass-through, Schema-Registry-format serdes, the identity report at task
+initialisation through an injected identity source, and the status punctuation.
 
 **Integration.** Embedded KRaft broker tests for commit and abort behaviour under
 exactly-once semantics, restart with state restore, restart after a state-dir wipe with the
 ordering state rebuilt entirely from its changelog, migration of a task holding an
 undelivered effect between two live instances, a full broker bounce with a held message
-neither lost nor freed by the outage, aborted-transaction gaps and trailing
-runs, log truncation, and a plain `read_committed` consumer decoding output with application
-serdes alone.
+neither lost nor freed by the outage, aborted-transaction gaps and a cause naming an aborted
+position held and visible until a later record settles it, log truncation refused at the
+fetch, a held message retention discarded delivering from the changelog, and a plain
+`read_committed` consumer decoding output with application serdes alone.
 
 ## Standard of evidence
 
@@ -2126,6 +2334,8 @@ visibly in the hold-back buffer. Admin queries add background load (bounded by D
 Host obligation 2 says "report" without saying where a Kafka Streams host reports. The spec could name committed
 offsets as the canonical report; every implementation on this substrate will have to rediscover this.
 
+*Superseded by D115: no read-position report exists any more. A cause names a committed record (wire-format constraint 8) and its receipt satisfies it; the host reports only the position it will feed first, at each execution start (Host obligation 2 as narrowed). The in-feed rule survives as D5's, and the LSO rejection above still holds against any proposal to use it as a baseline.*
+
 ### D7 — An internal wall-clock punctuator ingests facts
 
 **Context**
@@ -2159,6 +2369,8 @@ must be walked through the Structural 10 argument.
 **Specification gap**
 
 Structural 10 could say explicitly that internal report ingestion is not "a means of causing delivery" in its sense.
+
+*Superseded by D115: the punctuator ingests nothing. One wall-clock punctuation per task remains, for status alone (D103): it drains what receipt already released, flushes holds and publishes `TaskStatus`, and touches no broker.*
 
 ### D8 — Failing closed stops the whole process, by exception
 
@@ -2228,6 +2440,8 @@ using the admin API while the group is empty. The engine independently fails clo
 
 Startup requires admin access and fails hard when a partition appears mid-run (partition expansion) until the next
 full start pre-commits it — a crash-recover path, documented. Operators lose the familiar reset knob by design.
+
+*Narrowed by D115: the engine's log-start defence in depth is gone. `auto.offset.reset=none` with no per-source policy is now the sole retention detector, and the consumer's `OffsetOutOfRangeException` reaches `status()` as `POSITIONS_DISCARDED_UNREAD` (D81, D109).*
 
 ### D10 — Re-feeds below the session floor are dropped; contradictions within an execution fail closed
 
@@ -2492,6 +2706,8 @@ holds blocked on quiet channels release; no safety property references it.
 
 A knob an operator can set badly (too low: admin load; too high: release latency). Neither direction is unsafe.
 
+*Superseded by D115: `factsInterval` is retired; `ParsleyConfig.statusInterval` (one second by default, the same validation) sets the cadence of the status-only punctuation.*
+
 ### D21 — A deleted topic settles its remaining positions; dead incarnations are vacuous
 
 **Context**
@@ -2542,6 +2758,8 @@ facts are always safe (they only under-prune and under-advance).
 **Cost**
 
 An extra describe per facts round; facts lag one round during topic churn.
+
+*Superseded by D115: no log-start fact is gathered or attributed. The residual it guarded moves to the bootstrap's one-off `listOffsets` for partitions with no coverage, which still queries by name against ids resolved moments earlier.*
 
 ### D23 — Self-dependency is impossible by construction; adversarial self-deps hold forever
 
@@ -2644,6 +2862,8 @@ All sixteen are taken. The load-bearing ones and their failure modes:
 **Cost**
 
 Recorded per item above.
+
+*Corrected in part by D115: the A10 line's "Safety 8 machinery (D9)" is now the consumer's fetch refusal alone — retention passing a read position refuses with `POSITIONS_DISCARDED_UNREAD` at the fetch, and a held message's copy ageing out of its topic is not a failure, since the hold delivers from the ordering changelog. The A15 line's "whole facts design" is gone; what Assumption 15 now carries is the fetch's refusal of a read below the earliest retained position and the one identity describe at task initialisation. A13 gains the record-naming clause: a position that no message was sent at is a writer out of contract (wire-format constraint 8), held visibly rather than settled.*
 
 ### D27 — Naming: `candidate.parsley:parsley`, packages `candidate.parsley.*`
 
@@ -2784,6 +3004,8 @@ reused), so even a wrong verdict can never cause a silent skip — it degrades t
 
 Dead-channel release and pruning lag up to three fact intervals.
 
+*Superseded by D115: there are no rounds to count. Death is concluded once, at task initialisation, from three consistent name-gone answers half a second apart; the engine's refusal of a feed on a dead-recorded channel (D93's pin) stands.*
+
 ### D33 — Topic names are bound to channel identity in ordering state; recreation refuses
 
 **Context**
@@ -2868,6 +3090,8 @@ pins the exact restart case that stalled.
 One extra consumer per process application; up to one short poll per blocked channel per facts round while messages
 are held.
 
+*Superseded by D115: the probe is gone. A trailing run no record follows is settled by nothing, because no conforming writer names a position inside it (wire-format constraint 8); the Streams behaviour this record's context measured — no commit for a partition without a record in the current lifetime — is why the host reports a start position rather than a read position.*
+
 ### D36 — When prior state exists, missing group offsets restart from earliest
 
 **Context**
@@ -2893,6 +3117,8 @@ broker itself: offset alteration on a non-empty group is rejected.
 
 An expiry restart with LATEST channels re-feeds history (dropped as duplicates) instead of skipping — slower, never
 lossy. One extra describe per process per start.
+
+*Narrowed by D115: a missing position alongside prior state resumes at the ordering state's covered position plus one, and earliest only where the channel has no coverage; whether retention still holds the position is the first fetch's to decide. The pin is renamed `BootstrapIntegrationTest#expiredOffsetsResumeFromCoverageNotTheDeclaredLatest`.*
 
 ### D37 — Exception handlers are unoverridable configuration
 
@@ -2991,6 +3217,8 @@ is accepted and recorded as substrate-breach territory. EVIDENCE row Structural 
 **Cost**
 
 None beyond honesty; the residual risk window is unchanged, now correctly described.
+
+*Superseded by D115 with D32.*
 
 ### D41 — The simulation oracle observes the feed; owed delivery is excused only by ground-truth delivered past
 
@@ -3198,6 +3426,8 @@ corroboration. Verified against a real StandardAuthorizer
 
 One describe-by-name per round covering the currently-unknown ids; recreation and death verdicts lag the facts
 interval; the sub-interval adoption window above.
+
+*Superseded by D115: the windows, the shared clock, stickiness, upgrade and eviction are gone with the round. Two rules survive it: recreation is affirmative evidence, and a denial is never death — both applied by `AdminTopicIdentitySource` at task initialisation over three corroborating answers.*
 
 ### D45 — An in-execution feed regression fails closed, wherever it lies relative to the session floor
 
@@ -3547,6 +3777,8 @@ free of ordering consequences. Startup's seeding round remains synchronous while
 off the per-record path); when another round holds the source, the seed waits a bounded five seconds and starts
 unseeded — facts are lower bounds, so the cost is evidence deferred to the first background round, and a slow
 broker no longer stacks every initialising task's seed against the poll interval (audit finding M1).
+
+*Superseded by D115: the background thread, the seed round and the deposit-and-apply protocol are deleted. Task initialisation asks the substrate one question, on the stream thread, and nothing asks between deliveries.*
 
 ### D55 — Per-process status: state plus refusal reason, readable programmatically
 
@@ -4384,6 +4616,8 @@ all (bootstrap crash after the changelog was created but before the first task c
 record, and its re-established position is indistinguishable from a first start — no durable evidence exists
 either way, and refusing would break every legitimate channel-join (D31's exemption is the same judgement).
 
+*Narrowed by D115: the start-time comparison against a `listOffsets` answer is gone, and the rejected alternative — let the consumer refuse — is taken, because its objection died with the report. Coverage as `fedUpTo` records only, and the `Long.MAX_VALUE` guard, survive in `ParsleyRuntime.resumePosition`.*
+
 ### D75 — A nameless topic id is never confirmed dead; corrects D44's four-fold window
 
 **Context**
@@ -4421,6 +4655,8 @@ Structural 13's required means of discarding dead-channel causes remains — nam
 affirmative recreation — and is forgone only where no sound local evidence can exist. Pinned by
 `AdminFactsSourceDebounceTest#anIdWithNoKnownNameIsNeverConfirmedDeadOnTimeAlone` (red on the pre-fix tree at
 four windows).
+
+*Superseded by D115: the four-fold window is gone. The rule this record established survives it verbatim — an id whose name was never learned is never confirmed dead — and is now `AdminTopicIdentitySourceTest#aNamelessUnknownIdIsNeverConfirmedDead`.*
 
 ### D76 — Lost ordering state under surviving Streams offsets refuses at start
 
@@ -4513,6 +4749,8 @@ Supervisors that treat every fail-closed stop as permanent restart one recoverab
 and message now say which case they are in. Pinned by
 `ProcessEngineTest#feedAtAReportCoveredPositionFailsClosedAsCoveredPositionFed`.
 
+*Narrowed by D115: the supersession branch is unreachable with no round; the reason keeps its constant and its start-time message as an invariant guard.*
+
 ### D78 — Compacted received topics are an Assumption 10 reliance; the probe residual is recorded
 
 **Context**
@@ -4545,6 +4783,8 @@ mechanism changes.
 
 The residual window stands, bounded by the cleaner's timing on a topic shape the spec's assumptions do not
 cover; named rather than papered over.
+
+*Superseded by D115: the probe residual disappears with the probe. Under wire-format constraint 8 a cause naming a compacted-away committed record is satisfied by receipt of any later record on that channel (D5's rule), and a compacted record that was trailing — nothing after it — holds its dependents until something follows it, visibly in `status()`.*
 
 ### D79 — Read-path hardenings: stable bootstrap reads, true-end changelog scan, offsets inside the confirmed window
 
@@ -4845,6 +5085,8 @@ reworked `AdminFactsSourceDegradationTest#verdictsRideTheRoundThroughAPartitionO
 `IdentityIntegrationTest#midRunRecreationOfAReceivedTopicStopsTheProcess` still passes on the real broker,
 one window later.
 
+*Superseded by D115: no window, no continuity, no rescission. The false-positive shape this record closed — a process's binding fresher than the answering broker's — is what the three-answer corroboration at task initialisation guards against.*
+
 ### D86 — A partially-covering stable listing is retried before the group join; extends D79
 
 **Context**
@@ -5010,6 +5252,8 @@ per-partition rule), `ProcessEngineTest#restoredFrontierNamingTheZeroTopicIdFail
 `TopologyWiringTest#unswallowedReaderRefusalInADeserializerKeepsItsReason`, and
 `SessionTimeoutInheritanceTest#longTypedValueIsRefusedLikeKafkasOwnParser`.
 
+*Superseded in part by D115: findings 1 and 2 (blind-time continuity, upgrade restarts) go with the windows. Findings 3 and 4 and the smaller closures stand.*
+
 ### D89 — The eviction horizon is pinned by scripted-round evidence; name learning extracted as a seam
 
 **Context**
@@ -5049,6 +5293,8 @@ The sweep's `confirmedRecreated.remove` line is not separately pinned — a muta
 removal would survive these tests; a recreated-verdict eviction test needs the same scaffolding again
 and can join this class when it earns its keep. The horizon boundary is pinned at one second either
 side, not at the exact boundary millisecond.
+
+*Superseded by D115: nothing to evict. Learned names live for the runtime's lifetime in `AdminTopicIdentitySource`, and the `recordLearnedName` seam is gone with the class that had it.*
 
 ### D90 — The 80%-of-budget warning is pinned through a latch seam plus one stderr-capture wiring test
 
@@ -5127,6 +5373,8 @@ surface changed. The sabotage sweep still has no mode for the silent-drop direct
 TREAT_COVERED_FEED_AS_REPLAY mode would be warranted if the sweep is to cover this class, and its
 meta-test would have to run directly over ProcessEngine as SupersessionTest does — recorded here, not
 taken now.
+
+*Superseded by D115: with no facts round there is no round for a superseded execution to observe its successor through; `SupersessionTest` is deleted and `COVERED_POSITION_FED` is an invariant guard with no known trigger.*
 
 ### D92 — ParsleyRuntime's diagnosis, changelog-read and identity-floor behaviours get unit seams; pins issue #95's gaps E–G
 
@@ -6066,6 +6314,8 @@ undelivered message whose position falls below the channel's earliest retained p
 such a resumption, and an implementation MUST fail closed rather than deliver past it" would
 say what this record implements.
 
+*Superseded by D115: this record's premise — that senders prune a held message from their frontier once retention discards it — is removed rather than defended. No process prunes by log start, senders keep expressing the held message, later sends still wait on it, and the holder delivers it from the ordering changelog in order. The settled-position check, its pins and the harness's quiescence obligation are deleted; D26's Assumption 10 line now reads that retention below a read position refuses at the fetch.*
+
 ### D105 — The reserved maximum position is undecodable metadata and untrusted state (wire-format constraint 7; extends D83)
 
 **Context**
@@ -6254,6 +6504,8 @@ through sibling rounds, which the pinned limit states.
 
 None. Liveness 3 and Host obligation 2 are met with the latency the interval promises rather
 than the latency the task count imposed.
+
+*Superseded by D115: no round, no tail, no probe, no hints.*
 
 ### D108 — A concurrent cold start waits for other instances' bootstrap members and replaces a refused stream thread (closes D48's residual S1)
 
@@ -6766,3 +7018,343 @@ Operational 1 asks that an operator be able to distinguish a refusal from a tran
 says nothing about what the operator is then expected to do, and nothing about the third
 kind of stop, an application failure. Both are what an operator needs, and the second is
 worth a criterion.
+
+### D115 — The facts round is removed: a cause names a committed record, receipt is the only liveness input, retention is the fetch's to refuse, identity is checked once per task initialisation (wire-format constraint 8; supersedes D6, D7, D20, D22, D32, D35, D40, D44, D54, D75, D78, D85, D89, D91, D104, D107; narrows D9, D36, D74, D77, D88; corrects D26's Assumption 15 line; amends SPEC Liveness 3, Structural 13 and 15, Host obligation 2, Assumptions 13, 15 and 17)
+
+**Context**
+
+Since D6 the Kafka Streams host has run a wall-clock "facts round" between deliveries: a
+punctuator (D7) every `factsInterval` (D20) had a background thread (D54) read the group's
+committed offsets, every channel's log-start offset (D22), and topic existence and identity
+(D21, D32, D40, D44), and a `read_committed` probe consumer (D35, D107) poll the channels
+held heads waited on. The engine consumed the result as `PositionFacts`: committed offsets
+advanced `fedUpTo` past positions that never yield a message, log starts pruned the frontier
+and the delivered past and raised `POSITIONS_DISCARDED_UNREAD` when retention passed the
+settled position or a held message (D9's defence in depth, D104), and death or recreation
+verdicts, matured over time windows (D44, D75, D85, D88, D89), settled or refused channels.
+Every one of these mechanisms answered a question the round had first created. The
+audit trail is long — D35 corrected D6, D44 corrected D32 and D40, D75 and D85 and D88
+corrected D44, D107 corrected D88's pin, D104 corrected D26 — and the round's residuals
+(D78's probe, D22's misattribution race, D85's lagging-broker false positive, D107's
+tail) were each a property of the round rather than of the guarantee.
+
+Issue 108 asked whether the round was needed at all, and the answer is an induction the
+engine already satisfied. A cause is a `(channel, position)` pair that a Parsley process
+wrote into a header, and the engine's frontier has only two merge sites (D4): a position the
+process received a record at, and a position carried by a received message's metadata. Both
+name records the substrate stored and served to a `read_committed` reader — a committed
+record. By induction over the causal graph, so does every pair on the wire; a `CausalPast`
+token does when the write tier keeps docs/session.md's rule — a write enters a token only once
+the broker acknowledged its coordinate — which the type cannot enforce and the page requires.
+Under Host obligation 1 the host feeds each channel in order,
+so receipt of a record at offset *o* settles every position below *o* (D5's rule): the
+positions an aborted transaction or a control record occupy between two records are settled
+by the record after them, and the record a cause names is itself a record the receiver will
+eventually be fed. Nothing else is needed for Liveness 3. The one shape the round settled and
+receipt cannot — a cause naming a *trailing* position that no record follows: an aborted
+batch at the end of a channel, a marker, the log-end offset — is a cause no conforming writer
+produces, and this record makes that a wire-format constraint (8) rather than a liveness
+duty. D35's context recorded the trailing-run case as a Streams gap; it was a gap only for
+stampers this library does not have.
+
+What the round cost, beyond its own machinery: a broker round trip per task per interval
+for the life of the process; a second-a-round probe; a background thread whose starvation
+stalled every hold (D85, D107); false-positive and false-negative windows on identity that
+four records tuned; a mid-run pruning by log start that D104 showed inverts causal order for
+a holder unless the holder is stopped; and, at start, D74's comparison of a re-established
+position against durable coverage, needed only because the round would otherwise have
+fabricated the very report the engine's check compared against.
+
+Two things the round also provided are not answered by the induction and needed their own
+answer. First, a baseline on a quiet channel: a cause naming an old record on a channel the
+receiver started at LATEST, or joined, or was bootstrapped on after a crash, would hold until
+that channel's first record — forever, on a quiet channel — because nothing tells the engine
+that the positions below where the host began reading were never going to be fed to it. Second,
+channel identity: a received topic deleted, or deleted and recreated under its name, while the
+process runs. Kafka Streams' own behaviour here was measured before deciding (4.3.1, embedded
+KRaft, `IdentityIntegrationTest` and a throwaway experiment): deleting a live source topic does
+not stop the process; a minute later the task's transactional commit times out at the
+producer's `max.block.ms`, the abort that follows can spend another, Streams raises
+`TaskCorruptedException` and re-creates the task, so `init` runs again; and a rebalance that
+finds a source topic missing stops the thread with `MissingSourceTopicException` ("One or
+more source topics were missing during rebalance") — in the suite's runs the re-creation's
+own rejoin is what meets the missing topic, so the host's stop is the one observed, a little
+over two minutes after the deletion.
+
+**Decision**
+
+1. *Constraint 8, and Liveness 3 restated.* `docs/wire-format.md` gains constraint 8: a
+   `position` is the offset of a committed record on its channel — never a control record,
+   an aborted transaction's record, or an offset at or beyond the log's end. Unlike
+   constraints 1–7 it is not decidable from the bytes, so no reader refuses it: it is the
+   contract a writer signs, and a receiver holds a message naming an out-of-contract position,
+   visibly in `status()`, until a later record on that channel settles it. SPEC Liveness 3 now
+   says what satisfies a cause — receipt of the record it names, with the gaps between records
+   settled by the next record — and that an implementation MUST NOT rely on anything else,
+   elapsed time in particular; the Liveness preamble exempts a message naming a position no
+   message was sent at (Assumption 13, which now says positions name committed records) and
+   everything held behind it, as it already exempted Safety 7 holds. Structural 13 discards a
+   cause only with its channel, never for its age; Structural 15 expresses every cause except
+   on a channel learned gone. Host obligation 2 narrows to the start position: at each execution
+   start the host reports the position it will feed first, and nothing is owed between
+   deliveries. Assumption 15 now says the substrate refuses a read below the earliest retained
+   position rather than serving the next retained record, and reports positions and identity on
+   request — the exact reliance the fetch-time refusal and the initialisation-time identity
+   check take. This is a specification amendment, recorded here as AGENTS.md requires: the
+   wire-format grammar is unchanged (constraint 8 adds no byte and refuses no value), and the
+   five clauses restate what the engine always did, minus the report they had assumed.
+
+2. *The engine takes start positions and an identity report; nothing else.* `PositionFacts`
+   and `onFacts` are gone. The public constructor takes per-channel start positions; a start
+   position `s > 0` raises `fedUpTo` to `s − 1` before the session floor is snapshotted, so
+   positions below where the host begins reading count as fed-or-never-arriving and a feed
+   below the start is a replay drop (D10), never a contradiction; a start position of 0 covers
+   nothing. That is the baseline the first point of the Context needed, and it is exactly the
+   host's own committed offset — the same value the bootstrap hands Streams. `onIdentityReport`
+   takes the sets of dead and recreated channels: a recreated received channel refuses
+   `CHANNEL_IDENTITY_CHANGED`; a dead received channel with held messages refuses
+   `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES` (D46) and with nothing held is settled to the
+   end of the channel (D21); dead and recreated channels are pruned from the frontier and the
+   delivered past. No log-start logic remains anywhere in the engine: not the prune, not the
+   settled-position check (D104), not the sabotage modes that disarmed them.
+   `COVERED_POSITION_FED` keeps its constant and its start-time branch as an invariant guard:
+   above the session floor, coverage is raised only by this execution's own receipts, which the
+   in-execution order check (D45) refuses first as `OUT_OF_ORDER_FEED`, and by the
+   initialisation's identity report settling a deleted received channel to its end, which the
+   dead-channel check refuses first under the same reason — so no path in this tree reaches
+   it; its message says a restart resumes from the committed record and the refusal does not
+   recur. The "superseded execution observed its successor" branch — D77's, not D45's
+   as the issue's closing paragraph had it — is unreachable with no round to observe anything.
+
+3. *Retention is the fetch's to refuse.* The bootstrap commits, for a received partition with
+   prior state and no committed offset, the ordering state's covered position plus one
+   (`ParsleyRuntime.resumePosition`; the `Long.MAX_VALUE` sentinel a deleted channel carries
+   falls back to the substrate, D74's arithmetic guard kept), and lets the first fetch decide.
+   A partition the ordering state names as received but never covered — started at 0 and
+   never fed, or covered to -1 by a pre-D115 execution — resumes at 0, the one position it
+   can show it read from; only a topic the state never named (a channel joining the received
+   set) takes the substrate's earliest. The review found the first cut taking the substrate's
+   earliest for the never-fed case too, which treated records discarded unread as fed — the
+   very shape D74 refused — and `BootstrapIntegrationTest#aNeverFedReceivedPartitionResumesAtZeroAndRefusesWhereRetentionPassedIt`
+   now pins the refusal on a real broker. The fetch's decision: `auto.offset.reset=none` (D9's surviving leg) refuses a position below the log
+   start with `OffsetOutOfRangeException`, which `classifyFailure` already named
+   `POSITIONS_DISCARDED_UNREAD` (D81, D109). D74's start-time comparison against a listOffsets
+   answer is gone; the rejected alternative D74 recorded — let the consumer refuse — is taken,
+   because its objection (the engine would have compared against a fabricated report) died
+   with the report. No process prunes by log start, so retention discarding a record a process
+   still holds is not a stop: the held message is in the ordering changelog and delivers from
+   there in order once its causes settle, and its senders keep expressing it, so their later
+   sends still wait on it — D104's inversion cannot arise because D104's premise (senders had
+   pruned) is gone. Retention need cover the longest stop and lag, not hold-back time.
+
+4. *Identity once per task initialisation, by id, corroborated by name.* `ParsleyProcessor.init`
+   asks a `TopicIdentitySource` about every topic id the task's state names — the received
+   topics at the identities resolved at start and every topic in the restored frontier — on the
+   stream thread inside the rebalance, before scheduling anything. `AdminTopicIdentitySource`
+   describes by id (learning names into a runtime-lifetime map, D89's seam without its
+   eviction), keeps every unknown id whose name it never learned (D75's rule: nameless ids are
+   never confirmed dead), and corroborates the rest by name over three answers half a second
+   apart, the standard D84 set for the changelog and D113 for declared topics: the name gone
+   and the name resolving to another id both say the id asked about is dead, three such
+   answers in a row confirm it, and the verdict is recreated if any of the three resolved the
+   name elsewhere (a recreation completing between two answers is still one — the review
+   caught the first cut requiring three answers of one kind, which reported that shape alive)
+   and deleted otherwise; a denial, an unavailable answer or a same-id answer keeps the id
+   alive (denial ≠ death, D44's principle kept without its clock). A describe that fails or
+   times out — by id, or by name mid-corroboration — is no answer at all: the id is reported
+   unanswered, the processor warns and continues on the identities resolved at start, every
+   cause and hold intact, and the question stays pending, asked again from the status
+   punctuation until it is answered and the answer applied as the initialisation's would have
+   been (the review found the first cut counting a timed-out by-name answer as "alive", which
+   cleared the question for the life of the task; `AdminTopicIdentitySourceTest#anUnavailableAnswerLeavesTheIdUnansweredRatherThanAlive`
+   and `ProcessorRevivalTest#aPartlyUnansweredIdentityCheckAppliesWhatWasAnsweredAndAsksAgainForTheRest`
+   pin the correction). Each attempt can block the stream thread for the describe's timeout,
+   so every describe a resolve makes shares one ten-second deadline and the pending retry
+   backs off exponentially from one status interval to a minute, never once per second. The
+   check is therefore event-driven and eventual, never periodic. No verdict window, debounce,
+   rescission or eviction exists any more. The three-answer, half-second evidence standard is
+   one spelling, `ParsleyRuntime.CORROBORATING_ANSWERS` and `CORROBORATION_BACKOFF`, shared
+   with the declared-topic and changelog describes at start.
+
+5. *Recreation while running is assumed away, and Streams' own stop is named.* Assumption 17
+   now also lets an implementation assume a received topic is not deleted and recreated under
+   its name while a process receiving it runs, with the recreation detected at the process's
+   next initialisation and what it delivered in between outside the guarantee. On Streams a
+   *deletion* is bounded as measured above — the deleted partition's commit fails within a
+   minute or two and the re-created task's `init` refuses — and a *recreation* the host meets
+   is stopped at once, by the rebalance that finds the topic missing or by the first fetch at
+   the old position on the still-short new log (`IdentityIntegrationTest#aReceivedTopicRecreatedWhileTheProcessPollsStopsTheProcess`).
+   A recreation that lands entirely between two polls, with the new log already past the old
+   position by the time the consumer looks again, is stopped by nothing: the commit succeeds
+   by name, no rebalance follows, and the new incarnation's records are fed under the old
+   channel id until the task is next initialised — the shape ASSESSMENT.md 1.1 observed on
+   3.9.1 and the review reproduced on 4.3.1 behind a stalled handler. That window is
+   unbounded, and it is exactly what the extended assumption signs away. Where the rebalance
+   sees the topic missing, the thread stops with `MissingSourceTopicException`, which `classifyFailure` names
+   `SOURCE_TOPIC_MISSING` — a transient with no `refusalReason`, whose log line says to restart:
+   a topic still missing refuses the start at resolution, one recreated under its name refuses
+   `CHANNEL_IDENTITY_CHANGED` from the stored binding (D33), one that merely lagged in a broker's
+   metadata resumes. `SubstrateDetectedStopStatusTest#aMissingSourceTopicStaysATransientWithNoRefusalReason`
+   and `RecordFailureDiagnosticsTest#wrappedMissingSourceTopicNamesTheMissingSourceTopic` pin
+   the classification.
+
+6. *The punctuation is status-only.* `ParsleyConfig.factsInterval` is retired and
+   `statusInterval` (default one second, the same validation and D87's sub-millisecond refusal
+   under the new name) schedules one wall-clock punctuation per task that drains what receipt,
+   the start positions handed to the engine or the initialisation's identity report already
+   released, asks a still-unanswered identity question again, flushes holds (D102), observes the
+   frontier for D53's once-only warning and publishes `TaskStatus` (D103). It touches no
+   broker and ingests nothing. `TaskStatus` loses `sinceLastFacts` — a source break of the
+   kind D111 recorded for record patterns, taken pre-release. D7's Structural 10 argument is
+   now trivial: the punctuation causes no delivery that receipt did not already decide.
+
+7. *Tests.* Deleted with the round: `AdminFactsSourceDebounceTest`, `-DegradationTest`,
+   `-EvictionTest`, `-RoundAbortTest`, `ScriptedAdminFacts`, `FactsRoundTailContinuityTest`,
+   `ProbeIdleChannelCostIntegrationTest`, `SupersessionTest`, the probe-hint pins in
+   `TopologyWiringTest` and the facts-round pins in `ProcessorRevivalTest`, the engine's
+   facts and truncation pins, and the aborted-run end-to-end case that waited on the round.
+   Added: `AdminTopicIdentitySourceTest` (nine pins over the corroboration rules through the
+   describe seams), `ProcessEngineTest#holdsUntilTheCauseItNamesIsDelivered`,
+   `#aStartPositionCoversEverythingBelowItWithinTheSessionFloor`,
+   `#recreatedReceivedChannelReportFailsClosed`,
+   `#identityReportPrunesCausesOnDeadChannelsAndNothingElse`,
+   `#aGapBelowAReceivedRecordIsSettledByThatReceiptAndNothingBeforeIt`,
+   `EngineBoundaryTest#aStartPositionOfZeroCoversNothingAndBlocksACauseAtPositionZero`,
+   `ProcessorRevivalTest`'s eight revival pins, `TopologyWiringTest#aFirstInitialisationAsksAboutTheReceivedTopicsAndNoPunctuationAsksAgain`,
+   `#aRecreatedReceivedTopicRefusesTaskInitialisation`,
+   `#aCauseNamingAnUnreceivedPositionIsHeldAndVisibleUntilARecordReachesIt`,
+   `BootstrapPreCheckTest#anExpiredOffsetResumesAtTheCoveredPositionPlusOneOrFallsBackToTheSubstrate`,
+   `BootstrapIntegrationTest#expiredOffsetsBeyondRetentionRefuseAtTheFetchRatherThanAbsorbTheGap`
+   (rewritten: the start now succeeds and the first fetch refuses, with the committed offset
+   pinned at coverage plus one) and `#expiredOffsetsWithinRetentionResumeAtTheCoveredPositionPlusOne`,
+   `EndToEndIntegrationTest#causeNamingAnAbortedPositionIsHeldAndVisibleUntilALaterRecordSettlesIt`
+   and `#heldMessageDiscardedByRetentionStillDeliversInOrderFromTheChangelog`,
+   `IdentityIntegrationTest#aReceivedTopicDeletedWhileHeldFromStopsTheProcessBeforeDeliveringPastTheHold`
+   (accepting either the engine's refusal or Streams' missing-source-topic stop, since which
+   arrives first is Streams' timing) and `#identitySourceClassifiesDeletedRecreatedNamelessAndDeniedTopicsAgainstARealBroker`,
+   and in the simulator `TargetedScenarioTest#causeOnPositionThatNeverYieldsIsHeldAndVisibleUntilALaterMessageSettlesIt`,
+   `#retentionDiscardingAHeldMessageStillDeliversItInOrderFromTheHoldBackBuffer`,
+   `#recreatedReceivedTopicFailsClosedAtTheNextInitialisation` and
+   `SabotageMetaTest#aHostResettingPastDiscardedPositionsIsCaught`. The simulated host now
+   reports start positions at each execution start and nothing between deliveries, refuses a
+   fetch below the log start, re-initialises the receivers of a killed or recreated topic so
+   the identity report runs, no longer clamps a rewind to the log start (that clamp modelled
+   resume-at-log-start, the behaviour this record retires, and made 30 of 300 honest seeds
+   dirty once the engine stopped absorbing it), and carries a `HostFault.RESET_PAST_LOG_START`
+   modelling an `auto.offset.reset=earliest` host. The harness's Safety 8 obligation is
+   judged from world truth the host cannot launder — every committed record between where a
+   process first read a channel and where it committed reading to must have been fed to it —
+   because the previous check, judged from the host's own read position, could never fire
+   under a host that resets that position past the gap (the review found it fired on none
+   of the fault's catches); the fault is caught on 68 of 120 seeds, 42 of them through that
+   obligation and the rest through the delivery-time Safety 1 check alone (floor 34, pinned
+   seed 4). Assumption 2 is likewise judged at the moment a process commits a step while
+   receiving a dead incarnation whose name is bound to a live other id — the judgement the
+   host's identity report makes — rather than at the end of the run, where a process that
+   later failed closed for another reason, or whose fresh incarnation was itself killed,
+   escaped: IGNORE_RECREATION is caught on 177 of 300 seeds this way against 5 judged at
+   the end (floor 88). The sabotage floors were recalibrated under the new generator (D43's
+   rule, half the measured catches): IGNORE_CAUSES 74, NO_FIFO 14, REDELIVER_REFEEDS 83,
+   UNDECODABLE_AS_ABSENT 87, SKIP_RECEIPT_MERGE 83, DROP_HELD 59, IGNORE_REMOVED_CHANNELS 19,
+   SILENT_DROP 29, OVEREXPRESS 93 of 120, with the honest engine clean on all 300 seeds under
+   both new checks. `IGNORE_TRUNCATION` and
+   `TREAT_COVERED_FEED_AS_REPLAY` are deleted with the checks they disarmed. The whole suite
+   shrinks for the first time, by the round's own pins; AGENTS.md's "it never shrinks" is
+   amended to say a mechanism deleted with its pins is the one exception and the record that
+   deletes it says so.
+
+**Alternatives**
+
+- *Keep the round for the trailing-run case only.* Rejected: the case is a writer
+  out of contract, not a liveness duty; keeping a broker round trip per task per interval
+  for every process to rescue stampers this library does not have is the wrong side of the
+  trade, and the hold is visible in `status()` with the exact position that needs a record
+  after it.
+- *A slow identity check while running* (issue 108's option 2: a describe every few minutes
+  on the stream thread, or a punctuation-driven one). Rejected for now, and recorded as the
+  assumption instead, as the issue's author preferred: Streams itself detects the deletion
+  within a minute and re-creates the task, whose initialisation runs the check; a slower
+  check would re-create the identity windows this record removes; and a recreation that
+  Streams' rebalance sees stops the thread with a named transient. The residual is the
+  window between a recreation and the next initialisation, during which records of the new
+  incarnation are fed under the old identity when Streams neither times out the commit nor
+  rebalances — which ASSESSMENT.md 1.1 observed on 3.9.1 and the review reproduced on 4.3.1
+  (a recreation completed while the handler stalled, the new log already past the old
+  position when the consumer next looked). The old round caught that shape within about
+  three seconds; under this record it is caught at the next task initialisation and not
+  before. A periodic by-id describe of the received topics remains the option to take if
+  that window proves too wide in practice.
+- *Keep pruning by log start at initialisation only.* Rejected: any pruning by retention
+  reopens D104's inversion for a holder, and a frontier entry for a retained-away record
+  costs nine bytes until the channel dies; growth is bounded by topology churn, which the
+  budget (D52) already bounds.
+- *Drop Host obligation 2 entirely.* Rejected: without the start position a cause on a quiet
+  channel below where the host began reading holds forever after a LATEST start, a join, or a
+  bootstrap crash recovery; narrowing it to the start position is the smallest obligation
+  that keeps Liveness 3 true, and it is a value the host already has.
+- *Trust one describe answer at initialisation.* Rejected: D44's masking (a DENY-Describe
+  ACL answers unknown-by-id) and D85's lagging-broker shape are properties of a single answer,
+  not of a round; the three-answer corroboration D84 and D113 use costs about a second at
+  initialisation only when an id is unknown, and never at all on the common path.
+- *Let the engine keep a log-start check fed from the bootstrap's one-off listOffsets.*
+  Rejected: that is D74's comparison, which exists only to pre-empt the report the round
+  would have made; with `auto.offset.reset=none` the fetch is the authority and refuses one
+  position later with the same reason.
+
+**Cost**
+
+- A cause naming a position no committed record occupies is held for as long as its channel
+  is quiet; a producer stamping the log-end offset, or a marker's offset, stalls its receivers
+  until the next record on that channel. The hold is visible with its position in `status()`,
+  the runbook says how to read it, and the writer is out of contract — but the stall is
+  real, and where the round would have released it in a second nothing now does.
+- A recreation of a received topic while a task runs is detected only at the task's next
+  initialisation (Assumption 17 as extended). On Streams a recreation the host meets stops
+  the process at once, and a deletion is stopped within a minute or two; a recreation the
+  host does not meet — completed between two polls with the new log already past the old
+  position — is not stopped by anything until a later task re-creation, and what was
+  delivered in between is outside the guarantee. The previous round bounded that window to
+  about three seconds; this record leaves it unbounded, deliberately.
+- Learned names for non-declared frontier topics live in a runtime's `AdminTopicIdentitySource`
+  and are lost at restart (D75's observation, still true): a frontier topic deleted while the
+  process is stopped, or one whose name this runtime never learned, is never confirmed dead
+  and its entry stays in the frontier. Growth from this is bounded by topology churn and by
+  the budget; it is a liveness cost of nine bytes per entry, never a safety one.
+- An expired offset with prior state now resumes at coverage plus one and lets the fetch
+  refuse rather than refusing before start: the process starts, and stops on its first fetch,
+  where D74 refused from the bootstrap. The refusal reaches `status()` with its reason
+  (D109) either way; an operator sees it a few seconds later than before.
+- The identity check runs on the stream thread inside task initialisation, bounded by one
+  ten-second deadline per task; a thread initialising many tasks against a hung admin path
+  spends that per task before polling again, which with enough tasks reaches
+  `max.poll.interval.ms`. The deleted seed round waited at most five seconds off-thread. The
+  pending retry's backoff keeps the cost after initialisation to one bounded describe per
+  step; the initialisation-time cost stands, and is the price of asking the question where
+  the answer is applied.
+- That the runtime hands the topology the admin-backed identity source, rather than one
+  that answers nothing, has no broker-level pin: a test of the prune on a real broker needs a
+  name learned in the same runtime that then deletes the topic and re-initialises the task,
+  and on Streams the deletion's own missing-source-topic stop arrives first. The wiring in
+  `ParsleyRuntime.start` is a reviewed cell; the source and the processor are each pinned
+  behind their seams.
+- `TaskStatus.sinceLastFacts` and `ParsleyConfig.factsInterval` are gone; a caller naming
+  either does not compile. Nothing in the status says when the entry was last refreshed;
+  a task whose thread has stopped punctuating shows a stale entry, and the runbook says to
+  check the thread rather than a field.
+- The suite shrinks for the first time (see Decision 7), and the sabotage sweep's margins for
+  DROP_HELD and IGNORE_REMOVED_CHANNELS fell with the generator change (59 and 19 catches
+  against about 74 and 32 before), while the others rose.
+
+**Specification gap**
+
+Liveness 3 had said "where a cause names a position that will never yield a message, an
+implementation MUST still eventually deliver," and the only reading under which that is
+satisfiable without elapsed time is the one this record takes: a cause names a record, and a
+position between records is settled by the next record. The clause now says so. Host
+obligation 2 had asked for read-position reports that "MUST eventually advance past positions
+that never arrive"; that was the round's own job description written into the host's duties,
+and it is now the start position alone. Structural 13 had named retention as a ground for
+discarding a cause; it named the mechanism D104 later showed unsound. Constraint 8 belongs in
+the wire format because it is a property of the bytes' meaning that every reader relies on and
+no reader can check — the specification should have said, from the start, what a position is
+allowed to be.

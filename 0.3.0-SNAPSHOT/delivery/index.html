@@ -1114,15 +1114,23 @@
 <h2 id="settled-positions">Settled positions</h2>
 <p>Per received channel <em>c</em> the engine tracks two things.</p>
 <p><code>fedUpTo(c)</code> is the highest position such that every position at or below it has either been
-fed to this process as a message or will never arrive as one. Two inputs advance it.</p>
+fed to this process as a message or will never arrive as one. Receipt advances it while an
+execution runs; at initialisation the start position raises it once, and a received channel
+whose topic the identity check finds deleted is settled to its end (D21).</p>
 <p>Receipt of a record at offset <em>o</em> on <em>c</em> sets <code>fedUpTo(c) := max(fedUpTo(c), o)</code>. Within an
 execution the host feeds each partition in offset order, and Kafka's per-partition order
 means every earlier offset was already fed or will never yield a record. Aborted
-transactions, control records and compaction account for the positions that yield nothing.</p>
-<p>Read-position facts contribute the group's committed offset <em>n</em>, giving
-<code>fedUpTo(c) := max(fedUpTo(c), n - 1)</code>. A committed position asserts that everything below it
-was fed or never will be. This is what advances past a trailing run of positions that never
-arrive, and it rests on the substrate's own report rather than on elapsed time.</p>
+transactions, control records and compaction account for the positions that yield nothing.
+A cause names the offset of a committed record on its channel (wire-format constraint 8), so
+receiving that record is what satisfies it; the markers and aborted batches between records
+are settled by the receipt of the next record on the channel.</p>
+<p>At each execution start the host reports the process's start position <em>s</em> on <em>c</em> — the
+position it will feed first, as the bootstrap established it at <code>Parsley.start</code> — giving
+<code>fedUpTo(c) := max(fedUpTo(c), s - 1)</code>. Every position below the start position was fed to an
+earlier execution and committed, or lies below the position the process was started at; a
+start position of 0 covers nothing. Beyond receipt, the start position and a channel's
+deletion, nothing advances <code>fedUpTo(c)</code> — in particular not elapsed time, and nothing asked
+of the broker between deliveries (D115).</p>
 <p><code>held(c)</code> is the hold-back buffer: received but undelivered messages of <em>c</em>, in position
 order, persisted.</p>
 <p>Settled position is derived from these rather than stored:</p>
@@ -1149,8 +1157,16 @@ total order, deliver every deliverable head, and repeat until a full pass delive
 Determinism means replay after a restart reproduces the same order from the same state.</p>
 <h2 id="baselines-and-duplicates">Baselines and duplicates</h2>
 <p>Before anything is known of <em>c</em>, <code>settled(c)</code> is undefined, and any dependency on <em>c</em> holds
-the message while <em>c</em> is received. The initial committed position established at first start
-initialises <code>fedUpTo(c)</code>, so positions below the first receipt count as already satisfied.</p>
+the message while <em>c</em> is received. A start position above 0 is what first defines it; at 0
+the first receipt on <em>c</em> does. On a first start the start position is the declared initial
+position, resolved against the channel — its earliest retained position or its end. On later
+starts it is the group's committed position. Where prior state exists but the committed
+position has expired, it is the covered position the ordering state holds for <em>c</em> — its
+<code>fedUpTo(c)</code> — plus one, the next position the previous execution would have read; where the
+ordering state covers nothing on <em>c</em>, a channel that has joined the received set, it is the
+channel's earliest retained position (D115). <code>fedUpTo(c)</code> is also restored from the ordering
+state at each start, and the start position only ever raises it, so positions below the
+first receipt count as already satisfied.</p>
 <p>A record at an offset at or below <code>fedUpTo(c)</code> that is not in the buffer was already
 delivered in a committed step. The host re-feeds exactly those records whose read positions
 were not committed, so such a record is dropped rather than redelivered. An aborted step

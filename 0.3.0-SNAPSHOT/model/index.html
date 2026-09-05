@@ -1198,19 +1198,27 @@ delivery flows back. One consequence is that a message sent to a channel its sen
 receives from carries only positions strictly below its own, because offsets are assigned in
 append order.</p>
 <h2 id="pruning-and-growth">Pruning and growth</h2>
-<p>A pair <code>(c, p)</code> is dropped when <em>p</em> falls below <em>c</em>'s log-start offset, or when <em>c</em>'s topic
-identity no longer resolves. Log-start facts may be stale, and a stale fact is a lower bound,
-so staleness delays pruning without over-pruning.</p>
-<p>Pruning is what makes retention a safety matter for a holder. A process that delivered a
-message prunes it once retention discards it, and its later sends then express nothing about
-it; a process still holding that message can no longer tell which later arrivals depend on
-it. Retention must therefore cover hold-back time, not only consumer lag: where it does not,
-the holder stops with <code>POSITIONS_DISCARDED_UNREAD</code> rather than deliver past the hold
-(<a href="../failing-closed/">Failing closed</a>).</p>
+<p>A pair <code>(c, p)</code> is dropped only when <em>c</em>'s topic identity no longer resolves: the topic was
+deleted, or deleted and recreated under its name so that the id names a dead incarnation.
+That is checked once per task initialisation, when the process asks the broker about every
+topic its state names. A denied or unavailable answer is never death, and the pair stays
+until an initialisation finds the topic gone. Nothing is dropped for a position's age: a
+cause whose record retention has discarded still matters to any process holding a message
+that names it (D115).</p>
+<p>What retention threatens is a process's read position, not what it holds. Where retention
+passes the position a stopped or lagging process reads next, the fetch refuses under
+<code>auto.offset.reset=none</code> and the process stops with <code>POSITIONS_DISCARDED_UNREAD</code> (SPEC
+Safety 8; <a href="../failing-closed/">Failing closed</a>). A held message whose copy retention removed
+from its source channel is unaffected: the message is in the ordering changelog, its senders
+keep expressing it, and it delivers from there in order once its causes settle. Retention
+need cover the longest stop and lag, not hold-back time.</p>
 <p>Frontier size follows the causal graph rather than a process's own declaration. Receipt
 merges every pair a message carried, including channels the receiving process never receives,
 which is required for downstream re-expression. Steady-state size approaches the sum of
-partition counts over the transitive upstream closure.</p>
+partition counts over the transitive upstream closure. Entries for topics deleted during a
+run survive until an initialisation confirms the topic gone; an id whose name the process
+never learned is never confirmed dead and lingers, costing expression size and never safety.
+Growth is therefore bounded by topology churn, not by time.</p>
 <p>Encoded size depends on the frontier's shape: a topic's first partition costs 26 bytes and
 each further partition of the same topic 9 (a byte more per field once partition ids or
 counts pass 127), so the encoding reaches Kafka's default 1 MiB record ceiling between
@@ -1218,8 +1226,8 @@ roughly 40,000 entries when every topic contributes one partition and 116,000 wh
 topics contribute many. Reaching it inside the producer would stop the process with no
 diagnosis from Parsley, so a metadata budget is applied first:
 <code>ParsleyConfig.metadataBudgetBytes</code>, 256 KiB by default. Exceeding it stops the process with
-an attributable reason. Frontier size and encoded width are logged each facts round, and
-again at 80% of budget.</p>
+an attributable reason. Frontier size and encoded width are logged at each status
+punctuation, and again at 80% of budget.</p>
 
 
 
