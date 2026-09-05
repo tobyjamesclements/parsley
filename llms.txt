@@ -39,7 +39,7 @@ by its version number.
 ## Operation
 
 - [Failing closed](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/failing-closed.md): what stops a process, the blast radius, and every refusal reason
-- [Runtime](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/runtime.md): start sequence, configuration lockdown, facts ingestion, the handler seam
+- [Runtime](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/runtime.md): start sequence, configuration lockdown, identity at task initialisation, the status punctuation, the handler seam
 - [Operations](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/operations.md): what a process is named on the cluster, what must exist first, scaling, what a reset discards, and sizing the metadata budget and record limits
 - [Runbooks](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/runbooks.md): what an operator does when a process stops or holds — triage, a runbook per refusal reason, reading a held message's blockers, the reset procedure, and what the library leaves to the operator
 - [Session consistency](https://raw.githubusercontent.com/tobyjamesclements/parsley/main/docs/session.md): carrying the causal frontier past the last consumer, out to clients
