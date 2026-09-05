@@ -30,7 +30,7 @@ class ClusterMutationPinningTest {
      */
     @Test
     void changelogReaderNeverAutoCreatesAndNeverAutoResets() {
-        Map<String, Object> props = ParsleyRuntime.changelogReaderProperties(Map.of("bootstrap.servers", "b:9092"));
+        Map<String, Object> props = StreamsRuntime.changelogReaderProperties(Map.of("bootstrap.servers", "b:9092"));
 
         assertEquals(false, props.get(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG),
                 "the reader's metadata request must never create the changelog whose record"

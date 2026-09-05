@@ -10,7 +10,7 @@ from what is defined here.
 Causal metadata travels in exactly one Kafka record header.
 
 The header key is `parsley.causes`, in ASCII. The header key prefix `parsley.` is reserved.
-Applications must not attach headers with this prefix, and Parsley refuses emissions that do.
+Applications must not attach headers with this prefix, and Parsley refuses sends that do.
 This is what makes the metadata distinguishable by construction from headers attached by
 applications or by other systems.
 
@@ -77,11 +77,9 @@ writer, and its breach shows as a hold in the receiver's status, not as a refusa
    still holds it — never a control record, a record of an aborted transaction, or an
    offset at or beyond the log's end at the time of stamping. A Parsley process satisfies
    this by construction, since its frontier holds only positions it received records at
-   and positions it learned from received metadata; a `CausalPast` token satisfies it when
-   the write tier merges only coordinates the broker's acknowledgement confirmed, as
-   [Session consistency](session.md) requires. A writer naming any other position — the
+   and positions it learned from received metadata. A writer naming any other position — the
    log-end offset is the natural naive stamp — is out of contract: no reader is obliged
-   to settle it, and a receiver holds the message, visibly in its status, until a later
+   to settle it, and a receiver holds the message until a later
    record on that channel settles the position (D115). Unlike constraints 1–7 this one is
    not decidable from the bytes, so no reader refuses it; it is the contract a writer
    signs.

@@ -14,8 +14,8 @@ import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.EngineTestFactory.SabotageMode;
-import io.github.tobyjamesclements.parsley.core.HeaderKV;
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.Header;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 import io.github.tobyjamesclements.parsley.sim.SimWorld.SimChannel;
 
 /**
@@ -40,8 +40,8 @@ public final class Scenario {
     }
 
     private static final class RefusalLedger {
-        final java.util.EnumSet<ParsleyFailClosedException.Reason> justifiable =
-                java.util.EnumSet.noneOf(ParsleyFailClosedException.Reason.class);
+        final java.util.EnumSet<FailClosedException.Reason> justifiable =
+                java.util.EnumSet.noneOf(FailClosedException.Reason.class);
         final List<String> violations = new ArrayList<>();
     }
 
@@ -125,7 +125,7 @@ public final class Scenario {
                 SimChannel target = channels.get(rng.nextInt(channelCount));
                 if (rng.nextInt(5) == 0) {
                     journal.add("external corrupt -> " + target.name);
-                    ledger.justifiable.add(ParsleyFailClosedException.Reason.UNDECODABLE_METADATA);
+                    ledger.justifiable.add(FailClosedException.Reason.UNDECODABLE_METADATA);
                     corrupted.add(produceCorrupt(world, target, "g" + e));
                 } else {
                     journal.add("external -> " + target.name);
@@ -243,7 +243,7 @@ public final class Scenario {
                                  RefusalLedger ledger) {
         try {
             return op.get();
-        } catch (ParsleyFailClosedException e) {
+        } catch (FailClosedException e) {
             p.failClosed(e);
             if (journal != null) {
                 journal.add(p.name + " FAILED CLOSED: " + e.reason());
@@ -301,7 +301,7 @@ public final class Scenario {
         }
         target = Math.max(0, Math.min(target, lso));
         journal.add("truncate " + channel.name + " to " + target);
-        ledger.justifiable.add(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD);
+        ledger.justifiable.add(FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD);
         world.truncate(channel, target);
     }
 
@@ -332,7 +332,7 @@ public final class Scenario {
         List<SimChannel> pool = heldFrom.isEmpty() || rng.nextInt(4) == 0 ? eligible : heldFrom;
         SimChannel victim = pool.get(rng.nextInt(pool.size()));
         journal.add("kill topic of " + victim.name);
-        ledger.justifiable.add(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES);
+        ledger.justifiable.add(FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES);
         world.killChannel(victim);
         reinitialiseReceivers(processes, victim, journal, ledger);
     }
@@ -381,9 +381,9 @@ public final class Scenario {
         List<SimChannel> pool = watched.isEmpty() ? eligible : watched;
         SimChannel victim = pool.get(rng.nextInt(pool.size()));
         journal.add("recreate topic of " + victim.name);
-        ledger.justifiable.add(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED);
+        ledger.justifiable.add(FailClosedException.Reason.CHANNEL_IDENTITY_CHANGED);
 
-        ledger.justifiable.add(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES);
+        ledger.justifiable.add(FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES);
         List<SimChannel> fresh = world.recreateTopic(victim);
         channels.removeIf(c -> c.id().topicId().equals(victim.id().topicId()));
         channels.addAll(fresh);
@@ -403,7 +403,7 @@ public final class Scenario {
         if (declaration.size() > 1 && (absent.isEmpty() || rng.nextBoolean())) {
             SimChannel removed = declaration.remove(rng.nextInt(declaration.size()));
             journal.add(p.name + " redeclare without " + removed.name);
-            ledger.justifiable.add(ParsleyFailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES);
+            ledger.justifiable.add(FailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES);
         } else if (!absent.isEmpty()) {
             SimChannel added = absent.get(rng.nextInt(absent.size()));
             declaration.add(added);
@@ -419,7 +419,7 @@ public final class Scenario {
         if (rng.nextBoolean()) {
             world.appendExternal(target, (channelId, pos) -> new Instance(
                     channelId, pos, uid, rng.nextBoolean() ? uid.getBytes() : null, uid.getBytes(),
-                    List.of(new HeaderKV("app.header", new byte[] {1})), Causes.none(), java.util.Set.of()));
+                    List.of(new Header("app.header", new byte[] {1})), Causes.none(), java.util.Set.of()));
         } else {
             Instance observed = randomCommitted(world, rng);
             if (observed == null) {
@@ -433,14 +433,14 @@ public final class Scenario {
             byte[] header = CausesCodec.encode(Causes.of(meta));
             world.appendExternal(target, (channelId, pos) -> new Instance(
                     channelId, pos, uid, uid.getBytes(), uid.getBytes(),
-                    List.of(new HeaderKV(CausesCodec.HEADER_KEY, header)), Causes.of(meta), causes));
+                    List.of(new Header(CausesCodec.HEADER_KEY, header)), Causes.of(meta), causes));
         }
     }
 
     private static CorruptSpot produceCorrupt(SimWorld world, SimChannel target, String uid) {
         Instance appended = world.appendExternal(target, (channelId, pos) -> new Instance(
                 channelId, pos, uid, uid.getBytes(), uid.getBytes(),
-                List.of(new HeaderKV(CausesCodec.HEADER_KEY, new byte[] {99, 1, 2, 3})),
+                List.of(new Header(CausesCodec.HEADER_KEY, new byte[] {99, 1, 2, 3})),
                 Causes.none(), java.util.Set.of()));
         return new CorruptSpot(target, appended.position, appended);
     }

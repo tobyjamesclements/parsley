@@ -9,7 +9,7 @@ package io.github.tobyjamesclements.parsley.core;
  *
  * <p>Writes are expected to commit atomically with the step that made them.
  *
- * @see StoreCodec
+ * @see OrderingStateCodec
  */
 public interface OrderingStore {
     /**

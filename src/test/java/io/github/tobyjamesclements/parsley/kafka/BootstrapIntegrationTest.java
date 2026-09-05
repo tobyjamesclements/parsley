@@ -32,11 +32,11 @@ import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Effects;
 import io.github.tobyjamesclements.parsley.api.Parsley;
 import io.github.tobyjamesclements.parsley.api.ParsleyConfig;
-import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
+import io.github.tobyjamesclements.parsley.api.Process;
 import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -76,7 +76,6 @@ class BootstrapIntegrationTest {
     private static ParsleyConfig config(String prefix) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(prefix).toString())
-                .statusInterval(Duration.ofMillis(500))
                 .build();
     }
 
@@ -175,7 +174,7 @@ class BootstrapIntegrationTest {
         createTopics(new NewTopic("clog-in", 1, (short) 1));
         Channel<String, String> in = Channel.of("clog-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("pc")
+        Process p = Process.named("pc")
                 .receives(in, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -209,7 +208,7 @@ class BootstrapIntegrationTest {
         Channel<String, String> in = Channel.of("ex-in", Serdes.String(), Serdes.String())
                 .startingAt(Channel.InitialPosition.LATEST);
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("ex")
+        Process p = Process.named("ex")
                 .receives(in, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -259,7 +258,7 @@ class BootstrapIntegrationTest {
         createTopics(new NewTopic("exd-in", 1, (short) 1));
         Channel<String, String> in = Channel.of("exd-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("exd")
+        Process p = Process.named("exd")
                 .receives(in, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -293,7 +292,7 @@ class BootstrapIntegrationTest {
                 var status = parsley.status().get("exd");
                 return status != null && status.refusalReason().isPresent();
             }, Duration.ofSeconds(120));
-            assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
+            assertEquals(FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
                     parsley.status().get("exd").refusalReason().orElseThrow(),
                     "the consumer's out-of-range stop names Safety 8's condition, not a generic failure");
             assertEquals(List.of("m0"), List.copyOf(delivered), "nothing may be delivered past the discarded positions");
@@ -321,7 +320,7 @@ class BootstrapIntegrationTest {
         Channel<String, String> a = Channel.of("nf-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("nf-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("nf")
+        Process p = Process.named("nf")
                 .receives(a, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -361,7 +360,7 @@ class BootstrapIntegrationTest {
                 var status = parsley.status().get("nf");
                 return status != null && status.refusalReason().isPresent();
             }, Duration.ofSeconds(120));
-            assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
+            assertEquals(FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
                     parsley.status().get("nf").refusalReason().orElseThrow(),
                     "records the process never read were discarded: the fetch at 0 refuses");
             assertEquals(List.of("a0"), List.copyOf(delivered),
@@ -370,7 +369,7 @@ class BootstrapIntegrationTest {
                     .get(30, TimeUnit.SECONDS).get(new TopicPartition("nf-b", 0));
             assertEquals(0L, resumed.offset(),
                     "the bootstrap resumed the never-fed partition at 0, not at the substrate's earliest of 2");
-            assertEquals(ParsleyRuntime.BOOTSTRAP_OFFSET_STAMP, resumed.metadata(),
+            assertEquals(StreamsRuntime.BOOTSTRAP_OFFSET_STAMP, resumed.metadata(),
                     "the position was committed by the bootstrap, under its stamp");
         } finally {
             parsley.close();
@@ -392,7 +391,7 @@ class BootstrapIntegrationTest {
         Channel<String, String> in = Channel.of("exr-in", Serdes.String(), Serdes.String())
                 .startingAt(Channel.InitialPosition.LATEST);
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("exr")
+        Process p = Process.named("exr")
                 .receives(in, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -422,7 +421,7 @@ class BootstrapIntegrationTest {
                     .get(30, TimeUnit.SECONDS).get(new TopicPartition("exr-in", 0));
             assertEquals(1L, resumed.offset(),
                     "the bootstrap resumed at the covered position plus one, not the substrate's earliest");
-            assertEquals(ParsleyRuntime.BOOTSTRAP_OFFSET_STAMP, resumed.metadata(),
+            assertEquals(StreamsRuntime.BOOTSTRAP_OFFSET_STAMP, resumed.metadata(),
                     "the position was committed by the bootstrap, under its stamp");
 
             produce("exr-in", null, "k", "m1");
@@ -450,7 +449,7 @@ class BootstrapIntegrationTest {
         createTopics(new NewTopic("lost-in", 1, (short) 1));
         Channel<String, String> in = Channel.of("lost-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("lost")
+        Process p = Process.named("lost")
                 .receives(in, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -474,10 +473,10 @@ class BootstrapIntegrationTest {
             }
         }, Duration.ofSeconds(30));
 
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> Parsley.start(config("lost"), p),
                 "surviving Streams-stamped offsets without their changelog mean committed state was lost");
-        assertEquals(ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertEquals(FailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
         assertTrue(e.getMessage().contains("this process's ordering-store changelog does not exist"),
                 "the diagnosis names the missing-topic shape the recheck's fresh describe"
                         + " corroborated, not the emptied shape a stale first view would report: "
@@ -496,7 +495,7 @@ class BootstrapIntegrationTest {
         Channel<String, String> a = Channel.of("lostb-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("lostb-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition receivingA = ProcessDefinition.named("lostb")
+        Process receivingA = Process.named("lostb")
                 .receives(a, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -520,13 +519,13 @@ class BootstrapIntegrationTest {
             }
         }, Duration.ofSeconds(30));
 
-        ProcessDefinition receivingB = ProcessDefinition.named("lostb")
+        Process receivingB = Process.named("lostb")
                 .receives(b, (d, s) -> Effects.none())
                 .build();
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> Parsley.start(config("lostb"), receivingB),
                 "the formerly-received partition's stamped offsets are the evidence of the loss");
-        assertEquals(ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertEquals(FailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
         assertTrue(e.getMessage().contains("this process's ordering-store changelog does not exist"),
                 "the diagnosis names the missing-topic shape the recheck's fresh describe"
                         + " corroborated, not the emptied shape a stale first view would report: "
@@ -546,7 +545,7 @@ class BootstrapIntegrationTest {
         createTopics(new NewTopic("lostc-in", 1, (short) 1));
         Channel<String, String> in = Channel.of("lostc-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("lostc")
+        Process p = Process.named("lostc")
                 .receives(in, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -574,10 +573,10 @@ class BootstrapIntegrationTest {
         admin.deleteRecords(Map.of(tp, org.apache.kafka.clients.admin.RecordsToDelete.beforeOffset(end)))
                 .all().get(30, TimeUnit.SECONDS);
 
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> Parsley.start(config("lostc"), p),
                 "surviving Streams-stamped offsets with a recordless changelog mean committed state was lost");
-        assertEquals(ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertEquals(FailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
         assertTrue(e.getMessage().contains("holds no ordering records"),
                 "the diagnosis names the emptied-changelog shape, not a missing topic");
     }
@@ -593,7 +592,7 @@ class BootstrapIntegrationTest {
         createTopics(new NewTopic("lostp-in", 2, (short) 1));
         Channel<String, String> in = Channel.of("lostp-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("lostp")
+        Process p = Process.named("lostp")
                 .receives(in, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -629,10 +628,10 @@ class BootstrapIntegrationTest {
         admin.deleteRecords(Map.of(purged, org.apache.kafka.clients.admin.RecordsToDelete.beforeOffset(end)))
                 .all().get(30, TimeUnit.SECONDS);
 
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> Parsley.start(config("lostp"), p),
                 "one purged changelog partition is the whole loss for its task and must refuse");
-        assertEquals(ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertEquals(FailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
         assertTrue(e.getMessage().contains("partition 1"),
                 "the diagnosis names the emptied partition: " + e.getMessage());
     }
@@ -651,12 +650,12 @@ class BootstrapIntegrationTest {
         try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, "boot-boot")) {
             committer.join(Set.of("boot-in"), Duration.ofSeconds(30));
             committer.commit(Map.of(new TopicPartition("boot-in", 0),
-                    new OffsetAndMetadata(0, ParsleyRuntime.BOOTSTRAP_OFFSET_STAMP)));
+                    new OffsetAndMetadata(0, StreamsRuntime.BOOTSTRAP_OFFSET_STAMP)));
         }
 
         Channel<String, String> in = Channel.of("boot-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("boot")
+        Process p = Process.named("boot")
                 .receives(in, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -679,7 +678,7 @@ class BootstrapIntegrationTest {
     @Test
     void aDeclaredTopicThatDoesNotExistRefusesToStartNamingTheResolutionFailure() {
         Channel<String, String> in = Channel.of("nx-never-created", Serdes.String(), Serdes.String());
-        ProcessDefinition p = ProcessDefinition.named("nx")
+        Process p = Process.named("nx")
                 .receives(in, (d, s) -> Effects.none())
                 .build();
 
@@ -702,7 +701,7 @@ class BootstrapIntegrationTest {
         UUID aId = topicId("st-a");
         Channel<String, String> a = Channel.of("st-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("st-b", Serdes.String(), Serdes.String());
-        ProcessDefinition both = ProcessDefinition.named("st")
+        Process both = Process.named("st")
                 .receives(a, (d, s) -> Effects.none())
                 .receives(b, (d, s) -> Effects.none())
                 .build();
@@ -712,12 +711,12 @@ class BootstrapIntegrationTest {
             awaitCommitted("st-st", "st-b", 1);
         }
 
-        ProcessDefinition withoutB = ProcessDefinition.named("st")
+        Process withoutB = Process.named("st")
                 .receives(a, (d, s) -> Effects.none())
                 .build();
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> Parsley.start(config("st"), withoutB));
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES, e.reason());
+        assertEquals(FailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES, e.reason());
     }
 
     /** Width changing restart is refused with the accurate diagnosis. */
@@ -727,7 +726,7 @@ class BootstrapIntegrationTest {
         Channel<String, String> wide = Channel.of("mp-in", Serdes.String(), Serdes.String());
         Channel<String, String> narrow = Channel.of("mp-single", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition both = ProcessDefinition.named("mp")
+        Process both = Process.named("mp")
                 .receives(wide, (d, s) -> {
                     delivered.add("mp-in[" + d.partition() + "]=" + d.value());
                     return Effects.none();
@@ -749,12 +748,12 @@ class BootstrapIntegrationTest {
                     "multi-task operation: each partition's task delivers its own channel");
         }
 
-        ProcessDefinition narrowOnly = ProcessDefinition.named("mp")
+        Process narrowOnly = Process.named("mp")
                 .receives(narrow, (d, s) -> Effects.none())
                 .build();
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> Parsley.start(config("mp"), narrowOnly));
-        assertEquals(ParsleyFailClosedException.Reason.TASK_WIDTH_CHANGED, e.reason(),
+        assertEquals(FailClosedException.Reason.TASK_WIDTH_CHANGED, e.reason(),
                 "the width change is parsley's condition to name, with a remedy that does not destroy state");
     }
 }

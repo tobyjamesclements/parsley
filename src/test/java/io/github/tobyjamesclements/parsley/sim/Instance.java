@@ -5,7 +5,7 @@ import java.util.Set;
 
 import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
-import io.github.tobyjamesclements.parsley.core.HeaderKV;
+import io.github.tobyjamesclements.parsley.core.Header;
 
 /**
  * One execution of a simulated process, with the state it keeps across restarts.
@@ -16,7 +16,7 @@ public final class Instance {
     final String uid;
     final byte[] key;
     final byte[] value;
-    final List<HeaderKV> headers;
+    final List<Header> headers;
     final Causes meta;
     final Set<Instance> trueCauses;
     /**
@@ -28,7 +28,7 @@ public final class Instance {
     final long timestamp;
 
     Instance(ChannelId channel, long position, String uid, byte[] key, byte[] value,
-             List<HeaderKV> headers, Causes meta, Set<Instance> trueCauses) {
+             List<Header> headers, Causes meta, Set<Instance> trueCauses) {
         this.channel = channel;
         this.position = position;
         this.timestamp = 1_000_000_000L + (uid.hashCode() & 0xFFFF) * 1_000L + (position * 7L) % 1_000L;

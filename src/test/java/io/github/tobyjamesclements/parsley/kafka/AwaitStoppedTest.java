@@ -18,14 +18,14 @@ class AwaitStoppedTest {
     /** Nothing has stopped: the bounded wait elapses and reports so. */
     @Test
     void theWaitElapsesWhileNothingHasStopped() throws Exception {
-        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        StreamsRuntime runtime = new StreamsRuntime(null);
         assertFalse(runtime.awaitStopped(Duration.ofMillis(50)), "no process has stopped and the runtime is open");
     }
 
     /** A recorded failure ends the wait. */
     @Test
     void aProcessFailureEndsTheWait() throws Exception {
-        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        StreamsRuntime runtime = new StreamsRuntime(null);
         Thread waiter = new Thread(() -> {
             try {
                 runtime.awaitStopped();
@@ -42,7 +42,7 @@ class AwaitStoppedTest {
     /** Closing the runtime ends the wait. */
     @Test
     void closingTheRuntimeEndsTheWait() throws Exception {
-        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        StreamsRuntime runtime = new StreamsRuntime(null);
         runtime.close();
         assertTrue(runtime.awaitStopped(Duration.ofMillis(50)), "a closed runtime has nothing left to wait for");
     }

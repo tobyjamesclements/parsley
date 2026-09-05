@@ -40,12 +40,10 @@ earliest where the ordering state covers nothing on the channel.
 ## Observing a process
 
 `Parsley.status()` reports each process's lifecycle state and, when it has stopped to
-preserve the guarantee, the refusal and its diagnosis. For a running process it also reports
-each task's delivery state: what is held, which cause each head is waiting for, and the size
-of the causal frontier every emission carries ([Failing closed](failing-closed.md#diagnosis)).
-The snapshot is taken on the task's thread once per status interval
-(`ParsleyConfig.statusInterval`) and asks nothing of a broker, so the call itself never
-touches a stream thread or a broker.
+preserve the guarantee, the refusal and its diagnosis
+([Failing closed](failing-closed.md#diagnosis)). The call asks nothing of a broker or a
+stream thread. What a task holds is not reported; it is read from the ordering changelog
+([Runbooks](runbooks.md#a-message-is-held-and-not-moving)).
 
 ## Configuration lockdown
 
@@ -62,10 +60,10 @@ committed positions, log starts and topic identity is gone (D115). A cause names
 of a committed record, so receiving that record is what satisfies it, and the positions
 between records that yield no message are settled by receipt of the next record on the
 channel. The one question a task puts to the substrate is asked at its initialisation —
-`ParsleyProcessor.init`, which Kafka Streams runs on the stream thread inside the rebalance,
+`ProcessNode.init`, which Kafka Streams runs on the stream thread inside the rebalance,
 at every creation and re-creation of the task.
 
-There, `ParsleyProcessor.init` asks a `TopicIdentitySource` — in production
+There, `ProcessNode.init` asks a `TopicIdentitySource` — in production
 `AdminTopicIdentitySource`, backed by the admin client — about every topic id the task's state
 names: the received topics at the identities resolved at start, and every topic in the
 restored frontier. Each id is described by id. One that resolves is alive, and its name is
@@ -79,8 +77,8 @@ learned is never confirmed dead: it lingers in the frontier, costing expression 
 never safety. A describe failure that is not the substrate's unknown-topic answer — a timeout,
 an outage, whether by id or by name mid-corroboration — is not evidence about any id: the
 initialisation proceeds with a warning, every cause and every hold stays, and the question
-stays pending — the status punctuation asks it again until it is answered, backing off from
-one status interval to a minute since each attempt can hold the stream thread for the
+stays pending — the punctuation asks it again until it is answered, backing off from one
+second to a minute since each attempt can hold the stream thread for the
 describes' shared ten-second deadline, and the answer is applied as the initialisation's
 would have been. The check is event-driven and eventual, never periodic.
 
@@ -108,14 +106,12 @@ the next task initialisation and not before, which is what the assumption signs 
 the start then refuses `CHANNEL_IDENTITY_CHANGED` for a recreated topic, refuses a
 still-missing one at resolution, and resumes where a broker's metadata merely lagged.
 
-## The status punctuation
+## The punctuation
 
-Each task schedules one wall-clock punctuation, every `ParsleyConfig.statusInterval` — one
-second by default; the builder refuses a null, non-positive or sub-millisecond value. It
-drains what receipt, or the initialisation's identity report, already released; flushes holds
-to the ordering store, so a message held at the moment of a crash is still held after the
-restart (D102); observes the frontier for the once-only warning at 80% of the metadata budget
-(D53); and publishes the task's `TaskStatus` for `status()` (D103). It touches no broker and
+Each task schedules one wall-clock punctuation, every second. It drains what receipt, or the
+initialisation's identity report, already released; flushes holds to the ordering store, so
+a message held at the moment of a crash is still held after the restart (D102); and asks the
+identity question again where an initialisation's went unanswered. It touches no broker and
 ingests nothing.
 
 The punctuation delivers nothing that was not received from a channel, and the decision it
@@ -130,18 +126,18 @@ fences and aborts, so it has not occurred.
 ## The seam
 
 ```java
-Effects handle(Delivery<K, V> delivery, StateReader state)
+Effects handle(Delivery<K, V> delivery, State state)
 ```
 
-`Delivery` carries the delivered message. `StateReader` is a read-only typed view over the
+`Delivery` carries the delivered message. `State` is a read-only typed view over the
 process's declared stores. Effects return through the return value: typed sends, statically
 typed per channel, and state writes.
 
 The logic receives no other capability. Sending never blocks on the deliverability of the
-message sent. Emissions are stamped with the current frontier and forwarded within the step.
-An emission carries the delivered message's timestamp unless the handler gives it one of its
+message sent. Sends are stamped with the current frontier and forwarded within the step.
+A send carries the delivered message's timestamp unless the handler gives it one of its
 own; time-based retention and downstream event-time windows read that timestamp, so a
-message emitted long after the one it answers — the release at the end of a compensation
+message sent long after the one it answers — the release at the end of a compensation
 chain — may want its own, derived from delivered data rather than a clock, since a handler
 may run again for the same message and must return the same effects.
 
@@ -153,12 +149,12 @@ other, so a key is found only if the delivering topic was keyed so that the same
 put it on *p*. Two topics received by one process must therefore be partitioned alike where
 their keys are meant to meet, and producers outside Parsley must partition by the same rule
 — Kafka's default, unless every writer agrees on another. To keep state about a different
-attribute than the delivered key, emit a message keyed by that attribute to a topic this or
+attribute than the delivered key, send a message keyed by that attribute to a topic this or
 another process receives; a channel a process both sends to and receives from is a
 repartition. Received topics may have unequal partition counts; a task beyond a topic's width
 receives nothing from it.
 
 A handler that throws fails its step. The process stops, and on restart is fed the same
 message and fails again: Parsley never skips a message. To continue past an application
-failure, catch it and return effects that record it deterministically — an emission to a
+failure, catch it and return effects that record it deterministically — a send to a
 declared dead-letter channel, or a state write — rather than throwing.

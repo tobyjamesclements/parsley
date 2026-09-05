@@ -50,7 +50,7 @@ class PriorStateDeterminationTest {
         AtomicInteger describes = new AtomicInteger();
 
         IllegalStateException refusal = assertThrows(IllegalStateException.class,
-                () -> ParsleyRuntime.describeChangelogCorroborated(APP, () -> {
+                () -> StreamsRuntime.describeChangelogCorroborated(APP, () -> {
                     describes.incrementAndGet();
                     throw outage;
                 }, NO_BACKOFF),
@@ -78,7 +78,7 @@ class PriorStateDeterminationTest {
     void absenceIsConcludedOnlyFromThreeConsistentUnknownAnswers() {
         AtomicInteger describes = new AtomicInteger();
 
-        var verdict = ParsleyRuntime.describeChangelogCorroborated(APP, () -> {
+        var verdict = StreamsRuntime.describeChangelogCorroborated(APP, () -> {
             describes.incrementAndGet();
             throw new ExecutionException(new UnknownTopicOrPartitionException("scripted unknown"));
         }, NO_BACKOFF);
@@ -102,7 +102,7 @@ class PriorStateDeterminationTest {
                 ProcessTopology.changelogName(APP, ProcessTopology.ORDERING_STORE), Uuid.randomUuid(), 2);
         AtomicInteger describes = new AtomicInteger();
 
-        var verdict = ParsleyRuntime.describeChangelogCorroborated(APP, () -> {
+        var verdict = StreamsRuntime.describeChangelogCorroborated(APP, () -> {
             if (describes.incrementAndGet() == 1) {
                 throw new ExecutionException(new UnknownTopicOrPartitionException("scripted lagging view"));
             }
@@ -128,7 +128,7 @@ class PriorStateDeterminationTest {
     @Test
     void interruptionBetweenAttemptsRefusesAndPreservesTheInterrupt() {
         assertRefusesWhenInterrupted(
-                () -> ParsleyRuntime.describeChangelogCorroborated(APP, () -> {
+                () -> StreamsRuntime.describeChangelogCorroborated(APP, () -> {
                     throw new ExecutionException(new UnknownTopicOrPartitionException("scripted unknown"));
                 }, NO_BACKOFF),
                 APP + ": interrupted while determining prior state; refusing to start");

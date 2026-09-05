@@ -8,10 +8,12 @@ import org.apache.kafka.streams.Topology;
 import org.apache.kafka.streams.state.Stores;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 
-import io.github.tobyjamesclements.parsley.api.KafkaNames;
-import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
+import io.github.tobyjamesclements.parsley.api.Channel;
+import io.github.tobyjamesclements.parsley.api.Parsley;
+import io.github.tobyjamesclements.parsley.api.Process;
 import io.github.tobyjamesclements.parsley.api.Store;
 
 /**
@@ -26,7 +28,7 @@ import io.github.tobyjamesclements.parsley.api.Store;
 final class ProcessTopology {
 
     /** Name of the store holding ordering state. */
-    static final String ORDERING_STORE = Store.RESERVED_PREFIX + "ordering";
+    static final String ORDERING_STORE = Parsley.RESERVED_PREFIX + "ordering";
     private static final String PROCESSOR = "process";
 
     private ProcessTopology() {
@@ -38,23 +40,12 @@ final class ProcessTopology {
      * topic the processor hands to serializers — composes it here, so the spelling cannot
      * drift: a diverging serde topic would silently change schema-registry subjects.
      *
-     * <p>Each component is validated at declaration, but only here are they composed; a
-     * composite beyond Kafka's limit would otherwise fail deep inside Streams
-     * internal-topic creation.
-     *
      * @param applicationId the process's Kafka application id
      * @param storeName     a declared store name, or {@link #ORDERING_STORE}
      * @return the changelog topic name
-     * @throws IllegalArgumentException if the composite exceeds Kafka's topic-name limit
      */
     static String changelogName(String applicationId, String storeName) {
-        String changelog = applicationId + "-" + storeName + "-changelog";
-        if (changelog.length() > KafkaNames.MAX_TOPIC_NAME_LENGTH) {
-            throw new IllegalArgumentException("changelog topic name '" + changelog + "' exceeds"
-                    + " Kafka's " + KafkaNames.MAX_TOPIC_NAME_LENGTH + "-character limit; shorten"
-                    + " the applicationIdPrefix, process name or store name");
-        }
-        return changelog;
+        return applicationId + "-" + storeName + "-changelog";
     }
 
     /**
@@ -78,6 +69,26 @@ final class ProcessTopology {
     }
 
     /**
+     * Returns the topics a process receives, in declaration order.
+     *
+     * @param process the process
+     * @return the received topic names, in declaration order
+     */
+    static List<String> inputTopics(Process process) {
+        return process.inputs().stream().map(input -> input.channel().topic()).toList();
+    }
+
+    /**
+     * Returns the topics a process may send on, in declaration order.
+     *
+     * @param process the process
+     * @return the send topic names, in declaration order
+     */
+    static List<String> outputTopics(Process process) {
+        return process.outputs().stream().map(Channel::topic).toList();
+    }
+
+    /**
      * @param topic a received topic
      * @return the topology node name for its source
      */
@@ -94,36 +105,18 @@ final class ProcessTopology {
     }
 
     /**
-     * Builds a topology with the default metadata budget, no start positions, and fresh
-     * diagnostics.
+     * Builds a topology with the default metadata budget and no start positions.
      *
-     * @param definition     the process to build
-     * @param topics         resolved identity and width for every topic it uses
-     * @param identitySource where topic identity is checked at task initialisation
-     * @param statusInterval how often each task publishes its status
+     * @param definition          the process to build
+     * @param topics              resolved identity and width for every topic it uses
+     * @param identitySource      where topic identity is checked at task initialisation
+     * @param punctuationInterval how often each task runs its punctuation
      * @return the topology
      */
-    static Topology build(ProcessDefinition definition, Map<String, TopicInfo> topics,
-                          TopicIdentitySource identitySource, Duration statusInterval) {
-        return build(definition, topics, identitySource, statusInterval, new ProcessDiagnostics());
-    }
-
-    /**
-     * Builds a topology with the default metadata budget and no start positions, publishing
-     * task status into {@code diagnostics}.
-     *
-     * @param definition     the process to build
-     * @param topics         resolved identity and width for every topic it uses
-     * @param identitySource where topic identity is checked at task initialisation
-     * @param statusInterval how often each task publishes its status
-     * @param diagnostics    where each task publishes its status
-     * @return the topology
-     */
-    static Topology build(ProcessDefinition definition, Map<String, TopicInfo> topics,
-                          TopicIdentitySource identitySource, Duration statusInterval,
-                          ProcessDiagnostics diagnostics) {
-        return build(definition, topics, identitySource, Map.of(), statusInterval,
-                io.github.tobyjamesclements.parsley.core.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES, diagnostics);
+    static Topology build(Process definition, Map<String, ResolvedTopic> topics,
+                          TopicIdentitySource identitySource, Duration punctuationInterval) {
+        return build(definition, topics, identitySource, Map.of(), punctuationInterval,
+                io.github.tobyjamesclements.parsley.core.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES);
     }
 
     /**
@@ -134,24 +127,22 @@ final class ProcessTopology {
      * @param identitySource      where topic identity is checked at task initialisation
      * @param startPositions      per received partition, the position the host feeds first,
      *                            as the bootstrap established it
-     * @param statusInterval      how often each task publishes its status
+     * @param punctuationInterval how often each task runs its punctuation
      * @param metadataBudgetBytes the largest causal metadata a message may carry
-     * @param diagnostics         where each task publishes its status, read by
-     *                            {@code ParsleyRuntime.status()}
      * @return the topology
      */
-    static Topology build(ProcessDefinition definition, Map<String, TopicInfo> topics,
+    static Topology build(Process definition, Map<String, ResolvedTopic> topics,
                           TopicIdentitySource identitySource, Map<TopicPartition, Long> startPositions,
-                          Duration statusInterval, int metadataBudgetBytes, ProcessDiagnostics diagnostics) {
+                          Duration punctuationInterval, int metadataBudgetBytes) {
         Topology topology = new Topology();
-        String[] sources = definition.receivedTopics().stream().map(ProcessTopology::sourceName).toArray(String[]::new);
-        for (String topic : definition.receivedTopics()) {
+        String[] sources = inputTopics(definition).stream().map(ProcessTopology::sourceName).toArray(String[]::new);
+        for (String topic : inputTopics(definition)) {
             topology.addSource(sourceName(topic), new ByteArrayDeserializer(), new ByteArrayDeserializer(), topic);
         }
         topology.addProcessor(PROCESSOR,
-                () -> new ParsleyProcessor(definition, topics, identitySource, startPositions,
-                        statusInterval, metadataBudgetBytes, diagnostics), sources);
-        for (String topic : definition.sendTopics()) {
+                () -> new ProcessNode(definition, topics, identitySource, startPositions,
+                        punctuationInterval, metadataBudgetBytes), sources);
+        for (String topic : outputTopics(definition)) {
             topology.addSink(sinkName(topic), topic, new ByteArraySerializer(), new ByteArraySerializer(), PROCESSOR);
         }
 

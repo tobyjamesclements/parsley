@@ -14,9 +14,9 @@ import java.util.stream.Collectors;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.DeliverableMessage;
-import io.github.tobyjamesclements.parsley.core.HeaderKV;
+import io.github.tobyjamesclements.parsley.core.Header;
 import io.github.tobyjamesclements.parsley.core.IdentityReport;
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 import io.github.tobyjamesclements.parsley.core.ProcessEngine;
 import io.github.tobyjamesclements.parsley.core.ReceivedMessage;
 import io.github.tobyjamesclements.parsley.sim.SimWorld.SimChannel;
@@ -57,7 +57,7 @@ public final class SimProcess {
     private final SimLogic logic;
 
     private ProcessEngine engine;
-    private ParsleyFailClosedException failure;
+    private FailClosedException failure;
     private Object openTxn;
     private final List<Oracle.Sent> stepAppends = new ArrayList<>();
     private final Map<ChannelId, Long> committedNextRead = new HashMap<>();
@@ -123,14 +123,14 @@ public final class SimProcess {
         received.keySet().forEach(id -> startPositions.put(id, committedNextRead.get(id)));
         try {
             engine = EngineTestFactory.create(name, names, store, sabotage, startPositions);
-        } catch (ParsleyFailClosedException e) {
+        } catch (FailClosedException e) {
             store.rollback();
             throw e;
         }
         oracle.onStart(name);
         try {
             reportIdentity();
-        } catch (ParsleyFailClosedException e) {
+        } catch (FailClosedException e) {
             // A refused initialisation leaves no running process behind it: the partial
             // report's writes are rolled back with the open step, as the host's failed
             // task initialisation leaves nothing committed.
@@ -163,7 +163,7 @@ public final class SimProcess {
         engine = null;
     }
 
-    public void failClosed(ParsleyFailClosedException e) {
+    public void failClosed(FailClosedException e) {
         crash();
         failure = e;
     }
@@ -172,7 +172,7 @@ public final class SimProcess {
         return failure != null;
     }
 
-    public ParsleyFailClosedException failure() {
+    public FailClosedException failure() {
         return failure;
     }
 
@@ -230,7 +230,7 @@ public final class SimProcess {
      * Feeds the next message of a channel, or reports that none is fetchable. A read
      * position below the channel's earliest retained position is the substrate's to refuse
      * (D9's {@code auto.offset.reset=none}): the host raises {@code POSITIONS_DISCARDED_UNREAD}
-     * for the fetch, exactly as {@code ParsleyRuntime.classifyFailure} names the consumer's
+     * for the fetch, exactly as {@code StreamsRuntime.classifyFailure} names the consumer's
      * out-of-range stop, and the engine never sees the discarded positions.
      */
     public FeedResult feedOne(SimChannel channel) {
@@ -245,7 +245,7 @@ public final class SimProcess {
                 position = channel.logStart;
                 workingNextRead.put(id, position);
             } else {
-                throw new ParsleyFailClosedException(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
+                throw new FailClosedException(FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
                         "process " + name + ": the substrate no longer retains this process's read position "
                                 + position + " on " + channel.name + " (earliest retained " + channel.logStart
                                 + "); positions were discarded before they were read (SPEC Safety 8)");
@@ -332,7 +332,7 @@ public final class SimProcess {
         }
     }
 
-    private static boolean headersEqual(List<HeaderKV> actual, List<HeaderKV> expected) {
+    private static boolean headersEqual(List<Header> actual, List<Header> expected) {
         if (actual.size() != expected.size()) {
             return false;
         }
@@ -346,7 +346,7 @@ public final class SimProcess {
     }
 
     private void send(SimChannel target, String uid) {
-        byte[] causesHeader = engine.causesHeaderForEmission();
+        byte[] causesHeader = engine.causesHeaderForSend();
         Set<Instance> trueCauses = oracle.causalPastSnapshot(name);
         Map<ChannelId, Long> upperBound = oracle.expressionUpperBound(name);
 
@@ -371,7 +371,7 @@ public final class SimProcess {
         });
         long position = world.appendPending(target, openTxn, (channelId, pos) -> new Instance(
                 channelId, pos, uid, uid.getBytes(), uid.getBytes(),
-                List.of(new HeaderKV(CausesCodec.HEADER_KEY, causesHeader)), meta, trueCauses));
+                List.of(new Header(CausesCodec.HEADER_KEY, causesHeader)), meta, trueCauses));
         stepAppends.add(new Oracle.Sent(
                 ((SimWorld.PendingSlot) world.slot(target, position)).instance(), upperBound, lastAssigned,
                 excused));
@@ -381,7 +381,7 @@ public final class SimProcess {
         try {
             return CausesCodec.decode(causesHeader);
         } catch (CausesCodec.UndecodableMetadataException e) {
-            throw new AssertionError("engine emitted an undecodable causes header", e);
+            throw new AssertionError("engine sent an undecodable causes header", e);
         }
     }
 

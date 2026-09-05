@@ -8,7 +8,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Map;
 
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -31,30 +31,30 @@ class SubstrateDetectedStopStatusTest {
     /** The consumer-level Safety 8 stop carries POSITIONS_DISCARDED_UNREAD. */
     @Test
     void offsetOutOfRangeStopCarriesThePositionsDiscardedUnreadReasonIntoStatus() {
-        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        StreamsRuntime runtime = new StreamsRuntime(null);
         Throwable streamsWrapped = new StreamsException("stream thread died",
                 new KafkaException("client failed",
                         new OffsetOutOfRangeException(Map.of(new TopicPartition("orders", 0), 5L))));
 
         runtime.recordFailure("p", streamsWrapped);
 
-        ParsleyFailClosedException refusal = ParsleyFailClosedException.findIn(runtime.recordedFailure("p"));
+        FailClosedException refusal = FailClosedException.findIn(runtime.recordedFailure("p"));
         assertNotNull(refusal, "a Safety 8 stop detected by the consumer must reach status() as a refusal,"
                 + " not as an undiagnosed transient (Operational 1)");
-        assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, refusal.reason(),
+        assertEquals(FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, refusal.reason(),
                 "the consumer's out-of-range stop is the engine's discarded-unread refusal");
     }
 
     /** A record beyond the substrate's size limit carries SUBSTRATE_MISCONFIGURED. */
     @Test
     void recordTooLargeStopCarriesTheSubstrateMisconfiguredReasonIntoStatus() {
-        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        StreamsRuntime runtime = new StreamsRuntime(null);
         runtime.recordFailure("p", new StreamsException("stream thread died",
                 new org.apache.kafka.common.errors.RecordTooLargeException("too large")));
-        ParsleyFailClosedException refusal = ParsleyFailClosedException.findIn(runtime.recordedFailure("p"));
+        FailClosedException refusal = FailClosedException.findIn(runtime.recordedFailure("p"));
         assertNotNull(refusal, "a size limit the changelog cannot take is a substrate configuration the guarantee"
                 + " cannot survive, and recurs identically until it changes");
-        assertEquals(ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED, refusal.reason(),
+        assertEquals(FailClosedException.Reason.SUBSTRATE_MISCONFIGURED, refusal.reason(),
                 "a record too large for the changelog is a substrate limit, not a transient");
         assertTrue(refusal.getMessage().contains("max.message.bytes"), refusal.getMessage());
     }
@@ -66,23 +66,23 @@ class SubstrateDetectedStopStatusTest {
      */
     @Test
     void aMissingSourceTopicStaysATransientWithNoRefusalReason() {
-        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        StreamsRuntime runtime = new StreamsRuntime(null);
         StreamsException stop = new StreamsException("stream thread died",
                 new org.apache.kafka.streams.errors.MissingSourceTopicException(
                         "One or more source topics were missing during rebalance"));
         runtime.recordFailure("p", stop);
         assertSame(stop, runtime.recordedFailure("p"),
                 "the stop is recorded — status() and awaitStopped depend on it — merely without a reason");
-        assertNull(ParsleyFailClosedException.findIn(runtime.recordedFailure("p")),
+        assertNull(FailClosedException.findIn(runtime.recordedFailure("p")),
                 "a missing source topic is diagnosed by the restart, so it must not read as a deliberate stop");
     }
 
     /** A stop a restart resolves stays transient: no refusal reason. */
     @Test
     void aPartitionShapeChangeStaysATransientWithNoRefusalReason() {
-        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        StreamsRuntime runtime = new StreamsRuntime(null);
         runtime.recordFailure("p", new StreamsException("invalid partitions: topic grew while running"));
-        assertNull(ParsleyFailClosedException.findIn(runtime.recordedFailure("p")),
+        assertNull(FailClosedException.findIn(runtime.recordedFailure("p")),
                 "a partition-shape change is re-resolved by a restart, so it must not read as a deliberate stop");
     }
 }

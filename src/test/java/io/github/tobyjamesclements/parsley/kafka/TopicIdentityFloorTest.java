@@ -4,7 +4,7 @@ import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
 
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -36,11 +36,11 @@ class TopicIdentityFloorTest {
      */
     @Test
     void zeroTopicIdRefusesToStartAsSubstrateMisconfigured() {
-        ParsleyFailClosedException refusal = assertThrows(ParsleyFailClosedException.class,
-                () -> ParsleyRuntime.requireTopicId("orders", description(Uuid.ZERO_UUID, 2)),
+        FailClosedException refusal = assertThrows(FailClosedException.class,
+                () -> StreamsRuntime.requireTopicId("orders", description(Uuid.ZERO_UUID, 2)),
                 "a description carrying the reserved zero topic ID must refuse, not resolve;"
                         + " below the broker floor channel identity does not exist");
-        assertEquals(ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED, refusal.reason(),
+        assertEquals(FailClosedException.Reason.SUBSTRATE_MISCONFIGURED, refusal.reason(),
                 "the refusal must carry SUBSTRATE_MISCONFIGURED, the reason supervisors key on");
         assertTrue(refusal.getMessage().contains("orders"),
                 "the refusal must name the topic the operator has to look at: " + refusal.getMessage());
@@ -50,16 +50,16 @@ class TopicIdentityFloorTest {
 
     /**
      * Catches the refusal over-reaching: a genuinely assigned topic ID must resolve to a
-     * {@link TopicInfo} carrying that identity and the described partition count — the
+     * {@link ResolvedTopic} carrying that identity and the described partition count — the
      * fixed view the process runs against.
      */
     @Test
     void aRealTopicIdResolvesToItsIdentityAndWidth() {
         Uuid id = Uuid.randomUuid();
 
-        TopicInfo info = ParsleyRuntime.requireTopicId("orders", description(id, 3));
+        ResolvedTopic info = StreamsRuntime.requireTopicId("orders", description(id, 3));
 
-        assertEquals(TopicInfo.toJavaUuid(id), info.topicId(),
+        assertEquals(ResolvedTopic.toJavaUuid(id), info.topicId(),
                 "the resolved view must carry the broker-assigned identity unchanged");
         assertEquals(3, info.partitions(),
                 "the resolved view must carry the described partition count");

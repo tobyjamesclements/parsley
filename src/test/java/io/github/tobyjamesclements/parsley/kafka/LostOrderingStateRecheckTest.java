@@ -10,7 +10,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -36,12 +36,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class LostOrderingStateRecheckTest {
     private static final String APP = "app-shipper";
     private static final TopicPartition IN0 = new TopicPartition("orders", 0);
-    private static final ParsleyRuntime.ChangelogView NO_RECORDS =
-            new ParsleyRuntime.ChangelogView(Map.of(), Set.of());
+    private static final StreamsRuntime.ChangelogView NO_RECORDS =
+            new StreamsRuntime.ChangelogView(Map.of(), Set.of());
     private static final OffsetAndMetadata STREAMS_STAMPED = new OffsetAndMetadata(5, "streams/v1");
 
-    private static ParsleyRuntime.ChangelogView viewWithRecordsIn(int partition) {
-        return new ParsleyRuntime.ChangelogView(Map.of(), Set.of(partition));
+    private static StreamsRuntime.ChangelogView viewWithRecordsIn(int partition) {
+        return new StreamsRuntime.ChangelogView(Map.of(), Set.of(partition));
     }
 
     /**
@@ -53,9 +53,9 @@ class LostOrderingStateRecheckTest {
      */
     @Test
     void recordsAppearingOnTheRecheckRefuseAsRetryableNotStateLoss() {
-        ParsleyRuntime.RetryableStartException sibling =
-                assertThrows(ParsleyRuntime.RetryableStartException.class,
-                        () -> ParsleyRuntime.refuseLostOrderingState(APP, NO_RECORDS,
+        StreamsRuntime.RetryableStartException sibling =
+                assertThrows(StreamsRuntime.RetryableStartException.class,
+                        () -> StreamsRuntime.refuseLostOrderingState(APP, NO_RECORDS,
                                 Map.of(IN0, STREAMS_STAMPED), () -> Optional.of(viewWithRecordsIn(0))),
                         "records present on the second look mean a concurrent lifetime, not state"
                                 + " loss; the refusal must be the retryable transient");
@@ -78,12 +78,12 @@ class LostOrderingStateRecheckTest {
      */
     @Test
     void aRecheckStillShowingNoRecordsRefusesAsStateLossNamingTheEmptiedShape() {
-        ParsleyFailClosedException loss = assertThrows(ParsleyFailClosedException.class,
-                () -> ParsleyRuntime.refuseLostOrderingState(APP, NO_RECORDS,
+        FailClosedException loss = assertThrows(FailClosedException.class,
+                () -> StreamsRuntime.refuseLostOrderingState(APP, NO_RECORDS,
                         Map.of(IN0, STREAMS_STAMPED), () -> Optional.of(NO_RECORDS)),
                 "a corroborated recordless partition behind unstamped offsets is committed"
                         + " state lost and must refuse terminally");
-        assertEquals(ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, loss.reason(),
+        assertEquals(FailClosedException.Reason.ORDERING_STATE_LOST, loss.reason(),
                 "the refusal must carry ORDERING_STATE_LOST, the reason supervisors key on");
         assertTrue(loss.getMessage().contains("partition 0 of this process's ordering-store changelog"
                         + " holds no ordering records"),
@@ -102,12 +102,12 @@ class LostOrderingStateRecheckTest {
      */
     @Test
     void anAbsentChangelogOnTheRecheckRefusesAsStateLossNamingTheMissingTopic() {
-        ParsleyFailClosedException loss = assertThrows(ParsleyFailClosedException.class,
-                () -> ParsleyRuntime.refuseLostOrderingState(APP, NO_RECORDS,
+        FailClosedException loss = assertThrows(FailClosedException.class,
+                () -> StreamsRuntime.refuseLostOrderingState(APP, NO_RECORDS,
                         Map.of(IN0, STREAMS_STAMPED), Optional::empty),
                 "unstamped offsets with no changelog topic behind them are committed state"
                         + " lost and must refuse terminally");
-        assertEquals(ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, loss.reason(),
+        assertEquals(FailClosedException.Reason.ORDERING_STATE_LOST, loss.reason(),
                 "the refusal must carry ORDERING_STATE_LOST for the missing-topic shape too");
         assertTrue(loss.getMessage().contains("this process's ordering-store changelog does not exist"),
                 "the diagnosis must name the missing-topic shape, not the emptied one: "
@@ -122,8 +122,8 @@ class LostOrderingStateRecheckTest {
      */
     @Test
     void anUnstampedOffsetIsAttributedToExternalTooling() {
-        ParsleyFailClosedException loss = assertThrows(ParsleyFailClosedException.class,
-                () -> ParsleyRuntime.refuseLostOrderingState(APP, NO_RECORDS,
+        FailClosedException loss = assertThrows(FailClosedException.class,
+                () -> StreamsRuntime.refuseLostOrderingState(APP, NO_RECORDS,
                         Map.of(IN0, new OffsetAndMetadata(5)), Optional::empty),
                 "an offset with empty metadata over a recordless partition is the same loss"
                         + " shape, differently provenanced");
@@ -144,8 +144,8 @@ class LostOrderingStateRecheckTest {
     void bootstrapStampedOffsetsNeverTriggerTheRecheckOrTheRefusal() {
         AtomicInteger rechecks = new AtomicInteger();
 
-        assertDoesNotThrow(() -> ParsleyRuntime.refuseLostOrderingState(APP, NO_RECORDS,
-                        Map.of(IN0, new OffsetAndMetadata(0, ParsleyRuntime.BOOTSTRAP_OFFSET_STAMP)),
+        assertDoesNotThrow(() -> StreamsRuntime.refuseLostOrderingState(APP, NO_RECORDS,
+                        Map.of(IN0, new OffsetAndMetadata(0, StreamsRuntime.BOOTSTRAP_OFFSET_STAMP)),
                         () -> {
                             rechecks.incrementAndGet();
                             return Optional.empty();
@@ -167,7 +167,7 @@ class LostOrderingStateRecheckTest {
     void aPartitionWhoseRecordsWereInTheFirstViewPassesWithoutRecheck() {
         AtomicInteger rechecks = new AtomicInteger();
 
-        assertDoesNotThrow(() -> ParsleyRuntime.refuseLostOrderingState(APP, viewWithRecordsIn(0),
+        assertDoesNotThrow(() -> StreamsRuntime.refuseLostOrderingState(APP, viewWithRecordsIn(0),
                         Map.of(IN0, STREAMS_STAMPED), () -> {
                             rechecks.incrementAndGet();
                             return Optional.of(viewWithRecordsIn(0));

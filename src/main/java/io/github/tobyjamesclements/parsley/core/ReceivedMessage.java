@@ -19,7 +19,7 @@ public record ReceivedMessage(
         long timestamp,
         byte[] key,
         byte[] value,
-        List<HeaderKV> headers) {
+        List<Header> headers) {
     /**
      * Validates the position and copies the headers.
      *

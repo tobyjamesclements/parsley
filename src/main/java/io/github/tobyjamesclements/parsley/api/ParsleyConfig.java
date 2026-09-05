@@ -1,6 +1,5 @@
 package io.github.tobyjamesclements.parsley.api;
 
-import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
@@ -12,7 +11,7 @@ import java.util.Set;
  * set here. {@link Builder#streamsProperty} rejects those keys rather than silently ignoring
  * them, so a configuration that would weaken the guarantee fails at construction.
  *
- * @see Parsley#start(ParsleyConfig, ProcessDefinition...)
+ * @see Parsley#start(ParsleyConfig, Process...)
  */
 public final class ParsleyConfig {
 
@@ -49,17 +48,15 @@ public final class ParsleyConfig {
     private final String bootstrapServers;
     private final String applicationIdPrefix;
     private final String stateDir;
-    private final Duration statusInterval;
     private final int metadataBudgetBytes;
-    private final Map<String, Object> extraProperties;
+    private final Map<String, Object> streamsProperties;
 
     private ParsleyConfig(Builder builder) {
         this.bootstrapServers = builder.bootstrapServers;
         this.applicationIdPrefix = builder.applicationIdPrefix;
         this.stateDir = builder.stateDir;
-        this.statusInterval = builder.statusInterval;
         this.metadataBudgetBytes = builder.metadataBudgetBytes;
-        this.extraProperties = Map.copyOf(builder.extraProperties);
+        this.streamsProperties = Map.copyOf(builder.streamsProperties);
     }
 
     /**
@@ -69,10 +66,9 @@ public final class ParsleyConfig {
      * @param applicationIdPrefix prefix for each process's Kafka application id, which
      *                            identifies its committed state across restarts
      * @return a builder
-     * @throws IllegalArgumentException if {@code bootstrapServers} is null or blank, or
-     *         {@code applicationIdPrefix} does not satisfy
-     *         {@linkplain KafkaNames#isValidTopicName Kafka's topic-name rule} or contains
-     *         the reserved {@link Store#RESERVED_PREFIX} namespace, since it prefixes
+     * @throws IllegalArgumentException if {@code bootstrapServers} or
+     *         {@code applicationIdPrefix} is null or blank, or the prefix contains the
+     *         reserved {@link Parsley#RESERVED_PREFIX} namespace, since it prefixes
      *         application ids and changelog topic names
      */
     public static Builder builder(String bootstrapServers, String applicationIdPrefix) {
@@ -107,15 +103,6 @@ public final class ParsleyConfig {
     }
 
     /**
-     * Returns how often each task publishes its delivery state for {@link Parsley#status()}.
-     *
-     * @return how often each task publishes its status
-     */
-    public Duration statusInterval() {
-        return statusInterval;
-    }
-
-    /**
      * Returns the largest causal metadata a message may carry, in bytes.
      *
      * @return the largest causal metadata a message may carry, in bytes
@@ -129,8 +116,8 @@ public final class ParsleyConfig {
      *
      * @return additional Kafka Streams properties, none of them safety-bearing
      */
-    public Map<String, Object> extraProperties() {
-        return extraProperties;
+    public Map<String, Object> streamsProperties() {
+        return streamsProperties;
     }
 
     /** Accumulates configuration, rejecting anything that would weaken the guarantee. */
@@ -138,22 +125,19 @@ public final class ParsleyConfig {
         private final String bootstrapServers;
         private final String applicationIdPrefix;
         private String stateDir;
-        private Duration statusInterval = Duration.ofSeconds(1);
         private int metadataBudgetBytes = io.github.tobyjamesclements.parsley.core.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES;
-        private final Map<String, Object> extraProperties = new LinkedHashMap<>();
+        private final Map<String, Object> streamsProperties = new LinkedHashMap<>();
 
         private Builder(String bootstrapServers, String applicationIdPrefix) {
             if (bootstrapServers == null || bootstrapServers.isBlank()) {
                 throw new IllegalArgumentException("bootstrapServers must be non-blank");
             }
-            if (!KafkaNames.isValidTopicName(applicationIdPrefix)) {
-                throw new IllegalArgumentException("applicationIdPrefix must be a valid Kafka"
-                        + " topic-name component (" + KafkaNames.RULE + "), since it prefixes"
-                        + " application ids and changelog topic names: " + applicationIdPrefix);
+            if (applicationIdPrefix == null || applicationIdPrefix.isBlank()) {
+                throw new IllegalArgumentException("applicationIdPrefix must be non-blank");
             }
-            if (applicationIdPrefix.contains(Store.RESERVED_PREFIX)) {
+            if (applicationIdPrefix.contains(Parsley.RESERVED_PREFIX)) {
                 throw new IllegalArgumentException("applicationIdPrefix may not contain the"
-                        + " reserved namespace " + Store.RESERVED_PREFIX + ": it becomes part of"
+                        + " reserved namespace " + Parsley.RESERVED_PREFIX + ": it becomes part of"
                         + " application ids and changelog topic names, which would then sit inside"
                         + " parsley's own namespace: " + applicationIdPrefix);
             }
@@ -169,36 +153,6 @@ public final class ParsleyConfig {
          */
         public Builder stateDir(String stateDir) {
             this.stateDir = stateDir;
-            return this;
-        }
-
-        /**
-         * Sets how often each task publishes its delivery state for {@link Parsley#status()}.
-         *
-         * <p>The status snapshot is the only periodic work a task does. It touches no
-         * broker and settles nothing: a held message is released by receiving the message
-         * its cause names, never by the passage of time, so this interval bounds only how
-         * old a {@link TaskStatus} reading can be.
-         *
-         * @param statusInterval a positive duration
-         * @return this builder
-         * @throws IllegalArgumentException if {@code statusInterval} is null, zero or negative
-         */
-        public Builder statusInterval(Duration statusInterval) {
-            if (statusInterval == null) {
-                throw new IllegalArgumentException("statusInterval must be non-null");
-            }
-            if (statusInterval.isNegative() || statusInterval.isZero()) {
-                throw new IllegalArgumentException("statusInterval must be positive");
-            }
-            if (statusInterval.toMillis() < 1) {
-                // Kafka Streams punctuation has millisecond granularity; a finer value
-                // passes here only to crash the stream thread at task initialisation,
-                // unattributed, after the bootstrap has already committed (D87).
-                throw new IllegalArgumentException("statusInterval must be at least one millisecond: "
-                        + statusInterval.toNanos() + "ns cannot be scheduled");
-            }
-            this.statusInterval = statusInterval;
             return this;
         }
 
@@ -242,7 +196,7 @@ public final class ParsleyConfig {
             if (FORBIDDEN_KEYS.contains(key) || FORBIDDEN_SUFFIXES.stream().anyMatch(key::endsWith)) {
                 throw new IllegalArgumentException("property " + key + " is owned by parsley and cannot be overridden");
             }
-            extraProperties.put(key, value);
+            streamsProperties.put(key, value);
             return this;
         }
 

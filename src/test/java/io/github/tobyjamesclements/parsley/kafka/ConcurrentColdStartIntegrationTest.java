@@ -11,7 +11,6 @@ import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
-import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -22,7 +21,7 @@ import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Effects;
 import io.github.tobyjamesclements.parsley.api.Parsley;
 import io.github.tobyjamesclements.parsley.api.ParsleyConfig;
-import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
+import io.github.tobyjamesclements.parsley.api.Process;
 import io.github.tobyjamesclements.parsley.api.ProcessStatus;
 
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
@@ -59,13 +58,12 @@ class ConcurrentColdStartIntegrationTest {
     private static ParsleyConfig config(String prefix, String instance) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(prefix + "-" + instance).toString())
-                .statusInterval(Duration.ofMillis(500))
                 .build();
     }
 
-    private static ProcessDefinition definition(String topic) {
+    private static Process definition(String topic) {
         Channel<String, String> in = Channel.of(topic, Serdes.String(), Serdes.String());
-        return ProcessDefinition.named("cc").receives(in, (d, s) -> Effects.none()).build();
+        return Process.named("cc").receives(in, (d, s) -> Effects.none()).build();
     }
 
     /**
@@ -80,7 +78,7 @@ class ConcurrentColdStartIntegrationTest {
         admin.createTopics(List.of(new NewTopic("cc-single", 2, (short) 1))).all().get(30, TimeUnit.SECONDS);
         try (Parsley parsley = Parsley.start(config("ccs", "only"), definition("cc-single"))) {
             ProcessStatus immediately = parsley.status().get("cc");
-            assertNotEquals(ProcessStatus.State.STOPPED, immediately.state(),
+            assertNotEquals(ProcessStatus.Lifecycle.STOPPED, immediately.lifecycle(),
                     "start returns into a live host, never a stopped one");
             assertTrue(immediately.refusalReason().isEmpty(),
                     "nothing has been refused at start: " + immediately.failureDetail());
@@ -140,7 +138,7 @@ class ConcurrentColdStartIntegrationTest {
                             continue;
                         }
                         ProcessStatus status = p.status().get("cc");
-                        if (status.state() == ProcessStatus.State.REBALANCING) {
+                        if (status.lifecycle() == ProcessStatus.Lifecycle.REBALANCING) {
                             settled = false;
                         }
                     }
@@ -154,9 +152,9 @@ class ConcurrentColdStartIntegrationTest {
                         continue;
                     }
                     ProcessStatus status = instances[i].status().get("cc");
-                    if (status.state() != ProcessStatus.State.RUNNING) {
+                    if (status.lifecycle() != ProcessStatus.Lifecycle.RUNNING) {
                         failures.add("round " + round + " instance " + i + " not running after the settle window:"
-                                + " state=" + status.state() + " refusal=" + status.refusalReason() + " detail="
+                                + " state=" + status.lifecycle() + " refusal=" + status.refusalReason() + " detail="
                                 + status.failureDetail().map(d -> d.length() > 300 ? d.substring(0, 300) : d));
                     }
                 }

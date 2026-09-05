@@ -12,8 +12,8 @@ import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.EngineTestFactory.SabotageMode;
-import io.github.tobyjamesclements.parsley.core.HeaderKV;
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.Header;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 import io.github.tobyjamesclements.parsley.sim.SimWorld.SimChannel;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -68,7 +68,7 @@ class TargetedScenarioTest {
             byte[] header = CausesCodec.encode(Causes.of(meta));
             return world.appendExternal(target, (channel, pos) -> new Instance(
                     channel, pos, uid, uid.getBytes(), uid.getBytes(),
-                    List.of(new HeaderKV(CausesCodec.HEADER_KEY, header)), Causes.of(meta), causes));
+                    List.of(new Header(CausesCodec.HEADER_KEY, header)), Causes.of(meta), causes));
         }
 
         List<String> uidsDelivered(String process) {
@@ -283,7 +283,7 @@ class TargetedScenarioTest {
         rig.process("p", List.of(c1), List.of(), d -> List.of());
         rig.world.appendExternal(c1, (channel, pos) -> new Instance(
                 channel, pos, "garbage", null, "v".getBytes(),
-                List.of(new HeaderKV(CausesCodec.HEADER_KEY, new byte[] {99, 1, 2, 3})), Causes.none(), Set.of()));
+                List.of(new Header(CausesCodec.HEADER_KEY, new byte[] {99, 1, 2, 3})), Causes.none(), Set.of()));
         rig.external(c1, "after");
         return rig;
     }
@@ -294,8 +294,8 @@ class TargetedScenarioTest {
         Rig rig = undecodableMetadata(SabotageMode.NONE);
         SimProcess p = rig.proc("p");
         SimChannel c1 = rig.chans.get("c1");
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class, () -> p.feedOne(c1));
-        assertEquals(ParsleyFailClosedException.Reason.UNDECODABLE_METADATA, e.reason());
+        FailClosedException e = assertThrows(FailClosedException.class, () -> p.feedOne(c1));
+        assertEquals(FailClosedException.Reason.UNDECODABLE_METADATA, e.reason());
         assertEquals(List.of(), rig.uidsDelivered("p"), "a failure is never converted into a delivery");
     }
 
@@ -323,9 +323,9 @@ class TargetedScenarioTest {
     @Test
     void truncationBeyondReadPositionFailsClosed() {
         Rig rig = truncation(SabotageMode.NONE);
-        ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").feedOne(rig.chans.get("c1")));
-        assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, e.reason());
+        FailClosedException e =
+                assertThrows(FailClosedException.class, () -> rig.proc("p").feedOne(rig.chans.get("c1")));
+        assertEquals(FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, e.reason());
         assertEquals(List.of("m0", "m1"), rig.uidsDelivered("p"), "nothing delivers past the discarded positions");
     }
 
@@ -375,8 +375,8 @@ class TargetedScenarioTest {
     @Test
     void executionRemovingChannelWithHeldMessagesIsRefused() {
         Rig rig = removeChannelWithHeld(SabotageMode.NONE);
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").start());
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES, e.reason());
+        FailClosedException e = assertThrows(FailClosedException.class, () -> rig.proc("p").start());
+        assertEquals(FailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES, e.reason());
     }
 
     /** Channel leaving and rejoining does not redeliver. */
@@ -478,10 +478,10 @@ class TargetedScenarioTest {
     @Test
     void deletingAChannelWithUndeliveredHeldMessagesFailsClosed() {
         Rig rig = deadChannelWithHeldMessages(SabotageMode.NONE);
-        ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise(),
+        FailClosedException e =
+                assertThrows(FailClosedException.class, () -> rig.proc("p").reinitialise(),
                         "the identity report at re-initialisation must refuse");
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
+        assertEquals(FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
         assertEquals(List.of(), rig.uidsDelivered("p"), "nothing may deliver past the held message");
     }
 
@@ -507,7 +507,7 @@ class TargetedScenarioTest {
         byte[] header = CausesCodec.encode(Causes.of(blocked));
         rig.world.appendExternal(cx, (channel, pos) -> new Instance(
                 channel, pos, "X1", "X1".getBytes(), "X1".getBytes(),
-                List.of(new HeaderKV(CausesCodec.HEADER_KEY, header)), Causes.of(blocked), Set.of()));
+                List.of(new Header(CausesCodec.HEADER_KEY, header)), Causes.of(blocked), Set.of()));
         p.feedOne(cx);
         p.commitStep();
 
@@ -516,10 +516,10 @@ class TargetedScenarioTest {
         q.drain();
         q.commitStep();
 
-        ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise(),
+        FailClosedException e =
+                assertThrows(FailClosedException.class, () -> rig.proc("p").reinitialise(),
                         "the identity report at re-initialisation must refuse");
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
+        assertEquals(FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
         assertEquals(List.of("X0"), rig.uidsDelivered("p"));
         rig.oracle.finalChecks();
         assertEquals(List.of(), rig.oracle.violations(), "no safety violation: the refusal preserved causal order");
@@ -638,10 +638,10 @@ class TargetedScenarioTest {
     @Test
     void recreatedReceivedTopicFailsClosedAtTheNextInitialisation() {
         Rig rig = recreatedTopic(SabotageMode.NONE);
-        ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise(),
+        FailClosedException e =
+                assertThrows(FailClosedException.class, () -> rig.proc("p").reinitialise(),
                         "the identity report at re-initialisation must refuse");
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
+        assertEquals(FailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
         assertEquals(List.of("m0"), rig.uidsDelivered("p"), "delivery stops at the recreation, nothing is lost");
     }
 
@@ -662,7 +662,7 @@ class TargetedScenarioTest {
         byte[] header = CausesCodec.encode(Causes.of(meta));
         rig.world.appendExternal(c2, (channel, pos) -> new Instance(
                 channel, pos, "B", "B".getBytes(), "B".getBytes(),
-                List.of(new HeaderKV(CausesCodec.HEADER_KEY, header)), Causes.of(meta), Set.of()));
+                List.of(new Header(CausesCodec.HEADER_KEY, header)), Causes.of(meta), Set.of()));
 
         p.feedOne(c2);
         assertEquals(1, p.drain(), "the old incarnation is a different channel outside the received set");
@@ -728,7 +728,7 @@ class TargetedScenarioTest {
     void causesKnownOnlyFromHeldMetadataAreExpressedOnSends() {
         Rig rig = receiptCausesReexpressed(SabotageMode.NONE);
         assertEquals(List.of("E", "A1", "E>p>c3"), rig.uidsDelivered("q"),
-                "q must deliver A1 before p's emission, whose held-metadata cause binds it");
+                "q must deliver A1 before p's send, whose held-metadata cause binds it");
         rig.assertClean();
     }
 
@@ -782,7 +782,7 @@ class TargetedScenarioTest {
         return rig;
     }
 
-    /** Emissions express only delivered and received causes. */
+    /** Sends express only delivered and received causes. */
     @Test
     void emissionsExpressOnlyDeliveredAndReceivedCauses() {
         Rig rig = expressionUpperBound(SabotageMode.NONE);
@@ -804,10 +804,10 @@ class TargetedScenarioTest {
         p.drain();
         p.commitStep();
         rig.world.truncate(c1, 3);
-        ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> p.feedOne(c1),
+        FailClosedException e =
+                assertThrows(FailClosedException.class, () -> p.feedOne(c1),
                         "the fetch at the discarded position 2 must refuse");
-        assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, e.reason());
+        assertEquals(FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD, e.reason());
     }
 
     /** Truncation up to exactly the covered position is retention. */
@@ -885,8 +885,8 @@ class TargetedScenarioTest {
         byte[] header = CausesCodec.encode(Causes.of(meta));
         rig.world.appendExternal(c2, (channel, pos) -> new Instance(
                 channel, pos, "B", "Bk".getBytes(), "Bv".getBytes(),
-                List.of(new HeaderKV("app.header", new byte[] {7}),
-                        new HeaderKV(CausesCodec.HEADER_KEY, header)),
+                List.of(new Header("app.header", new byte[] {7}),
+                        new Header(CausesCodec.HEADER_KEY, header)),
                 Causes.of(meta), Set.of(a)));
 
         p.feedOne(c2);
@@ -912,7 +912,7 @@ class TargetedScenarioTest {
         assertEquals(without, deliveriesWithRestart(RestartMode.AFTER_COMMIT),
                 "a restart between steps must not be observable in deliveries or their order");
         assertEquals(without, deliveriesWithRestart(RestartMode.MID_STEP),
-                "a crash that discards uncommitted receipts, deliveries and emissions must not be observable either");
+                "a crash that discards uncommitted receipts, deliveries and sends must not be observable either");
     }
 
     private static List<String> deliveriesWithRestart(RestartMode mode) {

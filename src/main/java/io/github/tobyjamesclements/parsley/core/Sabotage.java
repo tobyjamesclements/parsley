@@ -39,7 +39,7 @@ record Sabotage(Set<Mode> modes) {
         /** Discard the message at position 3 of any channel as a duplicate. */
         SILENT_DROP,
 
-        /** Stamp emissions with assigned positions that are not causes. */
+        /** Stamp sends with assigned positions that are not causes. */
         OVEREXPRESS,
 
         /** Ignore a received channel whose topic was recreated under its name. */

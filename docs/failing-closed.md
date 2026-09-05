@@ -6,7 +6,7 @@ re-fails on restart, until an operator intervenes — with one recorded exceptio
 from the committed record without it recurring (the reason's row below, and its exception
 message, say so).
 
-A fail-closed event throws `ParsleyFailClosedException` out of the processor, which fails the
+A fail-closed event throws `FailClosedException` out of the processor, which fails the
 task's step. The transaction aborts, and nothing is delivered past the failure.
 
 ## Blast radius
@@ -36,7 +36,7 @@ This table says when each reason is raised. What an operator does about it is in
 | `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES` | A received topic was deleted while its messages remain held: the identity check at task initialisation finds the topic gone and the task still holds messages from it, whose place in causal order can no longer be preserved. With nothing held, the channel settles to its end instead |
 | `TASK_WIDTH_CHANGED` | The task count changed, so ordering state no longer matches its partitioning |
 | `UNKNOWN_ORDERING_STATE_FORMAT` | Stored state cannot be trusted: a format version this build cannot read, state present without its version entry (the changelog head has been lost), a corrupt entry — malformed key, wrong-length value, or a held blob whose lengths do not match its bytes — a restored frontier naming the reserved zero topic ID, or held messages restored out of position order |
-| `EMISSION_TO_UNDECLARED_CHANNEL` | A handler emitted on a topic outside its process's declared send set. Membership is by topic name: an emission on a declared topic is sent (serialized with the declared channel's serdes) whatever `Channel` instance carried it |
+| `SEND_TO_UNDECLARED_CHANNEL` | A handler sent on a topic outside its process's declared send set. Membership is by topic name: a send to a declared topic goes through, serialized with the declared channel's serdes, whatever `Channel` instance carried it |
 | `STATE_ACCESS_TO_UNDECLARED_STORE` | Application logic read or wrote a store its process never declared, or used a `Store` instance other than the declared one. Every effect target is validated before any write applies, so the refusal leaves no partial step behind — and a read refusal an application catch swallows is latched and rethrown at the delivery frame's next boundary (after the payload's deserializers, after the handler, and after the effects apply), so the step still fails wherever in the frame the read ran |
 | `RESERVED_HEADER_USED` | An application header used the reserved prefix |
 | `HANDLER_RETURNED_NULL_EFFECTS` | A handler returned `null` instead of `Effects`; return `Effects.none()` for a step that changes nothing |
@@ -76,21 +76,7 @@ runtime classifies it `SOURCE_TOPIC_MISSING`, and the restart then refuses
 when it resolves topics, or resumes where a broker's metadata merely lagged.
 
 A held message is not a failure. It means a cause has not arrived, and the diagnosis is which
-cause. `ProcessStatus.tasks()` carries that diagnosis for every task the instance runs: per
-channel with held messages, how many are held, the position of the head, and each cause the
-head is waiting for, named by topic and partition with the position required and the
-position the channel has settled to. It also carries the frontier's size in channels and
-bytes, against the metadata budget. A task refreshes its entry once per status interval, on
-its own thread, and retires it when it closes, so what the status shows is at most one
-interval old and never a task this instance no longer runs.
-
-A head with no blockers listed is deliverable and goes on the next drain — the next record
-fed, or the next status punctuation. A head whose blocker names a position the channel has
-settled below is waiting on that channel's feed. With the required position at or below the
-channel's end, the task has not reached the cause yet: lag, or a chain of holds. With it
-beyond the end, the cause is not produced yet — inside an open transaction — or the stamp is
-stale or forged. A required position no committed record occupies — a marker, an aborted
-batch's offset, the log-end offset at stamping time — is an out-of-contract cause, held until
-a later record on that channel arrives. A blocker whose settled position is empty names a
-channel the task starts at position 0 and has received nothing on yet. Turning a blocker's
-shape into an action is [a runbook](runbooks.md#a-message-is-held-and-not-moving).
+cause. The status does not carry it: a task's holds live in the ordering changelog, and the
+cause a head waits for is in the held record's own `parsley.causes` header. Reading them, and
+turning the cause's shape into an action, is
+[a runbook](runbooks.md#a-message-is-held-and-not-moving).

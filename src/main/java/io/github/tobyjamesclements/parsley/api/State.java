@@ -6,14 +6,14 @@ package io.github.tobyjamesclements.parsley.api;
  * <p>Reads are served from the shard of each store owned by the task delivering the
  * message: partition {@code p} of every received topic shares one shard, and a key is
  * found only if the delivering topic was keyed so that the same partitioner put it on
- * {@code p}. To keep state about a different attribute than the delivered key, emit a
+ * {@code p}. To keep state about a different attribute than the delivered key, send a
  * message keyed by that attribute to a topic this or another process receives — a
  * self-channel is a repartition. Producers outside Parsley must partition by the same rule.
  *
  * @see Handler
  * @see Effects
  */
-public interface StateReader {
+public interface State {
     /**
      * Reads one value.
      *
@@ -23,7 +23,7 @@ public interface StateReader {
      * @param <V>   value type
      * @return the stored value, or {@code null} when the key is absent
      * @throws IllegalArgumentException if {@code store} or {@code key} is null
-     * @throws io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException if
+     * @throws io.github.tobyjamesclements.parsley.core.FailClosedException if
      *         {@code store} is not the instance the process declared
      *         ({@code STATE_ACCESS_TO_UNDECLARED_STORE}), or the key or the stored value
      *         cannot be coded by the declared serdes; the refusal is latched, so the step

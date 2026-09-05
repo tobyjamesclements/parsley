@@ -29,11 +29,11 @@ import java.util.UUID;
 
 import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Effects;
-import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
+import io.github.tobyjamesclements.parsley.api.Process;
 import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -42,7 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Establishes what a task's initialisation does, by driving {@link ParsleyProcessor} directly
+ * Establishes what a task's initialisation does, by driving {@link ProcessNode} directly
  * through the revival path.
  *
  * <p>When a commit fails retriably, or a source topic goes missing, Kafka Streams keeps the
@@ -59,9 +59,9 @@ class ProcessorRevivalTest {
     private static final UUID IN1_ID = new UUID(200, 1);
     private static final UUID IN2_ID = new UUID(200, 2);
     private static final UUID FOREIGN_ID = new UUID(200, 9);
-    private static final Map<String, TopicInfo> TOPICS = Map.of(
-            "in1", new TopicInfo(IN1_ID, 1),
-            "in2", new TopicInfo(IN2_ID, 1));
+    private static final Map<String, ResolvedTopic> TOPICS = Map.of(
+            "in1", new ResolvedTopic(IN1_ID, 1),
+            "in2", new ResolvedTopic(IN2_ID, 1));
     private static final ChannelId IN1 = new ChannelId(IN1_ID, 0);
     private static final ChannelId IN2 = new ChannelId(IN2_ID, 0);
     private static final ChannelId FOREIGN = new ChannelId(FOREIGN_ID, 0);
@@ -71,15 +71,13 @@ class ProcessorRevivalTest {
 
     private final List<String> delivered = new ArrayList<>();
     private ScriptedTopicIdentity identity;
-    private ProcessDiagnostics diagnostics;
     private KeyValueStore<Bytes, byte[]> orderingStore;
-    private ParsleyProcessor processor;
+    private ProcessNode processor;
     private MockProcessorContext<byte[], byte[]> context;
 
     @BeforeEach
     void setUp() {
         identity = new ScriptedTopicIdentity();
-        diagnostics = new ProcessDiagnostics();
         processor = newProcessor(Map.of());
         context = newContext();
         orderingStore = Stores.keyValueStoreBuilder(
@@ -98,9 +96,26 @@ class ProcessorRevivalTest {
         orderingStore.close();
     }
 
-    private ParsleyProcessor newProcessor(Map<TopicPartition, Long> startPositions) {
-        return new ParsleyProcessor(twoInputRecorder(delivered), TOPICS, identity, startPositions,
-                Duration.ofMillis(100), 64 * 1024, diagnostics);
+    private ProcessNode newProcessor(Map<TopicPartition, Long> startPositions) {
+        return new ProcessNode(twoInputRecorder(delivered), TOPICS, identity, startPositions,
+                Duration.ofMillis(100), 64 * 1024);
+    }
+
+    /**
+     * How many channels the persisted frontier names: the frontier entries in the ordering
+     * store, which the engine writes on every merge and deletes on every prune.
+     */
+    private int frontierChannels() {
+        int channels = 0;
+        try (var entries = orderingStore.all()) {
+            while (entries.hasNext()) {
+                var entry = entries.next();
+                if (entry.key.get()[0] == 'c' && entry.value != null) {
+                    channels++;
+                }
+            }
+        }
+        return channels;
     }
 
     /** Re-initialisation cancels the previous punctuator instead of stacking a second one. */
@@ -139,7 +154,7 @@ class ProcessorRevivalTest {
 
     /**
      * A frontier topic the identity source reports deleted leaves the frontier at revival
-     * (SPEC Structural 13's one permitted discarding): the task's published frontier width
+     * (SPEC Structural 13's one permitted discarding): the persisted frontier
      * shrinks by that channel, and the received topics are untouched.
      */
     @Test
@@ -147,17 +162,17 @@ class ProcessorRevivalTest {
         feed("in1", 0L, "A", Map.of(FOREIGN, 7L));
         assertEquals(List.of("A"), delivered, "a cause on a channel this task does not receive never blocks");
         punctuate(context);
-        assertEquals(2, diagnostics.snapshot().get(0).frontierChannels(),
+        assertEquals(2, frontierChannels(),
                 "staging: the frontier names in1 (delivered) and the foreign channel (received cause)");
 
         identity.verdicts = new TopicIdentityVerdicts(Set.of(FOREIGN_ID), Set.of());
         revive(true);
-        assertEquals(1, diagnostics.snapshot().get(0).frontierChannels(),
+        assertEquals(1, frontierChannels(),
                 "the deleted topic's channel is pruned at the revival's identity report");
 
         identity.verdicts = TopicIdentityVerdicts.NONE;
         revive(true);
-        assertEquals(1, diagnostics.snapshot().get(0).frontierChannels(),
+        assertEquals(1, frontierChannels(),
                 "the prune reached the ordering store: a later revival with nothing to report does not"
                         + " restore the dead channel's cause");
     }
@@ -191,9 +206,9 @@ class ProcessorRevivalTest {
         assertEquals(List.of(), delivered, "staging: H waits on in2@3");
 
         identity.verdicts = new TopicIdentityVerdicts(Set.of(IN1_ID), Set.of());
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class, () -> revive(true),
+        FailClosedException e = assertThrows(FailClosedException.class, () -> revive(true),
                 "a deleted topic with a held message from it must refuse");
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason(),
+        assertEquals(FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason(),
                 "the refusal names the deleted channel's held messages, not a feed-order or identity reason");
         assertEquals(List.of(), delivered, "nothing may be delivered past the held message");
     }
@@ -207,9 +222,9 @@ class ProcessorRevivalTest {
     @Test
     void aRecreatedReceivedTopicRefusesRevival() {
         identity.verdicts = new TopicIdentityVerdicts(Set.of(), Set.of(IN1_ID));
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class, () -> revive(true),
+        FailClosedException e = assertThrows(FailClosedException.class, () -> revive(true),
                 "a recreated received topic must refuse the initialisation that learns of it");
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason(),
+        assertEquals(FailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason(),
                 "a recreated received topic is an identity change, not a deletion");
     }
 
@@ -228,7 +243,7 @@ class ProcessorRevivalTest {
         feedHeldEffect();
         feed("in1", 0L, "A", Map.of(FOREIGN, 7L));
         punctuate(context);
-        int frontierBefore = diagnostics.snapshot().get(0).frontierChannels();
+        int frontierBefore = frontierChannels();
 
         identity.failure = new java.util.concurrent.TimeoutException("broker unreachable");
         MockProcessorContext<byte[], byte[]> revived = assertDoesNotThrow(() -> revive(true),
@@ -237,7 +252,7 @@ class ProcessorRevivalTest {
         long clock = 1_000_000L;
         punctuate(revived, clock);
         assertEquals(List.of("A"), delivered, "the hold stays: absence of an answer settles nothing");
-        assertEquals(frontierBefore, diagnostics.snapshot().get(0).frontierChannels(),
+        assertEquals(frontierBefore, frontierChannels(),
                 "the frontier keeps every cause: absence of an answer prunes nothing");
         assertEquals(askedAtRevival + 1, identity.asked.size(), "the punctuation asked again while unanswered");
 
@@ -254,7 +269,7 @@ class ProcessorRevivalTest {
         identity.verdicts = new TopicIdentityVerdicts(Set.of(FOREIGN_ID, IN1_ID), Set.of());
         punctuate(revived, clock + 300);
         assertEquals(askedAtRevival + 3, identity.asked.size(), "asked once more, and answered");
-        assertEquals(1, diagnostics.snapshot().get(0).frontierChannels(),
+        assertEquals(1, frontierChannels(),
                 "the answer prunes both dead channels as an initialisation's would, and only the released"
                         + " effect's own channel enters the frontier");
         assertEquals(List.of("A", "B"), delivered,
@@ -273,12 +288,12 @@ class ProcessorRevivalTest {
     void aPartlyUnansweredIdentityCheckAppliesWhatWasAnsweredAndAsksAgainForTheRest() {
         feed("in1", 0L, "A", Map.of(FOREIGN, 7L));
         punctuate(context);
-        assertEquals(2, diagnostics.snapshot().get(0).frontierChannels(), "staging: in1 and the foreign channel");
+        assertEquals(2, frontierChannels(), "staging: in1 and the foreign channel");
 
         identity.verdicts = new TopicIdentityVerdicts(Set.of(FOREIGN_ID), Set.of(), Set.of(IN2_ID));
         MockProcessorContext<byte[], byte[]> revived = revive(true);
         int askedAtRevival = identity.asked.size();
-        assertEquals(1, diagnostics.snapshot().get(0).frontierChannels(),
+        assertEquals(1, frontierChannels(),
                 "the answered verdict is applied: the deleted frontier topic is pruned");
 
         identity.verdicts = TopicIdentityVerdicts.NONE;
@@ -356,10 +371,10 @@ class ProcessorRevivalTest {
         punctuators.get(punctuators.size() - 1).getPunctuator().punctuate(wallClock);
     }
 
-    private static ProcessDefinition twoInputRecorder(List<String> delivered) {
+    private static Process twoInputRecorder(List<String> delivered) {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
-        return ProcessDefinition.named("p")
+        return Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     delivered.add(delivery.value());
                     return Effects.none();

@@ -8,7 +8,7 @@ import java.util.UUID;
  * @param topicId    the topic's identity as assigned by the broker
  * @param partitions how many partitions it has
  */
-record TopicInfo(UUID topicId, int partitions) {
+record ResolvedTopic(UUID topicId, int partitions) {
     /**
      * @param id a Kafka identifier
      * @return the same value as a {@link UUID}

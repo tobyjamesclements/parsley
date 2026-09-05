@@ -17,7 +17,7 @@ import java.util.UUID;
  * that an operator asks of a stopped process: what is still held, and which topics has this
  * process bound to an identity that no longer resolves.
  *
- * @see StoreCodec
+ * @see OrderingStateCodec
  */
 public final class OrderingStateInspector {
     private OrderingStateInspector() {
@@ -32,7 +32,7 @@ public final class OrderingStateInspector {
      * @return {@code true} when the key is a held message's
      */
     public static boolean isHeldKey(byte[] key) {
-        return key.length == 1 + ChannelId.ENCODED_LENGTH + Long.BYTES && key[0] == StoreCodec.TAG_HELD;
+        return key.length == 1 + ChannelId.ENCODED_LENGTH + Long.BYTES && key[0] == OrderingStateCodec.TAG_HELD;
     }
 
     /**
@@ -45,7 +45,7 @@ public final class OrderingStateInspector {
         Set<ChannelId> channels = new TreeSet<>();
         latestPerKey.forEach((key, value) -> {
             if (value != null && isHeldKey(key)) {
-                channels.add(StoreCodec.channelOfHeldKey(key));
+                channels.add(OrderingStateCodec.channelOfHeldKey(key));
             }
         });
         return channels;
@@ -67,7 +67,7 @@ public final class OrderingStateInspector {
      *
      * @param latestPerKey the ordering state, as the latest value per key
      * @return per channel, the highest position covered as fed-or-never-arriving
-     * @throws ParsleyFailClosedException if a coverage entry is corrupt
+     * @throws FailClosedException if a coverage entry is corrupt
      */
     /**
      * Whether a covered position is the engine's fed-to-end sentinel: the value a channel
@@ -80,8 +80,8 @@ public final class OrderingStateInspector {
     public static Map<ChannelId, Long> coveredPositions(Map<byte[], byte[]> latestPerKey) {
         Map<ChannelId, Long> covered = new HashMap<>();
         latestPerKey.forEach((key, value) -> {
-            if (value != null && key.length > 0 && key[0] == StoreCodec.TAG_FED_UP_TO) {
-                covered.put(StoreCodec.channelOfEntryKey(key), StoreCodec.decodeLong(value));
+            if (value != null && key.length > 0 && key[0] == OrderingStateCodec.TAG_FED_UP_TO) {
+                covered.put(OrderingStateCodec.channelOfEntryKey(key), OrderingStateCodec.decodeLong(value));
             }
         });
         return covered;
@@ -96,7 +96,7 @@ public final class OrderingStateInspector {
     public static Map<String, UUID> nameBindings(Map<byte[], byte[]> latestPerKey) {
         Map<String, UUID> bindings = new HashMap<>();
         latestPerKey.forEach((key, value) -> {
-            if (value != null && key.length > 1 && key[0] == StoreCodec.TAG_NAME_BINDING
+            if (value != null && key.length > 1 && key[0] == OrderingStateCodec.TAG_NAME_BINDING
                     && value.length == ChannelId.ENCODED_LENGTH) {
                 String name = new String(key, 1, key.length - 1, StandardCharsets.UTF_8);
                 bindings.put(name, ChannelId.readFrom(ByteBuffer.wrap(value)).topicId());

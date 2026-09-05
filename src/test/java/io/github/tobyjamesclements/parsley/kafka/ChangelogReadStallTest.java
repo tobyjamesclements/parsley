@@ -69,7 +69,7 @@ class ChangelogReadStallTest {
         ScriptedConsumer consumer = new ScriptedConsumer(List.of(P0));
 
         IllegalStateException stall = assertThrows(IllegalStateException.class,
-                () -> ParsleyRuntime.readToEnds(consumer, CHANGELOG, List.of(P0),
+                () -> StreamsRuntime.readToEnds(consumer, CHANGELOG, List.of(P0),
                         Map.of(P0, 5L), Duration.ofMillis(40)),
                 "a partition pinned below its snapshot end with no records arriving must fail"
                         + " the read within the stall deadline, not block the start forever");
@@ -95,7 +95,7 @@ class ChangelogReadStallTest {
         consumer.neverStopsAppending(P0);
 
         IllegalStateException stall = assertThrows(IllegalStateException.class,
-                () -> ParsleyRuntime.readToEnds(consumer, CHANGELOG, List.of(P0, P1),
+                () -> StreamsRuntime.readToEnds(consumer, CHANGELOG, List.of(P0, P1),
                         Map.of(P0, 1L, P1, 5L), Duration.ofMillis(40)),
                 "with the finished partition paused, the pinned sibling must surface as the"
                         + " loud stall, not as an endless loop fed by post-snapshot records");
@@ -130,7 +130,7 @@ class ChangelogReadStallTest {
     @Test
     void theEndOffsetSnapshotAsksForTheUncommittedEnd() {
         assertEquals(IsolationLevel.READ_UNCOMMITTED,
-                ParsleyRuntime.changelogEndOffsetIsolation().isolationLevel(),
+                StreamsRuntime.changelogEndOffsetIsolation().isolationLevel(),
                 "the end-offset snapshot must ask for the log's true end; the read-committed"
                         + " last stable offset would truncate the restored view below an open"
                         + " transaction's committed tail (D79)");
@@ -148,7 +148,7 @@ class ChangelogReadStallTest {
         consumer.append(P0, "task0", "latest");
         consumer.append(P1, "task1", "only");
 
-        ParsleyRuntime.ChangelogView view = ParsleyRuntime.readToEnds(consumer, CHANGELOG,
+        StreamsRuntime.ChangelogView view = StreamsRuntime.readToEnds(consumer, CHANGELOG,
                 List.of(P0, P1, P2), Map.of(P0, 2L, P1, 1L, P2, 0L), Duration.ofSeconds(5));
 
         assertArrayEquals(bytes("latest"), view.latest().get(bytes("task0")),
@@ -175,9 +175,9 @@ class ChangelogReadStallTest {
      */
     @Test
     void aLaggingReaderMetadataAnswerRefusesTheStartAsRetryable() {
-        ParsleyRuntime.RetryableStartException lag =
-                assertThrows(ParsleyRuntime.RetryableStartException.class,
-                        () -> ParsleyRuntime.requireCorroboratedWidth("app-shipper", 3, 0),
+        StreamsRuntime.RetryableStartException lag =
+                assertThrows(StreamsRuntime.RetryableStartException.class,
+                        () -> StreamsRuntime.requireCorroboratedWidth("app-shipper", 3, 0),
                         "a reader answering fewer partitions than described must refuse the start,"
                                 + " not scan the lagging view vacuously");
         assertTrue(lag.getMessage().contains("described with 3 partition(s)"),
@@ -198,7 +198,7 @@ class ChangelogReadStallTest {
     @Test
     void anAgreeingReaderMetadataAnswerPassesCorroboration() {
         org.junit.jupiter.api.Assertions.assertDoesNotThrow(
-                () -> ParsleyRuntime.requireCorroboratedWidth("app-shipper", 3, 3),
+                () -> StreamsRuntime.requireCorroboratedWidth("app-shipper", 3, 3),
                 "an agreeing metadata answer is corroboration; the guard must not refuse it");
     }
 
@@ -225,7 +225,7 @@ class ChangelogReadStallTest {
         consumer.append(P0, "task0", "covered");
         consumer.append(P0, otherHeldKey, null);
 
-        ParsleyRuntime.ChangelogView view = ParsleyRuntime.readToEnds(consumer, CHANGELOG, List.of(P0),
+        StreamsRuntime.ChangelogView view = StreamsRuntime.readToEnds(consumer, CHANGELOG, List.of(P0),
                 Map.of(P0, 4L), Duration.ofSeconds(5));
         assertEquals(0, view.latest().get(heldKey).length,
                 "a held message's body is replaced by an empty presence marker");

@@ -14,7 +14,7 @@
  * and the delivered causal past.
  *
  * <p>Where the guarantee cannot be upheld, operations throw
- * {@link io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException} and delivery
+ * {@link io.github.tobyjamesclements.parsley.core.FailClosedException} and delivery
  * stops.
  */
 package io.github.tobyjamesclements.parsley.core;

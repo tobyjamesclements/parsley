@@ -40,11 +40,11 @@ import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Effects;
 import io.github.tobyjamesclements.parsley.api.Parsley;
 import io.github.tobyjamesclements.parsley.api.ParsleyConfig;
-import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
+import io.github.tobyjamesclements.parsley.api.Process;
 import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -90,7 +90,6 @@ class IdentityIntegrationTest {
     private static ParsleyConfig config(String prefix) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(prefix).toString())
-                .statusInterval(Duration.ofMillis(500))
                 .build();
     }
 
@@ -141,7 +140,7 @@ class IdentityIntegrationTest {
             try {
                 causes.add(CausesCodec.decode(record.headers().lastHeader(CausesCodec.HEADER_KEY).value()));
             } catch (CausesCodec.UndecodableMetadataException e) {
-                throw new AssertionError("emitted an undecodable header", e);
+                throw new AssertionError("sent an undecodable header", e);
             }
         }
         return causes;
@@ -167,7 +166,7 @@ class IdentityIntegrationTest {
         Channel<String, String> a = Channel.of("dh-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("dh-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("dh")
+        Process p = Process.named("dh")
                 .receives(a, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -191,7 +190,7 @@ class IdentityIntegrationTest {
                     () -> parsley.status().get("dh").failureDetail().isPresent(), Duration.ofSeconds(30));
             io.github.tobyjamesclements.parsley.api.ProcessStatus status = parsley.status().get("dh");
             boolean refusedAtInitialisation = status.refusalReason()
-                    .map(reason -> reason == ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES)
+                    .map(reason -> reason == FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES)
                     .orElse(false);
             boolean stoppedByTheHost = status.refusalReason().isEmpty()
                     && status.failureDetail().orElseThrow().contains("source topics were missing");
@@ -272,7 +271,7 @@ class IdentityIntegrationTest {
      * position on the still-short new log refuses under {@code auto.offset.reset=none} —
      * whichever the host's timing produces. What this does not pin, and nothing can, is a
      * recreation that lands entirely between two polls with the new log already past the
-     * old position: that is SPEC Assumption 17's territory, observed in ASSESSMENT.md 1.1
+     * old position: that is SPEC Assumption 17's territory, observed in the hardening review
      * and again under review, and detected only at the task's next initialisation (D115).
      */
     @Test
@@ -280,7 +279,7 @@ class IdentityIntegrationTest {
         createTopics("rr-in");
         Channel<String, String> in = Channel.of("rr-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("rr")
+        Process p = Process.named("rr")
                 .receives(in, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -313,7 +312,7 @@ class IdentityIntegrationTest {
             boolean hostStop = status.refusalReason().isEmpty()
                     && status.failureDetail().orElseThrow().contains("source topics");
             boolean fetchRefused = status.refusalReason()
-                    .map(reason -> reason == ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD)
+                    .map(reason -> reason == FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD)
                     .orElse(false);
             assertTrue(hostStop || fetchRefused,
                     "the stop must be the host's missing-source-topic transient or the fetch's refusal at the old"
@@ -327,12 +326,11 @@ class IdentityIntegrationTest {
         createTopics("sr-in", "sr-x");
         UUID xId = topicId("sr-x");
         Channel<String, String> in = Channel.of("sr-in", Serdes.String(), Serdes.String());
-        ProcessDefinition p = ProcessDefinition.named("sr")
+        Process p = Process.named("sr")
                 .receives(in, (d, s) -> Effects.none())
                 .build();
         ParsleyConfig tinyBudget = ParsleyConfig.builder(cluster.bootstrapServers(), "sr")
                 .stateDir(stateDir.resolve("sr").toString())
-                .statusInterval(Duration.ofMillis(500))
                 .metadataBudgetBytes(64)
                 .build();
 
@@ -351,9 +349,9 @@ class IdentityIntegrationTest {
                 return status != null && status.refusalReason().isPresent();
             }, Duration.ofSeconds(60));
             io.github.tobyjamesclements.parsley.api.ProcessStatus status = parsley.status().get("sr");
-            assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED,
+            assertEquals(FailClosedException.Reason.METADATA_BUDGET_EXCEEDED,
                     status.refusalReason().orElseThrow());
-            assertTrue(status.stoppedDeliberately(),
+            assertTrue(status.refused(),
                     "the stop reads as a deliberate refusal, which recurs identically on restart");
             assertFalse(parsley.healthy(), "healthy() reflects the recorded failure at once");
         }
@@ -373,7 +371,7 @@ class IdentityIntegrationTest {
         ChannelId xChannel = new ChannelId(xId, 0);
         Channel<String, String> in = Channel.of("acl-in", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("acl-out", Serdes.String(), Serdes.String());
-        ProcessDefinition p = ProcessDefinition.named("acl")
+        Process p = Process.named("acl")
                 .receives(in, (d, s) -> Effects.builder().send(out, d.key(), d.value()).build())
                 .sends(out)
                 .build();
@@ -381,7 +379,7 @@ class IdentityIntegrationTest {
         try {
             try (Parsley parsley = Parsley.start(config("acl"), p)) {
                 produce("acl-in", "k", "first", causesHeader(Map.of(xChannel, 0L)));
-                await("the first emission", () -> emittedCauses("acl-out").size() >= 1, Duration.ofSeconds(60));
+                await("the first send", () -> emittedCauses("acl-out").size() >= 1, Duration.ofSeconds(60));
                 assertEquals(0L, emittedCauses("acl-out").get(0).byChannel().get(xChannel),
                         "the injected cause must ride the frontier");
             }
@@ -390,7 +388,7 @@ class IdentityIntegrationTest {
 
             try (Parsley parsley = Parsley.start(config("acl"), p)) {
                 produce("acl-in", "k", "second");
-                await("the second emission", () -> emittedCauses("acl-out").size() >= 2, Duration.ofSeconds(60));
+                await("the second send", () -> emittedCauses("acl-out").size() >= 2, Duration.ofSeconds(60));
                 List<Causes> causes = emittedCauses("acl-out");
                 assertEquals(0L, causes.get(causes.size() - 1).byChannel().get(xChannel),
                         "a denied describe is not evidence of death: the cause must still be expressed");
@@ -409,7 +407,7 @@ class IdentityIntegrationTest {
         ChannelId xChannel = new ChannelId(xId, 0);
         Channel<String, String> in = Channel.of("md-in", Serdes.String(), Serdes.String());
         Channel<String, String> x = Channel.of("md-x", Serdes.String(), Serdes.String());
-        ProcessDefinition p = ProcessDefinition.named("md")
+        Process p = Process.named("md")
                 .receives(in, (d, s) -> Effects.none())
                 .receives(x, (d, s) -> Effects.none())
                 .build();
@@ -423,9 +421,9 @@ class IdentityIntegrationTest {
         Thread.sleep(200);
         createTopics("md-in");
 
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> Parsley.start(config("md"), p));
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason(),
+        assertEquals(FailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason(),
                 "nothing was removed from the declaration: the topic's identity changed, and the remedy is a"
                         + " deliberate reset, not a declaration fix");
     }

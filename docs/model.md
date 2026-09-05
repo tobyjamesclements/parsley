@@ -114,5 +114,4 @@ roughly 40,000 entries when every topic contributes one partition and 116,000 wh
 topics contribute many. Reaching it inside the producer would stop the process with no
 diagnosis from Parsley, so a metadata budget is applied first:
 `ParsleyConfig.metadataBudgetBytes`, 256 KiB by default. Exceeding it stops the process with
-an attributable reason. Frontier size and encoded width are logged at each status
-punctuation, and again at 80% of budget.
+an attributable reason.

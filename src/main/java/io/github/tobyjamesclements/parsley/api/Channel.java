@@ -11,8 +11,8 @@ import org.apache.kafka.common.serialization.Serde;
  *
  * @param <K> key type
  * @param <V> value type
- * @see ProcessDefinition.Builder#receives(Channel, Handler)
- * @see ProcessDefinition.Builder#sends(Channel...)
+ * @see Process.Builder#receives(Channel, Handler)
+ * @see Process.Builder#sends(Channel...)
  */
 public final class Channel<K, V> {
 
@@ -30,13 +30,12 @@ public final class Channel<K, V> {
     private final InitialPosition initialPosition;
 
     private Channel(String topic, Serde<K> keySerde, Serde<V> valueSerde, InitialPosition initialPosition) {
-        if (!KafkaNames.isValidTopicName(topic)) {
-            throw new IllegalArgumentException("topic must be a valid Kafka topic name ("
-                    + KafkaNames.RULE + "): " + topic);
+        if (topic == null || topic.isBlank()) {
+            throw new IllegalArgumentException("topic must be non-blank");
         }
-        if (topic.contains(Store.RESERVED_PREFIX)) {
+        if (topic.contains(Parsley.RESERVED_PREFIX)) {
             throw new IllegalArgumentException("topic may not contain the reserved namespace "
-                    + Store.RESERVED_PREFIX + ", which parsley uses for its own topics: " + topic);
+                    + Parsley.RESERVED_PREFIX + ", which parsley uses for its own topics: " + topic);
         }
         if (keySerde == null) {
             throw new IllegalArgumentException(topic + ": keySerde must be non-null");
@@ -62,9 +61,9 @@ public final class Channel<K, V> {
      * @param <K>        key type
      * @param <V>        value type
      * @return the channel
-     * @throws IllegalArgumentException if {@code topic} is not a valid Kafka topic name,
-     *                                  contains the reserved {@link Store#RESERVED_PREFIX}
-     *                                  namespace, or a serde is null
+     * @throws IllegalArgumentException if {@code topic} is null or blank, contains the
+     *                                  reserved {@link Parsley#RESERVED_PREFIX} namespace, or
+     *                                  a serde is null
      */
     public static <K, V> Channel<K, V> of(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
         return new Channel<>(topic, keySerde, valueSerde, InitialPosition.EARLIEST);

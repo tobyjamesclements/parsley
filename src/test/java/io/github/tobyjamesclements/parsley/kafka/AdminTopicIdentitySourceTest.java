@@ -50,13 +50,13 @@ class AdminTopicIdentitySourceTest {
                 KafkaFutureImpl<TopicDescription> future = new KafkaFutureImpl<>();
                 Object answer = byId.get(id);
                 if (answer instanceof String name) {
-                    future.complete(StartPathFixtures.describedTopic(name, TopicInfo.toKafkaUuid(id), 1));
+                    future.complete(StartPathFixtures.describedTopic(name, ResolvedTopic.toKafkaUuid(id), 1));
                 } else if (answer instanceof Exception e) {
                     future.completeExceptionally(e);
                 } else {
                     future.completeExceptionally(new UnknownTopicIdException("unknown id " + id));
                 }
-                futures.put(TopicInfo.toKafkaUuid(id), future);
+                futures.put(ResolvedTopic.toKafkaUuid(id), future);
             }
             return futures;
         }

@@ -23,7 +23,7 @@ import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Effects;
 import io.github.tobyjamesclements.parsley.api.Parsley;
 import io.github.tobyjamesclements.parsley.api.ParsleyConfig;
-import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
+import io.github.tobyjamesclements.parsley.api.Process;
 import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
@@ -66,7 +66,7 @@ class BrokerBounceIntegrationTest {
         Channel<String, String> a = Channel.of("bounce-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("bounce-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition pb = ProcessDefinition.named("pb")
+        Process pb = Process.named("pb")
                 .receives(a, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -83,7 +83,6 @@ class BrokerBounceIntegrationTest {
 
         ParsleyConfig config = ParsleyConfig.builder(cluster.bootstrapServers(), "bounce")
                 .stateDir(stateDir.resolve("bounce").toString())
-                .statusInterval(Duration.ofMillis(500))
                 .build();
         try (Parsley parsley = Parsley.start(config, pb)) {
             ClusterTestSupport.awaitFedAndHeld(admin, "bounce-pb", "bounce-b", delivered);

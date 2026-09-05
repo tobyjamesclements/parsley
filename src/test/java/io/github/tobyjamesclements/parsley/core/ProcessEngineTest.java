@@ -31,7 +31,7 @@ class ProcessEngineTest {
     private static ReceivedMessage caused(ChannelId channel, long position, String uid, Map<ChannelId, Long> causes) {
         byte[] header = CausesCodec.encode(Causes.of(causes));
         return new ReceivedMessage(channel, position, position, uid.getBytes(), uid.getBytes(),
-                List.of(new HeaderKV(CausesCodec.HEADER_KEY, header)));
+                List.of(new Header(CausesCodec.HEADER_KEY, header)));
     }
 
     /**
@@ -124,17 +124,17 @@ class ProcessEngineTest {
                 "a start position below the store's coverage never lowers it");
     }
 
-    /** Frontier merges receipt delivery and stamps emissions. */
+    /** Frontier merges receipt delivery and stamps sends. */
     @Test
-    void frontierMergesReceiptDeliveryAndStampsEmissions() throws Exception {
+    void frontierMergesReceiptDeliveryAndStampsSends() throws Exception {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         engine.onReceive(caused(C2, 7, "B", Map.of(C1, 3L)));
         engine.onReceive(plain(C1, 2, "A"));
         engine.markDelivered(C1, 2);
-        Causes stamped = CausesCodec.decode(engine.causesHeaderForEmission());
+        Causes stamped = CausesCodec.decode(engine.causesHeaderForSend());
         assertEquals(Causes.of(Map.of(C1, 3L)), stamped,
-                "emissions must express causes learned from held metadata and delivered positions, compressed");
+                "sends must express causes learned from held metadata and delivered positions, compressed");
     }
 
     /** Refeed below session floor is dropped and within session fails. */
@@ -144,7 +144,7 @@ class ProcessEngineTest {
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         engine.onReceive(plain(C1, 5, "M"));
         engine.markDelivered(C1, 5);
-        assertThrows(ParsleyFailClosedException.class, () -> engine.onReceive(plain(C1, 5, "M")),
+        assertThrows(FailClosedException.class, () -> engine.onReceive(plain(C1, 5, "M")),
                 "within one execution a covered position must never be fed again");
 
         engine.flushHolds();
@@ -166,10 +166,10 @@ class ProcessEngineTest {
 
         ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
         assertEquals(ProcessEngine.ReceiveOutcome.DUPLICATE_DROPPED, restarted.onReceive(plain(C1, 4, "M4")));
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> restarted.onReceive(plain(C1, 2, "M2")),
                 "an in-execution feed regression below the session floor must fail closed, not drop silently");
-        assertEquals(ParsleyFailClosedException.Reason.OUT_OF_ORDER_FEED, e.reason());
+        assertEquals(FailClosedException.Reason.OUT_OF_ORDER_FEED, e.reason());
     }
 
     /** A received channel reported recreated at initialisation fails closed. */
@@ -179,10 +179,10 @@ class ProcessEngineTest {
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         engine.onReceive(plain(C1, 0, "M"));
         engine.markDelivered(C1, 0);
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> engine.onIdentityReport(new IdentityReport(Set.of(), Set.of(C1))),
                 "a received topic recreated under its name means the feed path can no longer be trusted");
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
+        assertEquals(FailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
     }
 
     /** Recreated frontier channel is pruned immediately. */
@@ -194,10 +194,10 @@ class ProcessEngineTest {
         engine.onReceive(caused(C1, 0, "M", Map.of(foreign, 7L)));
         engine.markDelivered(C1, 0);
         assertEquals(Causes.of(Map.of(C1, 0L, foreign, 7L)),
-                CausesCodec.decode(engine.causesHeaderForEmission()));
+                CausesCodec.decode(engine.causesHeaderForSend()));
 
         engine.onIdentityReport(new IdentityReport(Set.of(), Set.of(foreign)));
-        assertEquals(Causes.of(Map.of(C1, 0L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+        assertEquals(Causes.of(Map.of(C1, 0L)), CausesCodec.decode(engine.causesHeaderForSend()),
                 "a recreated topic's old incarnation can no longer matter (SPEC Structural 13)");
     }
 
@@ -210,16 +210,16 @@ class ProcessEngineTest {
         for (int i = 0; i < 10; i++) {
             big.put(new ChannelId(new UUID(20, i), 0), 1L);
         }
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> engine.onReceive(caused(C1, 0, "M", big)),
                 "metadata beyond the budget must fail closed with parsley's diagnosis, not ride toward the wall");
-        assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
+        assertEquals(FailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
     }
 
     /**
      * The maintained frontier size agrees with the encoded header, byte for byte, across
      * the shapes that exercise every term of the arithmetic. The agreement is load-bearing:
-     * the merge-site budget gate reads the counter where the emission gate measures real
+     * the merge-site budget gate reads the counter where the send gate measures real
      * bytes, and drift between them would let one refuse what the other allows (D98). Each
      * leg exists because a mutation trial showed its absence stays green: growth, a
      * mid-group prune and restore catch a counter update deleted at any of the three
@@ -233,7 +233,7 @@ class ProcessEngineTest {
     void frontierBytesAgreesWithTheEncodedHeader() throws Exception {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
-        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(), "empty frontier");
+        assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(), "empty frontier");
 
         java.util.TreeMap<ChannelId, Long> causes = new java.util.TreeMap<>();
         for (int partition = 0; partition < 3; partition++) {
@@ -242,16 +242,16 @@ class ProcessEngineTest {
         causes.put(new ChannelId(new UUID(40, 2), 300), 9L);
         engine.onReceive(caused(C1, 0, "A", causes));
         engine.markDelivered(C1, 0);
-        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+        assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "after growth through receipt and delivery");
 
         engine.onReceive(caused(C1, 1, "B", Map.of(new ChannelId(new UUID(40, 1), 0), 50L)));
-        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+        assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "after a position-raising re-merge of a tracked channel, which must not re-count it");
 
         engine.onIdentityReport(new IdentityReport(Set.of(new ChannelId(new UUID(40, 1), 1)), Set.of()));
         assertEquals(4, engine.frontierSize(), "staging: the dead channel must actually leave the frontier");
-        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+        assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "after pruning a mid-group partition");
 
         // One topic wide enough to push its partition count from one varint byte to two,
@@ -265,19 +265,19 @@ class ProcessEngineTest {
             wide.put(new ChannelId(new UUID(42, topic), 0), 1L);
         }
         engine.onReceive(caused(C2, 0, "C", wide));
-        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+        assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "with a 130-partition group and 128 distinct topics, both count varints two bytes wide");
 
         engine.onIdentityReport(new IdentityReport(Set.of(new ChannelId(new UUID(40, 2), 300)), Set.of()));
         assertEquals(257, engine.frontierSize(),
                 "staging: the emptied topic's only channel must actually leave the frontier");
-        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+        assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "after a topic-emptying prune back across the topic-count width boundary");
 
         engine.flushHolds();
         store.commit();
         ProcessEngine restored = new ProcessEngine("p", BOTH, store);
-        assertEquals(restored.causesHeaderForEmission().length, restored.frontierBytes(), "after restore");
+        assertEquals(restored.causesHeaderForSend().length, restored.frontierBytes(), "after restore");
     }
 
     /** Frontier growth beyond the budget fails closed. */
@@ -288,12 +288,12 @@ class ProcessEngineTest {
 
         engine.onReceive(caused(C1, 0, "A", Map.of(new ChannelId(new UUID(21, 1), 0), 1L)));
         engine.markDelivered(C1, 0);
-        assertTrue(engine.causesHeaderForEmission().length <= 70, "still within budget");
+        assertTrue(engine.causesHeaderForSend().length <= 70, "still within budget");
 
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> engine.onReceive(caused(C1, 1, "B", Map.of(new ChannelId(new UUID(21, 2), 0), 1L))),
                 "a frontier grown past the budget must fail closed before the substrate's wall");
-        assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
+        assertEquals(FailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
         assertTrue(engine.frontierSize() >= 3, "the frontier size is observable (SPEC Operational 5)");
         assertTrue(engine.frontierBytes() > 70, "the encoded size is observable (SPEC Operational 5)");
     }
@@ -303,10 +303,10 @@ class ProcessEngineTest {
     void unknownStoreFormatVersionFailsClosed() {
         MemoryOrderingStore store = new MemoryOrderingStore();
         store.put(new byte[] {'v'}, new byte[] {99});
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> new ProcessEngine("p", BOTH, store),
                 "ordering state written by an unknown build must never be guessed at");
-        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason());
+        assertEquals(FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason());
     }
 
     /** Corrupt held blob fails closed at restore. */
@@ -317,11 +317,11 @@ class ProcessEngineTest {
         engine.onReceive(caused(C1, 3, "H", Map.of(C2, 9L)));
         engine.flushHolds();
         store.commit();
-        store.put(StoreCodec.heldKey(C1, 3), new byte[] {1, 2, 3});
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        store.put(OrderingStateCodec.heldKey(C1, 3), new byte[] {1, 2, 3});
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> new ProcessEngine("p", BOTH, store),
                 "a held message whose persisted body cannot be decoded must stop the process, not be skipped");
-        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason());
+        assertEquals(FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason());
     }
 
     /** Held messages survive restart with bodies intact. */
@@ -348,12 +348,12 @@ class ProcessEngineTest {
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         byte[] header = CausesCodec.encode(Causes.none());
         ReceivedMessage twoHeaders = new ReceivedMessage(C1, 0, 0, null, "v".getBytes(), List.of(
-                new HeaderKV(CausesCodec.HEADER_KEY, header),
-                new HeaderKV("app.other", new byte[] {1}),
-                new HeaderKV(CausesCodec.HEADER_KEY, header)));
-        ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> engine.onReceive(twoHeaders));
-        assertEquals(ParsleyFailClosedException.Reason.UNDECODABLE_METADATA, e.reason());
+                new Header(CausesCodec.HEADER_KEY, header),
+                new Header("app.other", new byte[] {1}),
+                new Header(CausesCodec.HEADER_KEY, header)));
+        FailClosedException e =
+                assertThrows(FailClosedException.class, () -> engine.onReceive(twoHeaders));
+        assertEquals(FailClosedException.Reason.UNDECODABLE_METADATA, e.reason());
         assertEquals(0, engine.heldCountTotal(), "an undecodable message is never accepted");
     }
 
@@ -388,9 +388,9 @@ class ProcessEngineTest {
         store.commit();
 
         ChannelId recreated = new ChannelId(new UUID(9, 99), 0);
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> new ProcessEngine("p", Map.of(recreated, "orders"), store));
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
+        assertEquals(FailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
     }
 
     /** Causes of a join clamp dropped message still bind sends. */
@@ -408,7 +408,7 @@ class ProcessEngineTest {
         ProcessEngine second = new ProcessEngine("p", BOTH, store);
         assertEquals(ProcessEngine.ReceiveOutcome.DUPLICATE_DROPPED,
                 second.onReceive(caused(C1, 2, "A", Map.of(elsewhere, 9L))));
-        Causes stamped = CausesCodec.decode(second.causesHeaderForEmission());
+        Causes stamped = CausesCodec.decode(second.causesHeaderForSend());
         assertEquals(9L, stamped.byChannel().get(elsewhere),
                 "causes learned from a dropped-but-received message must be expressed on sends");
     }
@@ -433,10 +433,10 @@ class ProcessEngineTest {
         store.commit();
 
         ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> restarted.onReceive(plain(C1, 1, "ghost")),
                 "a channel recorded as dead can never legitimately feed again; this must not be silently dropped");
-        assertEquals(ParsleyFailClosedException.Reason.OUT_OF_ORDER_FEED, e.reason(),
+        assertEquals(FailClosedException.Reason.OUT_OF_ORDER_FEED, e.reason(),
                 "the dead-channel re-feed is a feed-order breach, the half D77 left with OUT_OF_ORDER_FEED");
         assertTrue(e.getMessage().contains("recorded as no longer existing"),
                 "the diagnosis names the dead-channel condition, not a generic order breach, got: " + e.getMessage());
@@ -447,7 +447,7 @@ class ProcessEngineTest {
     void unknownStoreFormatFailsClosed() {
         MemoryOrderingStore store = new MemoryOrderingStore();
         store.put(new byte[] {'v'}, new byte[] {99});
-        assertThrows(ParsleyFailClosedException.class, () -> new ProcessEngine("p", BOTH, store));
+        assertThrows(FailClosedException.class, () -> new ProcessEngine("p", BOTH, store));
     }
 
     /**
@@ -465,20 +465,20 @@ class ProcessEngineTest {
         engine.onReceive(caused(C1, 0, "A", Map.of(foreign, 4L, foreign2, 2L)));
         engine.markDelivered(C1, 0);
         assertEquals(Causes.of(Map.of(foreign, 4L, foreign2, 2L, C1, 0L)),
-                CausesCodec.decode(engine.causesHeaderForEmission()));
+                CausesCodec.decode(engine.causesHeaderForSend()));
 
         engine.onIdentityReport(new IdentityReport(Set.of(foreign2), Set.of()));
-        assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+        assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)), CausesCodec.decode(engine.causesHeaderForSend()),
                 "a cause on a channel that no longer exists can no longer matter; every other cause stays");
 
         engine.onIdentityReport(IdentityReport.NONE);
-        assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+        assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)), CausesCodec.decode(engine.causesHeaderForSend()),
                 "a report naming nothing prunes nothing");
 
         engine.flushHolds();
         store.commit();
         ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
-        assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)), CausesCodec.decode(restarted.causesHeaderForEmission()),
+        assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)), CausesCodec.decode(restarted.causesHeaderForSend()),
                 "the prune reached the store: a restart does not restore the dead channel's cause");
     }
 
@@ -507,14 +507,14 @@ class ProcessEngineTest {
         engine.flushHolds();
         store.commit();
 
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> engine.onIdentityReport(new IdentityReport(Set.of(C1), Set.of())));
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
+        assertEquals(FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
 
         ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
-        ParsleyFailClosedException again = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException again = assertThrows(FailClosedException.class,
                 () -> restarted.onIdentityReport(new IdentityReport(Set.of(C1), Set.of())));
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, again.reason());
+        assertEquals(FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, again.reason());
     }
 
     /** Dead received channel with nothing held settles remaining positions. */
@@ -535,20 +535,20 @@ class ProcessEngineTest {
      * A restored frontier naming the reserved zero topic id is untrustworthy state: it can
      * only have entered through a forged causes header absorbed before wire-format
      * constraint 5 refused it at receipt, and no substrate query can ever answer for it,
-     * so restoring it would re-express and re-persist the ghost on every emission forever
+     * so restoring it would re-express and re-persist the ghost on every send forever
      * (D88). Stored state that cannot be trusted is a reason to stop.
      */
     @Test
     void restoredFrontierNamingTheZeroTopicIdFailsClosed() {
         MemoryOrderingStore store = new MemoryOrderingStore();
         new ProcessEngine("p", BOTH, store);
-        store.put(StoreCodec.channelKey(StoreCodec.TAG_FRONTIER, new ChannelId(new UUID(0, 0), 0)),
-                StoreCodec.encodeLong(7));
+        store.put(OrderingStateCodec.channelKey(OrderingStateCodec.TAG_FRONTIER, new ChannelId(new UUID(0, 0), 0)),
+                OrderingStateCodec.encodeLong(7));
 
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> new ProcessEngine("p", BOTH, store),
                 "state carrying the reserved zero id must refuse, not resume and re-express it");
-        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason(),
+        assertEquals(FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason(),
                 "the refusal names the untrusted-state condition");
     }
 
@@ -643,17 +643,17 @@ class ProcessEngineTest {
     }
 
     /**
-     * Catches the emission budget check in {@code causesHeaderForEmission} being deleted. The
+     * Catches the send budget check in {@code causesHeaderForSend} being deleted. The
      * only route to it is a frontier restored by the constructor, which deliberately carries
      * no budget check of its own: receipt (the per-message gate) and merge (the growth gate)
      * both police the budget as the frontier grows, so a frontier can stand beyond the budget
-     * only by being restored from state committed under a larger one. Without the emission
+     * only by being restored from state committed under a larger one. Without the send
      * check that restored frontier is encoded and handed back oversized, riding toward the
      * broker's record-size wall with no parsley diagnosis — exactly what D52's third
      * enforcement point exists to stop.
      */
     @Test
-    void aFrontierRestoredPastAShrunkenBudgetFailsClosedAtEmissionNotAtRestore() {
+    void aFrontierRestoredPastAShrunkenBudgetFailsClosedAtSendNotAtRestore() {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine generous = new ProcessEngine("p", BOTH, store);
         java.util.TreeMap<ChannelId, Long> wide = new java.util.TreeMap<>();
@@ -666,20 +666,20 @@ class ProcessEngineTest {
         store.commit();
 
         // Neither the restore path nor the identity report checks the budget, so both must
-        // pass here and the stop below is attributable to the emission check alone.
+        // pass here and the stop below is attributable to the send check alone.
         ProcessEngine constricted = new ProcessEngine("p", BOTH, store, 64);
         constricted.onIdentityReport(IdentityReport.NONE);
         assertEquals(11, constricted.frontierSize(), "staging: the wide frontier was restored intact");
         assertTrue(constricted.frontierBytes() > 64,
                 "staging: the restored frontier already exceeds the shrunken budget");
 
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
-                constricted::causesHeaderForEmission,
+        FailClosedException e = assertThrows(FailClosedException.class,
+                constricted::causesHeaderForSend,
                 "expressing a frontier beyond the budget must fail closed, not hand back an oversized header");
-        assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason(),
+        assertEquals(FailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason(),
                 "the stop carries the budget diagnosis (D52)");
         assertTrue(e.getMessage().contains("expressing the causal frontier"),
-                "the diagnosis names the emission site, not the receipt or merge gates, got: " + e.getMessage());
+                "the diagnosis names the send site, not the receipt or merge gates, got: " + e.getMessage());
     }
 
     /**
@@ -712,12 +712,12 @@ class ProcessEngineTest {
         byte[] oversized = java.util.Arrays.copyOf(
                 CausesCodec.encode(Causes.of(Map.of(f1, 5L, f2, 9L))), 101);
         ReceivedMessage message = new ReceivedMessage(C1, 1, 1, "B".getBytes(), "B".getBytes(),
-                List.of(new HeaderKV(CausesCodec.HEADER_KEY, oversized)));
+                List.of(new Header(CausesCodec.HEADER_KEY, oversized)));
 
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException e = assertThrows(FailClosedException.class,
                 () -> engine.onReceive(message),
                 "a header beyond the budget must be refused on raw length before any decode");
-        assertEquals(ParsleyFailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason(),
+        assertEquals(FailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason(),
                 "an oversized header's diagnosis is the budget, not undecodability (D52)");
         assertTrue(e.getMessage().contains("carries 101 bytes of causal metadata"),
                 "the diagnosis states the per-message gate's own measurement, got: " + e.getMessage());
@@ -817,7 +817,7 @@ class ProcessEngineTest {
         engine.markDelivered(C1, 2);
         engine.flushHolds();
         java.util.List<Long> heldPositions = new java.util.ArrayList<>();
-        store.scanPrefix(StoreCodec.heldPrefix(C1), (key, value) -> heldPositions.add(StoreCodec.positionOfHeldKey(key)));
+        store.scanPrefix(OrderingStateCodec.heldPrefix(C1), (key, value) -> heldPositions.add(OrderingStateCodec.positionOfHeldKey(key)));
         assertEquals(java.util.List.of(), heldPositions, "a delivered hold must not be persisted by a later flush");
         store.commit();
         assertEquals(0, new ProcessEngine("p", BOTH, store).heldCountTotal(), "nothing is restored as held");
@@ -837,50 +837,50 @@ class ProcessEngineTest {
         store.commit();
 
         ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
-        store.delete(StoreCodec.heldKey(C2, 0));
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class, restarted::nextDeliverable,
+        store.delete(OrderingStateCodec.heldKey(C2, 0));
+        FailClosedException e = assertThrows(FailClosedException.class, restarted::nextDeliverable,
                 "a hold absent from the store must stop the process");
-        assertEquals(ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason(),
+        assertEquals(FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, e.reason(),
                 "a hold whose blob is absent from the store is refused as an unknown state format");
         assertTrue(e.getMessage().contains("absent from the store"), e.getMessage());
     }
 
     /**
      * The encoded frontier is computed once per change and handed out as a copy: two
-     * emissions in one step share the encoding, an emission's bytes are the caller's to
+     * sends in one step share the encoding, a send's bytes are the caller's to
      * alter, and every frontier mutation site — merge on receipt, merge on delivery, prune
      * on an identity report — produces a fresh encoding (D102).
      */
     @Test
-    void theEmissionHeaderIsReusedUntilTheFrontierChangesAndHandedOutAsACopy() throws Exception {
+    void theSendHeaderIsReusedUntilTheFrontierChangesAndHandedOutAsACopy() throws Exception {
         ChannelId foreign = new ChannelId(new UUID(9, 3), 0);
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         engine.onReceive(caused(C2, 7, "B", Map.of(C1, 3L, foreign, 5L)));
-        byte[] first = engine.causesHeaderForEmission();
-        byte[] second = engine.causesHeaderForEmission();
+        byte[] first = engine.causesHeaderForSend();
+        byte[] second = engine.causesHeaderForSend();
         assertArrayEquals(first, second, "an unchanged frontier encodes identically");
-        assertNotSame(first, second, "each emission receives its own array");
+        assertNotSame(first, second, "each send receives its own array");
         first[first.length - 1] ^= 0x7F;
-        assertArrayEquals(second, engine.causesHeaderForEmission(), "altering a handed-out copy leaves the engine's encoding intact");
+        assertArrayEquals(second, engine.causesHeaderForSend(), "altering a handed-out copy leaves the engine's encoding intact");
 
         engine.onReceive(caused(C2, 8, "C", Map.of(foreign, 6L)));
-        assertEquals(Causes.of(Map.of(C1, 3L, foreign, 6L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+        assertEquals(Causes.of(Map.of(C1, 3L, foreign, 6L)), CausesCodec.decode(engine.causesHeaderForSend()),
                 "a receipt that raises a cause re-encodes");
 
         engine.onReceive(plain(C1, 3, "A"));
         engine.markDelivered(C1, 3);
-        assertEquals(Causes.of(Map.of(C1, 3L, foreign, 6L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+        assertEquals(Causes.of(Map.of(C1, 3L, foreign, 6L)), CausesCodec.decode(engine.causesHeaderForSend()),
                 "a delivery at the position already expressed changes nothing");
         engine.onReceive(plain(C1, 4, "A2"));
         engine.markDelivered(C1, 4);
-        assertEquals(Causes.of(Map.of(C1, 4L, foreign, 6L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+        assertEquals(Causes.of(Map.of(C1, 4L, foreign, 6L)), CausesCodec.decode(engine.causesHeaderForSend()),
                 "a delivery past the expressed position re-encodes");
 
         engine.onIdentityReport(new IdentityReport(Set.of(foreign), Set.of()));
-        assertEquals(Causes.of(Map.of(C1, 4L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+        assertEquals(Causes.of(Map.of(C1, 4L)), CausesCodec.decode(engine.causesHeaderForSend()),
                 "a prune re-encodes without the pruned channel");
-        assertEquals(engine.frontierBytes(), engine.causesHeaderForEmission().length,
+        assertEquals(engine.frontierBytes(), engine.causesHeaderForSend().length,
                 "the incremental width agrees with the cached encoding after every mutation");
     }
 
@@ -896,7 +896,7 @@ class ProcessEngineTest {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         byte[] header = CausesCodec.encode(Causes.of(Map.of(C1, 1_000_000L)));
-        List<HeaderKV> headers = List.of(new HeaderKV(CausesCodec.HEADER_KEY, header));
+        List<Header> headers = List.of(new Header(CausesCodec.HEADER_KEY, header));
         long started = System.nanoTime();
         for (int i = 0; i < 50_000; i++) {
             engine.onReceive(new ReceivedMessage(C2, i, i, null, null, headers));
@@ -922,10 +922,10 @@ class ProcessEngineTest {
         MemoryOrderingStore fresh = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, fresh);
         engine.onReceive(plain(C1, 5, "M"));
-        ParsleyFailClosedException above = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException above = assertThrows(FailClosedException.class,
                 () -> engine.onReceive(plain(C1, 5, "M")),
                 "the same position fed twice above the session floor must fail closed");
-        assertEquals(ParsleyFailClosedException.Reason.OUT_OF_ORDER_FEED, above.reason(),
+        assertEquals(FailClosedException.Reason.OUT_OF_ORDER_FEED, above.reason(),
                 "a same-position re-feed is a feed-order breach, not a report/feed contradiction");
 
         MemoryOrderingStore committed = new MemoryOrderingStore();
@@ -937,10 +937,10 @@ class ProcessEngineTest {
         ProcessEngine restarted = new ProcessEngine("p", BOTH, committed);
         assertEquals(ProcessEngine.ReceiveOutcome.DUPLICATE_DROPPED, restarted.onReceive(plain(C1, 3, "M3")),
                 "staging: the first re-feed below the session floor is a sanctioned replay");
-        ParsleyFailClosedException below = assertThrows(ParsleyFailClosedException.class,
+        FailClosedException below = assertThrows(FailClosedException.class,
                 () -> restarted.onReceive(plain(C1, 3, "M3")),
                 "the same position fed twice below the session floor must fail closed, not drop silently");
-        assertEquals(ParsleyFailClosedException.Reason.OUT_OF_ORDER_FEED, below.reason(),
+        assertEquals(FailClosedException.Reason.OUT_OF_ORDER_FEED, below.reason(),
                 "the second feed of one position is a feed-order breach whatever the session floor says");
     }
 
@@ -978,7 +978,7 @@ class ProcessEngineTest {
      * group of 129 through 128 to 127 narrows the partition-count varint from two bytes to
      * one, and {@link #frontierBytesAgreesWithTheEncodedHeader} only ever crosses that
      * boundary upwards. A delta taken from the wrong side of the count leaves frontierBytes
-     * one byte off the header the process emits, and the O(1) budget gate then refuses one
+     * one byte off the header the process sends, and the O(1) budget gate then refuses one
      * byte early or late, a drift that compounds with every crossing.
      */
     @Test
@@ -991,14 +991,14 @@ class ProcessEngineTest {
             wide.put(new ChannelId(wideTopic, partition), 1L);
         }
         engine.onReceive(caused(C1, 0, "A", wide));
-        assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+        assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "with a 129-partition group, the partition count two varint bytes wide");
 
         for (int remaining = 128; remaining >= 126; remaining--) {
             engine.onIdentityReport(new IdentityReport(Set.of(new ChannelId(wideTopic, remaining)), Set.of()));
             assertEquals(remaining, engine.frontierSize(),
                     "staging: the pruned partition must actually leave the frontier");
-            assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
+            assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                     "after shrinking the group to " + remaining + " partitions");
         }
     }

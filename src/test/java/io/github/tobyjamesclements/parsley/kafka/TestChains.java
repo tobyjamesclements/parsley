@@ -3,7 +3,7 @@ package io.github.tobyjamesclements.parsley.kafka;
 /**
  * The one cause-chain walk the kafka suites assert diagnoses through. Both walks are
  * bounded at 64 links, matching
- * {@link io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException#findIn}'s
+ * {@link io.github.tobyjamesclements.parsley.core.FailClosedException#findIn}'s
  * guard against a cyclic chain, and both start at the thrown throwable itself — Kafka
  * Streams wraps handler failures, so the diagnosis is rarely the outermost throwable.
  */

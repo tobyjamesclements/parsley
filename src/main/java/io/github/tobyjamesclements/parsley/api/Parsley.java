@@ -2,28 +2,35 @@ package io.github.tobyjamesclements.parsley.api;
 
 import java.util.List;
 
-import io.github.tobyjamesclements.parsley.kafka.ParsleyRuntime;
+import io.github.tobyjamesclements.parsley.kafka.StreamsRuntime;
 
 /**
  * A running set of processes, each executing under causal delivery order.
  *
- * <p>Every {@link ProcessDefinition} passed to {@link #start} runs as its own Kafka Streams
+ * <p>Every {@link Process} passed to {@link #start} runs as its own Kafka Streams
  * application under {@code exactly_once_v2} and {@code read_committed}. A process that cannot
  * uphold the delivery guarantee stops rather than weakening it, and stays stopped until an
  * operator intervenes.
  *
- * @see ProcessDefinition
+ * @see Process
  * @see ParsleyConfig
  */
 public final class Parsley implements AutoCloseable {
-    private final ParsleyRuntime runtime;
 
-    private Parsley(ParsleyRuntime runtime) {
+    /**
+     * Namespace Parsley reserves for its own stores and topics. Application names, whether of
+     * a topic, a store, a process or the application id prefix, may not contain it.
+     */
+    public static final String RESERVED_PREFIX = "__parsley.";
+
+    private final StreamsRuntime runtime;
+
+    private Parsley(StreamsRuntime runtime) {
         this.runtime = runtime;
     }
 
     /**
-     * Validates every definition, resolves every received and sent topic, establishes each
+     * Validates every process, resolves every received and sent topic, establishes each
      * process's initial read positions, then starts every process and returns.
      *
      * <p>Every declared topic must already exist; nothing is created. The start is
@@ -36,27 +43,27 @@ public final class Parsley implements AutoCloseable {
      * @param config    broker connection, application identity and metadata budget
      * @param processes the processes to run, at least one
      * @return a handle owning the running processes
-     * @throws io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException
+     * @throws io.github.tobyjamesclements.parsley.core.FailClosedException
      *         if a process cannot start without breaching the guarantee, for example when
-     *         messages remain held on a channel the definition no longer receives
+     *         messages remain held on a channel the process no longer receives
      * @throws IllegalArgumentException if {@code config}, {@code processes} or an element
-     *         is null, or the definitions conflict or name no process
+     *         is null, or the processes conflict or name no process
      * @throws IllegalStateException if the cluster could not be queried, or a declared topic
      *         does not exist
      */
-    public static Parsley start(ParsleyConfig config, ProcessDefinition... processes) {
+    public static Parsley start(ParsleyConfig config, Process... processes) {
         if (config == null) {
             throw new IllegalArgumentException("config must be non-null");
         }
         if (processes == null) {
             throw new IllegalArgumentException("processes must be non-null");
         }
-        for (ProcessDefinition process : processes) {
+        for (Process process : processes) {
             if (process == null) {
                 throw new IllegalArgumentException("processes must not contain a null element");
             }
         }
-        return new Parsley(ParsleyRuntime.start(config, List.of(processes)));
+        return new Parsley(StreamsRuntime.start(config, List.of(processes)));
     }
 
     /**

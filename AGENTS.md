@@ -35,14 +35,11 @@ by reordering, skipping, or adding a timeout. Where the guarantee cannot be uphe
 2. `docs/wire-format.md`, the **frozen** wire format of the causal metadata. Any change to the
    grammar needs a new version byte and a documented migration; prefer no change.
 3. `docs/model.md`, how the pieces satisfy the spec, and why.
-4. `DECISIONS.md`, every choice the spec left open, numbered and append-only, with the
-   alternatives rejected. Correcting entries supersede rather than delete (D64 corrects D27,
-   D67 supersedes D65 and D66). Add to it when you make a choice; do not rewrite it.
-5. `EVIDENCE.md`, per spec criterion, what would catch a violation. Its standard is
-   unforgiving: each cell names what *fails* when the behaviour breaks, and a test that
-   stays green when the behaviour breaks is worse than an empty cell.
-6. `ASSESSMENT.md`, the findings of the hardening review this tree resolved. Historical;
-   `DECISIONS.md` cites it by section throughout.
+
+Code and docs cite decision records as "D<n>" (D115, D67 and so on). The decision log those
+numbers index was removed from the tree; the records are in the git history of
+`DECISIONS.md` before its deletion, and the numbers are kept in the citations as pointers
+into it.
 
 ## Map
 
@@ -52,19 +49,12 @@ by reordering, skipping, or adding a timeout. Where the guarantee cannot be uphe
   names no host type, and `CorePurityTest` enforces it by scanning the directory: no clock,
   no network, no Kafka (SPEC Structural 9). Keep it that way.
 - `…/parsley/api`, the public, statically-typed declaration surface: `Parsley`,
-  `ParsleyConfig`, `ProcessDefinition`, `Channel`, `Store`, `Handler`, `Delivery`,
-  `Effects`, `StateReader`, `ProcessStatus` with its per-task `TaskStatus`, and
-  `KafkaNames`, the one spelling of the topic-name rule every declared name satisfies.
+  `ParsleyConfig`, `Process`, `Channel`, `Store`, `Handler`, `Delivery`,
+  `Effects`, `State` and `ProcessStatus`.
 - `…/parsley/kafka`, the Kafka Streams adapter: byte topologies (`ProcessTopology`,
-  `ParsleyProcessor`), topic identity at task initialisation (`TopicIdentitySource`,
+  `ProcessNode`), topic identity at task initialisation (`TopicIdentitySource`,
   `AdminTopicIdentitySource`), the store over a Streams state store
-  (`StreamsOrderingStore`), and the EOS lifecycle (`ParsleyRuntime`).
-- `…/parsley/session`, the companion surface for session consistency at the pipeline's
-  edge (issue #96, D99): `CausalPast`, a causal frontier carried as a client token or
-  recorded beside projected data, with a coverage check that fails closed over channels
-  the past cannot verify. It rides the core's public surface, nothing in the other three
-  packages reads it, and `SessionPurityTest` keeps it host-free. It must not accrete into
-  `core`, and the engine's private delivered past stays private.
+  (`StreamsOrderingStore`), and the EOS lifecycle (`StreamsRuntime`).
 
 `Sabotage` lives in `core` but is package-private on purpose: the public API offers no way
 to construct an engine with a mode enabled (SPEC Structural 9). It exists so the suite can
@@ -77,7 +67,7 @@ prove it catches each violation class.
   round's suites went with the round). It must be green at every commit, and it grows. It
   shrinks only when a mechanism is deleted with its pins, and the record that deletes it
   says so.
-- Three layers. Unit tests over the pure core and the `session` companion. A **simulation harness** driving real engines
+- Three layers. Unit tests over the pure core. A **simulation harness** driving real engines
   under a simulated host that honours the spec's Host obligations, over randomised topologies,
   interleavings, gaps from aborted transactions, crashes, restarts and offset rewinds,
   checked against a happened-before `Oracle` maintained outside the engine. And integration tests
@@ -100,7 +90,7 @@ application logic exactly the delivered message and its application state, and a
 effects only through the returned value: no timers, no producer, no clock.
 
 ```java
-var shipper = ProcessDefinition.named("shipper")
+var shipper = Process.named("shipper")
     .receives(orders, (delivery, state) -> Effects.builder()
         .put(inventory, delivery.key(), remaining)
         .send(shipments, delivery.key(), Shipment.of(delivery.value()))
@@ -118,10 +108,10 @@ try (Parsley parsley = Parsley.start(config, shipper)) {
 `Parsley.start` returns once each process has been started, not once it is running; the
 wait is what keeps the application up, and `status()` afterwards says what stopped and why.
 
-`docs/index.md` carries the fuller version. `ProcessStatus` and `OrderingStateInspector` are the
-diagnosis surface when a process is holding or has stopped, and `docs/runbooks.md` says what
+`docs/` carries the fuller version. `ProcessStatus` and `OrderingStateInspector` are the
+diagnosis surface when a process has stopped or is holding, and `docs/runbooks.md` says what
 an operator does with that diagnosis, one runbook per refusal reason. A reason added to
-`ParsleyFailClosedException.Reason` needs a runbook there and a trigger row in
+`FailClosedException.Reason` needs a runbook there and a trigger row in
 `docs/failing-closed.md`; `RunbookCoverageTest` fails until it has both.
 
 ## Conventions if you modify the code
@@ -132,5 +122,5 @@ an operator does with that diagnosis, one runbook per refusal reason. A reason a
 - Every test that builds a Kafka Streams instance takes its `state.dir` from a JUnit
   `@TempDir`; shared directories contend on one RocksDB lock.
 - camelCase test method names, Javadoc on every `@Test`, assertion messages.
-- Record what you decided in `DECISIONS.md` and what would catch its failure in
-  `EVIDENCE.md`. Both are part of the deliverable.
+- Record what you decided, and what would catch its failure, in the commit message and in
+  the Javadoc of the code that carries it.

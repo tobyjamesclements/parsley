@@ -38,7 +38,7 @@ import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Effects;
 import io.github.tobyjamesclements.parsley.api.Parsley;
 import io.github.tobyjamesclements.parsley.api.ParsleyConfig;
-import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
+import io.github.tobyjamesclements.parsley.api.Process;
 import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
@@ -83,7 +83,6 @@ class EndToEndIntegrationTest {
     private static ParsleyConfig config(String prefix) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(prefix).toString())
-                .statusInterval(Duration.ofMillis(500))
                 .build();
     }
 
@@ -129,15 +128,15 @@ class EndToEndIntegrationTest {
         Channel<String, String> t2 = Channel.of("e2e-t2", Serdes.String(), Serdes.String());
 
         ConcurrentLinkedQueue<String> deliveredAtP3 = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p1 = ProcessDefinition.named("p1")
+        Process p1 = Process.named("p1")
                 .receives(t0, (d, s) -> Effects.builder().send(t1, d.key(), "A").build())
                 .sends(t1)
                 .build();
-        ProcessDefinition p2 = ProcessDefinition.named("p2")
+        Process p2 = Process.named("p2")
                 .receives(t1, (d, s) -> Effects.builder().send(t2, d.key(), "B").build())
                 .sends(t2)
                 .build();
-        ProcessDefinition p3 = ProcessDefinition.named("p3")
+        Process p3 = Process.named("p3")
                 .receives(t1, (d, s) -> {
                     deliveredAtP3.add(d.value());
                     return Effects.none();
@@ -173,7 +172,7 @@ class EndToEndIntegrationTest {
         Channel<String, String> a = Channel.of("hold-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("hold-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition ph = ProcessDefinition.named("ph")
+        Process ph = Process.named("ph")
                 .receives(a, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -213,7 +212,7 @@ class EndToEndIntegrationTest {
         Channel<String, String> a = Channel.of("mig-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("mig-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition pm = ProcessDefinition.named("pm")
+        Process pm = Process.named("pm")
                 .receives(a, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -246,7 +245,6 @@ class EndToEndIntegrationTest {
     private static ParsleyConfig instanceConfig(String prefix, String instanceDir) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(instanceDir).toString())
-                .statusInterval(Duration.ofMillis(500))
                 .build();
     }
 
@@ -257,7 +255,7 @@ class EndToEndIntegrationTest {
         Channel<String, String> a = Channel.of("wipe-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("wipe-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition pw = ProcessDefinition.named("pw")
+        Process pw = Process.named("pw")
                 .receives(a, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -272,19 +270,6 @@ class EndToEndIntegrationTest {
 
         try (Parsley parsley = Parsley.start(config("wipe"), pw)) {
             awaitFedAndHeld("wipe-pw", "wipe-b", delivered);
-            // The status surface names the hold and the cause it waits for (D103), on the
-            // real host: the snapshot refreshes once per facts interval.
-            await("status names the held message and its missing cause", () -> {
-                var tasks = parsley.status().get("pw").tasks();
-                if (tasks.size() != 1 || tasks.get(0).heldMessages() != 1) {
-                    return false;
-                }
-                var held = tasks.get(0).heldChannels().get(0);
-                return held.topic().equals("wipe-b") && held.headPosition() == 0L
-                        && held.blockers().size() == 1
-                        && held.blockers().get(0).topic().equals("wipe-a")
-                        && held.blockers().get(0).requiredPosition() == 0L;
-            }, Duration.ofSeconds(30));
         }
 
         deleteRecursively(stateDir.resolve("wipe"));
@@ -315,9 +300,8 @@ class EndToEndIntegrationTest {
     /**
      * A cause naming a position no committed record occupies — here the abort marker of a
      * transaction, a hand-built header exactly like an out-of-contract stamper's (wire-format
-     * constraint 8) — is held and visible in {@code status()}, neither rescued by a report nor
-     * refused: the blocker names the position and what the channel has settled to, the
-     * process stays healthy, and nothing delivers past the hold until a later record on the
+     * constraint 8) — is held, neither rescued by a report nor refused: the process stays
+     * healthy, and nothing delivers past the hold until a later record on the
      * channel settles the run below it — receipt of gap-a@3 asserts everything below was fed
      * or never will be, and B goes with it (D115). A parsley stamper never produces this
      * header; the facts round that used to rescue it served stampers this library does not
@@ -329,7 +313,7 @@ class EndToEndIntegrationTest {
         Channel<String, String> a = Channel.of("gap-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("gap-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition pg = ProcessDefinition.named("pg")
+        Process pg = Process.named("pg")
                 .receives(a, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -349,17 +333,7 @@ class EndToEndIntegrationTest {
             produceAborted("gap-a", "ghost");
             produce("gap-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("gap-a"), 0), 2L)));
 
-            await("status to name the hold and its out-of-contract cause", () -> {
-                var tasks = parsley.status().get("pg").tasks();
-                if (tasks.size() != 1 || tasks.get(0).heldMessages() != 1) {
-                    return false;
-                }
-                var held = tasks.get(0).heldChannels().get(0);
-                return held.topic().equals("gap-b") && held.blockers().size() == 1
-                        && held.blockers().get(0).topic().equals("gap-a")
-                        && held.blockers().get(0).requiredPosition() == 2L
-                        && held.blockers().get(0).settledPosition().equals(java.util.OptionalLong.of(0L));
-            }, Duration.ofSeconds(30));
+            ClusterTestSupport.awaitCommitted(admin, "gap-pg", "gap-b", 1); // B was fed and its step committed
             Thread.sleep(3_000);
             assertEquals(List.of("A0"), List.copyOf(delivered), "no report and no clock rescues the hold");
             assertTrue(parsley.healthy(), "an out-of-contract cause is held, not refused");
@@ -392,7 +366,7 @@ class EndToEndIntegrationTest {
         Channel<String, String> a = Channel.of("ret-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("ret-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition pr = ProcessDefinition.named("pr")
+        Process pr = Process.named("pr")
                 .receives(a, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -437,7 +411,7 @@ class EndToEndIntegrationTest {
         createTopics("trunc-a");
         Channel<String, String> a = Channel.of("trunc-a", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition pt = ProcessDefinition.named("pt")
+        Process pt = Process.named("pt")
                 .receives(a, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -464,7 +438,7 @@ class EndToEndIntegrationTest {
                     "nothing may be delivered past the discarded positions");
             await("the consumer's out-of-range stop to reach status() with its reason",
                     () -> parsley.status().get("pt").refusalReason().isPresent(), Duration.ofSeconds(30));
-            assertEquals(io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.Reason
+            assertEquals(io.github.tobyjamesclements.parsley.core.FailClosedException.Reason
                             .POSITIONS_DISCARDED_UNREAD,
                     parsley.status().get("pt").refusalReason().orElseThrow(),
                     "the fetch is the one judge of retention, and its stop names Safety 8's condition (D109)");
@@ -480,7 +454,7 @@ class EndToEndIntegrationTest {
         Channel<String, String> in = Channel.of("once-in", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("once-out", Serdes.String(), Serdes.String());
         AtomicBoolean alreadyFailed = new AtomicBoolean(false);
-        ProcessDefinition po = ProcessDefinition.named("po")
+        Process po = Process.named("po")
                 .receives(in, (d, s) -> {
                     if (d.value().equals("boom") && alreadyFailed.compareAndSet(false, true)) {
                         throw new IllegalStateException("injected crash while handling the delivery");

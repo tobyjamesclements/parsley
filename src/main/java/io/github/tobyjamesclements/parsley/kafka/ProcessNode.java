@@ -1,6 +1,5 @@
 package io.github.tobyjamesclements.parsley.kafka;
 
-import org.apache.kafka.common.header.Header;
 import org.apache.kafka.common.header.internals.RecordHeader;
 import org.apache.kafka.common.header.internals.RecordHeaders;
 import org.apache.kafka.common.serialization.Serde;
@@ -30,17 +29,15 @@ import java.util.UUID;
 import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Delivery;
 import io.github.tobyjamesclements.parsley.api.Effects;
-import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
-import io.github.tobyjamesclements.parsley.api.StateReader;
+import io.github.tobyjamesclements.parsley.api.Process;
+import io.github.tobyjamesclements.parsley.api.State;
 import io.github.tobyjamesclements.parsley.api.Store;
-import io.github.tobyjamesclements.parsley.api.TaskStatus;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
-import io.github.tobyjamesclements.parsley.core.Deliverability;
 import io.github.tobyjamesclements.parsley.core.DeliverableMessage;
-import io.github.tobyjamesclements.parsley.core.HeaderKV;
+import io.github.tobyjamesclements.parsley.core.Header;
 import io.github.tobyjamesclements.parsley.core.IdentityReport;
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 import io.github.tobyjamesclements.parsley.core.ProcessEngine;
 import io.github.tobyjamesclements.parsley.core.ReceivedMessage;
 
@@ -55,30 +52,31 @@ import io.github.tobyjamesclements.parsley.core.ReceivedMessage;
  * message that was sent, so receiving that message is what satisfies it (wire-format
  * constraint 8, D115). Task initialisation asks the substrate one question — which of the
  * topics its state names still exist — and settles or refuses on the answer; a wall-clock
- * punctuation then only drains what receipt already released and publishes the task's
- * status.
+ * punctuation then only drains what receipt already released, flushes holds, and asks the
+ * identity question again where it went unanswered.
  *
  * @see ProcessTopology
  */
-final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]> {
-    private static final Logger LOG = LoggerFactory.getLogger(ParsleyProcessor.class);
+final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
+    private static final Logger LOG = LoggerFactory.getLogger(ProcessNode.class);
 
-    private final ProcessDefinition definition;
-    private final Map<String, TopicInfo> topics;
+    private final Process definition;
+    private final Map<String, ResolvedTopic> topics;
     private final TopicIdentitySource identitySource;
     private final Map<TopicPartition, Long> startPositions;
-    private final Duration statusInterval;
+    private final Duration punctuationInterval;
     private final int metadataBudgetBytes;
-    private final ProcessDiagnostics diagnostics;
 
-    private final BudgetAlarm budgetAlarm = new BudgetAlarm();
-    private Cancellable statusPunctuator;
+    /** How often each task runs its punctuation: the drain, the flush and the identity retry. */
+    static final Duration PUNCTUATION_INTERVAL = Duration.ofSeconds(1);
+
+    private Cancellable punctuator;
     /**
      * True from an initialisation until its identity question has been answered. A source
-     * that could not answer at initialisation is asked again from the status punctuation,
-     * so the check is event-driven and eventual, never periodic (D115) — and, since each
-     * attempt can block the stream thread for the describe's timeout, not before
-     * {@link #identityRetryNotBefore}, which backs off exponentially from one status
+     * that could not answer at initialisation is asked again from the punctuation, so the
+     * check is event-driven and eventual, never periodic (D115) — and, since each attempt
+     * can block the stream thread for the describe's timeout, not before
+     * {@link #identityRetryNotBefore}, which backs off exponentially from one punctuation
      * interval to {@link #IDENTITY_RETRY_CAP} while the substrate keeps not answering.
      */
     private boolean identityCheckPending;
@@ -93,9 +91,9 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private final Map<ChannelId, String> topicByChannel = new HashMap<>();
     private final Map<String, KeyValueStore<Bytes, byte[]>> appStores = new HashMap<>();
     private final Map<String, String> serdeTopicByStore = new HashMap<>();
-    private StateReader stateReader;
+    private State state;
     /**
-     * A fail-closed refusal raised by the state reader inside application code. The reader
+     * A fail-closed refusal raised by the {@link State} inside application code. The state
      * latches it here before throwing, and {@code deliver} rethrows at every seam boundary
      * — frame entry, after the delivered payload's deserializers, after the handler, and
      * after the planned effects apply — so an application catch cannot commit a step whose
@@ -103,7 +101,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      * is an object application code can hold: a latch written from an application thread
      * must be visible to the stream thread's next check.
      */
-    private volatile ParsleyFailClosedException swallowedSeamViolation;
+    private volatile FailClosedException swallowedSeamViolation;
 
     /**
      * @param definition          the process this instance runs
@@ -115,20 +113,18 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      *                            coverage is already at or past it, and coverage is never
      *                            lowered, so the position matters only to a task with no
      *                            state behind it
-     * @param statusInterval      how often each task publishes its status
+     * @param punctuationInterval how often each task runs its punctuation
      * @param metadataBudgetBytes the largest causal metadata a message may carry
-     * @param diagnostics         where this task publishes its status
      */
-    ParsleyProcessor(ProcessDefinition definition, Map<String, TopicInfo> topics,
+    ProcessNode(Process definition, Map<String, ResolvedTopic> topics,
                      TopicIdentitySource identitySource, Map<TopicPartition, Long> startPositions,
-                     Duration statusInterval, int metadataBudgetBytes, ProcessDiagnostics diagnostics) {
+                     Duration punctuationInterval, int metadataBudgetBytes) {
         this.definition = definition;
         this.topics = topics;
         this.identitySource = identitySource;
         this.startPositions = Map.copyOf(startPositions);
-        this.statusInterval = statusInterval;
+        this.punctuationInterval = punctuationInterval;
         this.metadataBudgetBytes = metadataBudgetBytes;
-        this.diagnostics = diagnostics;
     }
 
     /**
@@ -142,7 +138,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      * next punctuation or record.
      *
      * @param context the task context
-     * @throws ParsleyFailClosedException if restored state cannot be read, if the task
+     * @throws FailClosedException if restored state cannot be read, if the task
      *         width changed so that state no longer matches its partitioning, if a received
      *         topic was recreated under its name, or if one was deleted while messages from
      *         it remain held
@@ -152,9 +148,9 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         // A revived task runs close() and then init() on this same instance against restored
         // state; both cancel the previous incarnation's punctuator, so a lifecycle that
         // re-initialises without closing is covered too.
-        if (statusPunctuator != null) {
-            statusPunctuator.cancel();
-            statusPunctuator = null;
+        if (punctuator != null) {
+            punctuator.cancel();
+            punctuator = null;
         }
 
         this.context = context;
@@ -163,8 +159,8 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         channelByTopic.clear();
         topicByChannel.clear();
         Map<ChannelId, Long> taskStartPositions = new HashMap<>();
-        for (String topic : definition.receivedTopics()) {
-            TopicInfo info = topics.get(topic);
+        for (String topic : ProcessTopology.inputTopics(definition)) {
+            ResolvedTopic info = topics.get(topic);
             if (partition < info.partitions()) {
                 ChannelId channel = new ChannelId(info.topicId(), partition);
                 channelByTopic.put(topic, channel);
@@ -189,14 +185,14 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             serdeTopicByStore.put(store.name(),
                     ProcessTopology.changelogName(context.applicationId(), store.name()));
         }
-        stateReader = new StoreStateReader();
+        state = new StreamsState();
         swallowedSeamViolation = null;
 
-        identityRetryDelay = statusInterval;
+        identityRetryDelay = punctuationInterval;
         identityRetryNotBefore = Long.MIN_VALUE;
         checkIdentity();
 
-        statusPunctuator = context.schedule(statusInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
+        punctuator = context.schedule(punctuationInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
             if (identityCheckPending && timestamp >= identityRetryNotBefore) {
                 identityRetryNotBefore = timestamp + identityRetryDelay.toMillis();
                 identityRetryDelay = min(identityRetryDelay.multipliedBy(2), IDENTITY_RETRY_CAP);
@@ -204,10 +200,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             }
             drain();
             engine.flushHolds();
-            observeFrontier();
-            publishStatus();
         });
-        publishStatus();
     }
 
     /**
@@ -215,8 +208,8 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      * topics at the identity resolved at start, and every topic in the restored frontier —
      * and hands the engine what was confirmed gone. A source that cannot answer is not
      * evidence: the causes stay expressed, nothing settles, and the question stays pending,
-     * to be asked again at the next status punctuation until it is answered (D44's rule,
-     * kept: absence of an answer is never a verdict).
+     * to be asked again at the next punctuation until it is answered (D44's rule, kept:
+     * absence of an answer is never a verdict).
      */
     private void checkIdentity() {
         // Every channel this task's state names, defined once: the received channels and
@@ -237,13 +230,13 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         } catch (Exception e) {
             identityCheckPending = true;
             LOG.warn("{}: topic identity could not be checked ({}); continuing on the identities resolved"
-                    + " at start, and asking again from the status punctuation", definition.name(), e.toString());
+                    + " at start, and asking again from the punctuation", definition.name(), e.toString());
             LOG.debug("{}: identity check failure", definition.name(), e);
             return;
         }
         identityCheckPending = !verdicts.answered();
         if (!identityCheckPending) {
-            identityRetryDelay = statusInterval;
+            identityRetryDelay = punctuationInterval;
         }
         if (verdicts.deleted().isEmpty() && verdicts.recreated().isEmpty()) {
             return;
@@ -265,101 +258,22 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     }
 
     /**
-     * Publishes this task's delivery state for {@code status()} (D103): every channel with
-     * holds, what its head waits for, and the frontier's size. Taken on the stream thread,
-     * where the engine lives, once per status interval — the decision for each head is the
-     * one {@link #drain()} would act on, so the cost is one decision per held channel.
-     */
-    private void publishStatus() {
-        List<TaskStatus.HeldChannel> heldChannels = new ArrayList<>();
-        int heldMessages = 0;
-        for (ChannelId channel : engine.receivedChannelSet()) {
-            int held = engine.heldCount(channel);
-            if (held == 0) {
-                continue;
-            }
-            heldMessages += held;
-            List<TaskStatus.Blocker> blockers = new ArrayList<>();
-            engine.headVerdict(channel).ifPresent(verdict -> {
-                if (verdict instanceof Deliverability.Held heldVerdict) {
-                    for (Deliverability.Blocker blocker : heldVerdict.blockers()) {
-                        blockers.add(new TaskStatus.Blocker(topicNameOf(blocker.channel()),
-                                blocker.channel().partition(), blocker.requiredPosition(), blocker.settledPosition()));
-                    }
-                }
-            });
-            heldChannels.add(new TaskStatus.HeldChannel(topicNameOf(channel), channel.partition(), held,
-                    engine.headPosition(channel).orElseThrow(), blockers));
-        }
-        diagnostics.publish(new TaskStatus(partition, engine.frontierSize(), engine.frontierBytes(),
-                heldMessages, heldChannels));
-    }
-
-    /** A received channel's topic name; a blocker is always on a received channel. */
-    private String topicNameOf(ChannelId channel) {
-        String topic = topicByChannel.get(channel);
-        return topic != null ? topic : channel.toString();
-    }
-
-    /**
-     * Cancels the status punctuator and retires this task's status. On the revival path
-     * this runs before the successor's {@code init}, which repeats the cancellation.
+     * Cancels the punctuator. On the revival path this runs before the successor's
+     * {@code init}, which repeats the cancellation.
      */
     @Override
     public void close() {
-        if (statusPunctuator != null) {
-            statusPunctuator.cancel();
-            statusPunctuator = null;
+        if (punctuator != null) {
+            punctuator.cancel();
+            punctuator = null;
         }
-        if (engine != null) {
-            diagnostics.retire(partition);
-        }
-    }
-
-    /**
-     * The once-per-process latch behind the 80%-of-budget warning (D53): the operator is
-     * pointed at the growth law once, ahead of the budget's fail-closed wall, not on every
-     * status interval the frontier spends above the line. Deliberately never reset by
-     * {@code init} or {@code close}: a revived task is the same process, and D53's "warns
-     * once" is per process, not per incarnation. Extracted so the threshold and the latch
-     * are pinnable without capturing log output; {@link #observeFrontier()} owns the
-     * message.
-     */
-    static final class BudgetAlarm {
-        private boolean warned;
-
-        /**
-         * Decides whether the warning fires now: exactly once, the first time the encoded
-         * frontier reaches 80% of the budget.
-         *
-         * @param frontierBytes the frontier's encoded width, in bytes
-         * @param budgetBytes   the metadata budget, in bytes
-         * @return whether to emit the warning
-         */
-        boolean shouldWarn(int frontierBytes, int budgetBytes) {
-            if (warned || frontierBytes < budgetBytes * 0.8) {
-                return false;
-            }
-            warned = true;
-            return true;
-        }
-    }
-
-    private void observeFrontier() {
-        int bytes = engine.frontierBytes();
-        if (budgetAlarm.shouldWarn(bytes, metadataBudgetBytes)) {
-            LOG.warn("{}: causal metadata at {} bytes ({} channels), at 80% of the {}-byte budget, the process"
-                            + " will fail closed on reaching it; see docs/model.md for the growth law",
-                    definition.name(), bytes, engine.frontierSize(), metadataBudgetBytes);
-        }
-        LOG.debug("{}: causal frontier {} channels, {} bytes", definition.name(), engine.frontierSize(), bytes);
     }
 
     /**
      * Feeds one record to the engine and delivers whatever that makes deliverable.
      *
      * @param record the record, as raw bytes
-     * @throws ParsleyFailClosedException if the guarantee cannot be upheld, which stops this
+     * @throws FailClosedException if the guarantee cannot be upheld, which stops this
      *         process
      */
     @Override
@@ -370,9 +284,9 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         if (channel == null) {
             throw new IllegalStateException(definition.name() + " fed from undeclared topic " + metadata.topic());
         }
-        List<HeaderKV> headers = new ArrayList<>();
-        for (Header header : record.headers()) {
-            headers.add(new HeaderKV(header.key(), header.value()));
+        List<Header> headers = new ArrayList<>();
+        for (org.apache.kafka.common.header.Header header : record.headers()) {
+            headers.add(new Header(header.key(), header.value()));
         }
         engine.onReceive(new ReceivedMessage(
                 channel, metadata.offset(), record.timestamp(), record.key(), record.value(), headers));
@@ -392,7 +306,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         }
     }
 
-    private <K, V> void deliver(ProcessDefinition.Input<K, V> input, DeliverableMessage message) {
+    private <K, V> void deliver(Process.Input<K, V> input, DeliverableMessage message) {
         // Checked at entry, never blanket-reset mid-frame: a reset placed after any
         // application code would erase what that code latched. The delivered payload's
         // own deserializers are application code and run before the handler, so a refusal
@@ -403,7 +317,7 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         // Reserved transport headers are parsley's own carriage, invisible to application
         // logic in both directions (D56): deserializers see exactly the headers the
         // application sent, the same view Delivery presents one frame later.
-        List<HeaderKV> applicationHeaders = withoutReservedHeaders(message.headers());
+        List<Header> applicationHeaders = withoutReservedHeaders(message.headers());
         RecordHeaders receivedHeaders = toKafkaHeaders(applicationHeaders);
         K key;
         V value;
@@ -417,15 +331,15 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             // latch identifies it, and wrapping it as a payload failure would mislabel
             // the stop for status().
             rethrowSeamViolation();
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
+            throw new FailClosedException(
+                    FailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
                     definition.name() + ": " + topic + "@" + message.position(), e);
         }
         rethrowSeamViolation();
 
         Delivery<K, V> delivery = Delivery.of(channel, message.channel().partition(), message.position(),
                 message.timestamp(), key, value, applicationHeaders);
-        Effects effects = input.handler().handle(delivery, stateReader);
+        Effects effects = input.handler().handle(delivery, state);
         // The reader's refusal was thrown inside the handler's own frame, where an
         // application catch can swallow it; the latch makes the step fail regardless,
         // as docs/failing-closed.md promises for every fail-closed event.
@@ -433,8 +347,8 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         if (effects == null) {
             // A deliberate refusal that recurs identically on restart, so it carries its
             // own reason and reaches status() rather than an empty refusalReason.
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.HANDLER_RETURNED_NULL_EFFECTS,
+            throw new FailClosedException(
+                    FailClosedException.Reason.HANDLER_RETURNED_NULL_EFFECTS,
                     definition.name() + ": handler for " + topic + " returned null effects; return"
                             + " Effects.none() for a step that changes nothing");
         }
@@ -446,12 +360,12 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         // unwind a half-applied step. Apply then consumes the plan, so an effect cannot
         // reach a store or a sink without having been planned.
         List<PlannedWrite> writes = new ArrayList<>(effects.writes().size());
-        for (Effects.StateWrite<?, ?> write : effects.writes()) {
+        for (Effects.Write<?, ?> write : effects.writes()) {
             writes.add(planWrite(write));
         }
-        List<PlannedSend> sends = new ArrayList<>(effects.emissions().size());
-        for (Effects.Emission<?, ?> emission : effects.emissions()) {
-            sends.add(planEmission(emission, emission.timestamp().orElse(message.timestamp())));
+        List<PlannedSend> sends = new ArrayList<>(effects.sends().size());
+        for (Effects.Send<?, ?> send : effects.sends()) {
+            sends.add(planSend(send, send.timestamp().orElse(message.timestamp())));
         }
         for (PlannedWrite write : writes) {
             if (write.value() == null) {
@@ -471,16 +385,16 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
 
     /** Rethrows a latched seam refusal, clearing the latch so it is raised exactly once. */
     private void rethrowSeamViolation() {
-        ParsleyFailClosedException violation = swallowedSeamViolation;
+        FailClosedException violation = swallowedSeamViolation;
         if (violation != null) {
             swallowedSeamViolation = null;
             throw violation;
         }
     }
 
-    private static List<HeaderKV> withoutReservedHeaders(List<HeaderKV> headers) {
-        List<HeaderKV> application = new ArrayList<>(headers.size());
-        for (HeaderKV header : headers) {
+    private static List<Header> withoutReservedHeaders(List<Header> headers) {
+        List<Header> application = new ArrayList<>(headers.size());
+        for (Header header : headers) {
             if (!header.key().startsWith(CausesCodec.RESERVED_HEADER_PREFIX)) {
                 application.add(header);
             }
@@ -491,14 +405,14 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     /** One resolved, serialized state write, ready to apply. */
     private record PlannedWrite(KeyValueStore<Bytes, byte[]> store, Bytes key, byte[] value) {}
 
-    /** One resolved, serialized, stamped emission, ready to forward. */
+    /** One resolved, serialized, stamped send, ready to forward. */
     private record PlannedSend(Record<byte[], byte[]> record, String sinkName) {}
 
     /**
      * The store seam matches by identity where the send seam matches by name: a store read
      * returns a value the caller casts to the passed instance's types, so resolving a
      * look-alike store by name would smuggle a differently-typed codec into the
-     * application's own frame. An emission is write-only and has no such path back.
+     * application's own frame. A send is write-only and has no such path back.
      */
     private void requireDeclaredStore(Store<?, ?> store, String access) {
         if (store == null) {
@@ -506,15 +420,15 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         }
         Store<?, ?> declared = definition.store(store.name());
         if (declared != store) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE,
+            throw new FailClosedException(
+                    FailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE,
                     definition.name() + ": " + access + " targets a store not declared by stores(...): "
                             + store.name()
                             + (declared == null ? "" : " (a Store instance other than the declared one)"));
         }
     }
 
-    private PlannedWrite planWrite(Effects.StateWrite<?, ?> write) {
+    private PlannedWrite planWrite(Effects.Write<?, ?> write) {
         Store<?, ?> declared = write.store();
         requireDeclaredStore(declared, "state write");
         String serdeTopic = serdeTopicByStore.get(declared.name());
@@ -523,8 +437,8 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             // The Serializer contract permits signalling failure by returning null; a
             // null store key cannot address an entry, so it must fail the plan with its
             // reason rather than surface as the store's bare NPE during apply.
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
+            throw new FailClosedException(
+                    FailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
                     definition.name() + ": " + declared.name() + " state write key serialized to null;"
                             + " the declared key serde could not encode it");
         }
@@ -533,34 +447,34 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         return new PlannedWrite(appStores.get(declared.name()), Bytes.wrap(keyBytes), valueBytes);
     }
 
-    private PlannedSend planEmission(Effects.Emission<?, ?> emission, long timestamp) {
-        String topic = emission.channel().topic();
-        Channel<?, ?> declared = definition.sendChannel(topic);
+    private PlannedSend planSend(Effects.Send<?, ?> send, long timestamp) {
+        String topic = send.channel().topic();
+        Channel<?, ?> declared = definition.output(topic);
         if (declared == null) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL,
-                    definition.name() + " emitted to undeclared channel " + topic);
+            throw new FailClosedException(
+                    FailClosedException.Reason.SEND_TO_UNDECLARED_CHANNEL,
+                    definition.name() + " sent to undeclared channel " + topic);
         }
-        RecordHeaders headers = toKafkaHeaders(emission.headers());
+        RecordHeaders headers = toKafkaHeaders(send.headers());
         // The declared channel's serdes produce the bytes, the way the store seam writes
         // with its declared store: name resolution decides the codec, so a second Channel
         // instance for a declared topic has no serdes to smuggle past sends(...).
-        byte[] keyBytes = emission.key() == null
-                ? null : serialize(declared.keySerde(), topic, headers, emission.key());
-        byte[] valueBytes = emission.value() == null
-                ? null : serialize(declared.valueSerde(), topic, headers, emission.value());
-        // The emission's own headers were checked at construction, but the serializers were
+        byte[] keyBytes = send.key() == null
+                ? null : serialize(declared.keySerde(), topic, headers, send.key());
+        byte[] valueBytes = send.value() == null
+                ? null : serialize(declared.valueSerde(), topic, headers, send.value());
+        // The send's own headers were checked at construction, but the serializers were
         // just handed the mutable collection; re-check before the genuine stamp goes on, so
         // a header-writing serializer fails here instead of poisoning every receiver.
-        for (Header header : headers) {
+        for (org.apache.kafka.common.header.Header header : headers) {
             if (header.key().startsWith(CausesCodec.RESERVED_HEADER_PREFIX)) {
-                throw new ParsleyFailClosedException(
-                        ParsleyFailClosedException.Reason.RESERVED_HEADER_USED,
+                throw new FailClosedException(
+                        FailClosedException.Reason.RESERVED_HEADER_USED,
                         definition.name() + ": serializer for " + topic + " wrote reserved header '"
                                 + header.key() + "'");
             }
         }
-        headers.add(new RecordHeader(CausesCodec.HEADER_KEY, engine.causesHeaderForEmission()));
+        headers.add(new RecordHeader(CausesCodec.HEADER_KEY, engine.causesHeaderForSend()));
         return new PlannedSend(new Record<>(keyBytes, valueBytes, timestamp, headers), ProcessTopology.sinkName(topic));
     }
 
@@ -582,27 +496,27 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             // A reader refusal thrown through the serializer keeps its own reason rather
             // than being relabeled as a payload failure.
             rethrowSeamViolation();
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
+            throw new FailClosedException(
+                    FailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
                     definition.name() + ": " + topic + " payload could not be serialized by the"
                             + " declared serde", e);
         }
     }
 
-    private static RecordHeaders toKafkaHeaders(List<HeaderKV> headers) {
+    private static RecordHeaders toKafkaHeaders(List<Header> headers) {
         RecordHeaders kafkaHeaders = new RecordHeaders();
-        for (HeaderKV header : headers) {
+        for (Header header : headers) {
             kafkaHeaders.add(new RecordHeader(header.key(), header.value()));
         }
         return kafkaHeaders;
     }
 
-    private final class StoreStateReader implements StateReader {
+    private final class StreamsState implements State {
         @Override
         public <K, V> V get(Store<K, V> store, K key) {
             try {
                 requireDeclaredStore(store, "state read");
-            } catch (ParsleyFailClosedException e) {
+            } catch (FailClosedException e) {
                 throw latched(e);
             }
             if (key == null) {
@@ -613,8 +527,8 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             try {
                 keyBytes = store.keySerde().serializer().serialize(serdeTopic, key);
             } catch (RuntimeException e) {
-                throw latched(new ParsleyFailClosedException(
-                        ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
+                throw latched(new FailClosedException(
+                        FailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
                         definition.name() + ": " + store.name() + " state read key could not be serialized"
                                 + " by the declared serde", e));
             }
@@ -622,8 +536,8 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
                 // The Serializer contract permits signalling failure by returning null;
                 // without this guard that shape surfaces as the store's bare NPE inside
                 // the handler's frame, unlatched and swallowable.
-                throw latched(new ParsleyFailClosedException(
-                        ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
+                throw latched(new FailClosedException(
+                        FailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
                         definition.name() + ": " + store.name() + " state read key serialized to null;"
                                 + " the declared key serde could not encode it"));
             }
@@ -634,15 +548,15 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             try {
                 return store.valueSerde().deserializer().deserialize(serdeTopic, valueBytes);
             } catch (RuntimeException e) {
-                throw latched(new ParsleyFailClosedException(
-                        ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
+                throw latched(new FailClosedException(
+                        FailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
                         definition.name() + ": " + store.name() + " stored value could not be decoded"
                                 + " by the declared serde", e));
             }
         }
 
         /** Latches a refusal raised inside the handler's frame, so a catch cannot swallow it. */
-        private ParsleyFailClosedException latched(ParsleyFailClosedException e) {
+        private FailClosedException latched(FailClosedException e) {
             swallowedSeamViolation = e;
             return e;
         }

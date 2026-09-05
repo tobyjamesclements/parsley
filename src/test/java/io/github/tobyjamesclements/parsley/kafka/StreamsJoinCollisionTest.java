@@ -10,7 +10,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -35,16 +35,16 @@ class StreamsJoinCollisionTest {
     @Test
     void aRefusedJoinIsReplacedOnlyWhileTheBootstrapWindowIsOpen() {
         Throwable collision = new StreamsException("join", new InconsistentGroupProtocolException("protocol"));
-        assertTrue(ParsleyRuntime.shouldReplaceThread(collision, 5, 10),
+        assertTrue(StreamsRuntime.shouldReplaceThread(collision, 5, 10),
                 "a collision before the deadline replaces the thread");
-        assertFalse(ParsleyRuntime.shouldReplaceThread(collision, 10, 10),
+        assertFalse(StreamsRuntime.shouldReplaceThread(collision, 10, 10),
                 "a collision at the deadline is persistent and stops the client");
-        assertFalse(ParsleyRuntime.shouldReplaceThread(new RuntimeException("something else"), 5, 10),
+        assertFalse(StreamsRuntime.shouldReplaceThread(new RuntimeException("something else"), 5, 10),
                 "only the protocol conflict is ever replaced");
 
-        ParsleyFailClosedException diagnosis =
-                ParsleyRuntime.persistentProtocolConflict("shop-shipper", Duration.ofSeconds(20), collision);
-        assertEquals(ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED, diagnosis.reason(),
+        FailClosedException diagnosis =
+                StreamsRuntime.persistentProtocolConflict("shop-shipper", Duration.ofSeconds(20), collision);
+        assertEquals(FailClosedException.Reason.SUBSTRATE_MISCONFIGURED, diagnosis.reason(),
                 "a member speaking another protocol is the substrate's condition, not the process's");
         assertTrue(diagnosis.getMessage().contains("shop-shipper") && diagnosis.getMessage().contains("PT20S"),
                 "the diagnosis names the group and the window: " + diagnosis.getMessage());
@@ -68,7 +68,7 @@ class StreamsJoinCollisionTest {
             return true;
         };
 
-        assertTrue(ParsleyRuntime.awaitMembersGone(() -> polls.incrementAndGet() < 3, 10_000_000_000L,
+        assertTrue(StreamsRuntime.awaitMembersGone(() -> polls.incrementAndGet() < 3, 10_000_000_000L,
                         clock::get, sleeper),
                 "the wait ends once the member has left");
         assertEquals(3, polls.get(), "the member is polled until it leaves");
@@ -76,20 +76,20 @@ class StreamsJoinCollisionTest {
 
         sleeps.clear();
         clock.set(0);
-        assertFalse(ParsleyRuntime.awaitMembersGone(() -> true, 1_000_000_000L, clock::get, sleeper),
+        assertFalse(StreamsRuntime.awaitMembersGone(() -> true, 1_000_000_000L, clock::get, sleeper),
                 "a member that never leaves gives the wait up at its bound");
         assertEquals(11, sleeps.size(),
                 "the wait gives up on the first poll strictly past its bound: ten sleeps reach it, one more passes it");
 
         sleeps.clear();
-        assertTrue(ParsleyRuntime.awaitMembersGone(() -> {
+        assertTrue(StreamsRuntime.awaitMembersGone(() -> {
                     throw new IllegalStateException("describe failed");
                 }, 1_000_000_000L, clock::get, sleeper),
                 "a failed describe is not evidence of a member; the join itself is guarded");
         assertTrue(sleeps.isEmpty(), "nothing is waited for on a failed describe");
 
         clock.set(0);
-        assertTrue(ParsleyRuntime.awaitMembersGone(() -> true, 1_000_000_000L, clock::get, millis -> false),
+        assertTrue(StreamsRuntime.awaitMembersGone(() -> true, 1_000_000_000L, clock::get, millis -> false),
                 "an interrupted sleep ends the wait");
     }
 }

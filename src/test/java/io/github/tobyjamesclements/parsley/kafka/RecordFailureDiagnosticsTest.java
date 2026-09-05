@@ -14,7 +14,7 @@ import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -56,8 +56,8 @@ class RecordFailureDiagnosticsTest {
      */
     @Test
     void wrappedOffsetOutOfRangeNamesPositionsDiscardedUnread() {
-        assertEquals(ParsleyRuntime.FailureDiagnosis.POSITIONS_DISCARDED_UNREAD,
-                ParsleyRuntime.classifyFailure(streamsWrapped(new OffsetOutOfRangeException(Map.of(TP, 5L)))),
+        assertEquals(StreamsRuntime.FailureDiagnosis.POSITIONS_DISCARDED_UNREAD,
+                StreamsRuntime.classifyFailure(streamsWrapped(new OffsetOutOfRangeException(Map.of(TP, 5L)))),
                 "an OffsetOutOfRangeException buried under Streams wrappers must be named as"
                         + " retention discarding committed positions, not logged generically");
     }
@@ -71,16 +71,16 @@ class RecordFailureDiagnosticsTest {
      */
     @Test
     void wrappedMissingSourceTopicNamesTheMissingSourceTopic() {
-        assertEquals(ParsleyRuntime.FailureDiagnosis.SOURCE_TOPIC_MISSING,
-                ParsleyRuntime.classifyFailure(streamsWrapped(
+        assertEquals(StreamsRuntime.FailureDiagnosis.SOURCE_TOPIC_MISSING,
+                StreamsRuntime.classifyFailure(streamsWrapped(
                         new MissingSourceTopicException("One or more source topics were missing during rebalance"))),
                 "a MissingSourceTopicException buried under Streams wrappers must be named");
-        assertEquals(ParsleyRuntime.FailureDiagnosis.SOURCE_TOPIC_MISSING,
-                ParsleyRuntime.classifyFailure(streamsWrapped(new MissingSourceTopicException(
+        assertEquals(StreamsRuntime.FailureDiagnosis.SOURCE_TOPIC_MISSING,
+                StreamsRuntime.classifyFailure(streamsWrapped(new MissingSourceTopicException(
                         "Missing source topics: [in]. Timeout exceeded after 60000ms."))),
                 "the stream thread's own timeout spelling of the same condition is the same type");
-        assertEquals(ParsleyRuntime.FailureDiagnosis.UNRECOGNISED,
-                ParsleyRuntime.classifyFailure(
+        assertEquals(StreamsRuntime.FailureDiagnosis.UNRECOGNISED,
+                StreamsRuntime.classifyFailure(
                         new StreamsException("One or more source topics were missing during rebalance")),
                 "the diagnosis is by type: the substrate always raises the typed exception and wrappers keep it,"
                         + " so message text alone names nothing");
@@ -93,8 +93,8 @@ class RecordFailureDiagnosticsTest {
      */
     @Test
     void wrappedNoOffsetForPartitionNamesTheMissingPosition() {
-        assertEquals(ParsleyRuntime.FailureDiagnosis.NO_COMMITTED_POSITION,
-                ParsleyRuntime.classifyFailure(streamsWrapped(new NoOffsetForPartitionException(TP))),
+        assertEquals(StreamsRuntime.FailureDiagnosis.NO_COMMITTED_POSITION,
+                StreamsRuntime.classifyFailure(streamsWrapped(new NoOffsetForPartitionException(TP))),
                 "a NoOffsetForPartitionException buried under Streams wrappers must be named as a"
                         + " missing committed position with the restart remedy, not logged generically");
     }
@@ -107,8 +107,8 @@ class RecordFailureDiagnosticsTest {
      */
     @Test
     void wrappedRecordTooLargeNamesTheSizeLimit() {
-        assertEquals(ParsleyRuntime.FailureDiagnosis.RECORD_TOO_LARGE,
-                ParsleyRuntime.classifyFailure(streamsWrapped(new RecordTooLargeException("2097152 bytes"))),
+        assertEquals(StreamsRuntime.FailureDiagnosis.RECORD_TOO_LARGE,
+                StreamsRuntime.classifyFailure(streamsWrapped(new RecordTooLargeException("2097152 bytes"))),
                 "a RecordTooLargeException buried under Streams wrappers must name the size-limit"
                         + " condition and its max.message.bytes remedy, not log generically");
     }
@@ -121,13 +121,13 @@ class RecordFailureDiagnosticsTest {
      */
     @Test
     void invalidPartitionsMessageNamesTheShapeChangeAndOtherTextDoesNot() {
-        assertEquals(ParsleyRuntime.FailureDiagnosis.PARTITION_SHAPE_CHANGED,
-                ParsleyRuntime.classifyFailure(streamsWrapped(
+        assertEquals(StreamsRuntime.FailureDiagnosis.PARTITION_SHAPE_CHANGED,
+                StreamsRuntime.classifyFailure(streamsWrapped(
                         new IllegalStateException("assignment failed: invalid partitions for task 0_1"))),
                 "an otherwise-generic failure whose message reports invalid partitions must be"
                         + " named as a mid-run partition-shape change (D59)");
-        assertEquals(ParsleyRuntime.FailureDiagnosis.UNRECOGNISED,
-                ParsleyRuntime.classifyFailure(streamsWrapped(
+        assertEquals(StreamsRuntime.FailureDiagnosis.UNRECOGNISED,
+                StreamsRuntime.classifyFailure(streamsWrapped(
                         new IllegalStateException("assignment failed: something unrelated"))),
                 "a generic failure without the invalid-partitions text must not be dressed as a"
                         + " partition-shape diagnosis (Operational 6)");
@@ -143,12 +143,12 @@ class RecordFailureDiagnosticsTest {
      */
     @Test
     void depthSixtyThreeIsClassifiedAndDepthSixtyFourIsNot() {
-        assertEquals(ParsleyRuntime.FailureDiagnosis.POSITIONS_DISCARDED_UNREAD,
-                ParsleyRuntime.classifyFailure(
+        assertEquals(StreamsRuntime.FailureDiagnosis.POSITIONS_DISCARDED_UNREAD,
+                StreamsRuntime.classifyFailure(
                         buriedAtDepth(63, new OffsetOutOfRangeException(Map.of(TP, 5L)))),
                 "a trigger at depth 63 sits inside the 64-link bound and must still be named");
-        assertEquals(ParsleyRuntime.FailureDiagnosis.UNRECOGNISED,
-                ParsleyRuntime.classifyFailure(
+        assertEquals(StreamsRuntime.FailureDiagnosis.UNRECOGNISED,
+                StreamsRuntime.classifyFailure(
                         buriedAtDepth(64, new OffsetOutOfRangeException(Map.of(TP, 5L)))),
                 "a trigger at depth 64 — the first depth past the bound — must fall to the"
                         + " generic diagnosis rather than risk walking a cyclic chain forever");
@@ -164,14 +164,14 @@ class RecordFailureDiagnosticsTest {
      */
     @Test
     void anOuterInvalidPartitionsLinkWinsAndWithinALinkTheTypeWins() {
-        assertEquals(ParsleyRuntime.FailureDiagnosis.PARTITION_SHAPE_CHANGED,
-                ParsleyRuntime.classifyFailure(new StreamsException(
+        assertEquals(StreamsRuntime.FailureDiagnosis.PARTITION_SHAPE_CHANGED,
+                StreamsRuntime.classifyFailure(new StreamsException(
                         "assignment failed: invalid partitions for task 0_1",
                         new OffsetOutOfRangeException(Map.of(TP, 5L)))),
                 "the walk is outward-in: an outer link's invalid-partitions text must be named"
                         + " before a deeper OffsetOutOfRangeException is reached");
-        assertEquals(ParsleyRuntime.FailureDiagnosis.POSITIONS_DISCARDED_UNREAD,
-                ParsleyRuntime.classifyFailure(
+        assertEquals(StreamsRuntime.FailureDiagnosis.POSITIONS_DISCARDED_UNREAD,
+                StreamsRuntime.classifyFailure(
                         new OffsetOutOfRangeException("invalid partitions", Map.of(TP, 5L))),
                 "within one link the instanceof checks precede the message probe: an out-of-range"
                         + " exception mentioning invalid partitions is still named by its type");
@@ -186,13 +186,13 @@ class RecordFailureDiagnosticsTest {
     @Test
     void aFailClosedDiagnosisIsKeptOverATransientInEitherOrder() {
         Throwable transientFailure = streamsWrapped(new IllegalStateException("broker away"));
-        Throwable refusal = streamsWrapped(new ParsleyFailClosedException(
-                ParsleyFailClosedException.Reason.TASK_WIDTH_CHANGED, "width changed"));
+        Throwable refusal = streamsWrapped(new FailClosedException(
+                FailClosedException.Reason.TASK_WIDTH_CHANGED, "width changed"));
 
-        assertSame(refusal, ParsleyRuntime.preferFailClosedDiagnosis(transientFailure, refusal),
+        assertSame(refusal, StreamsRuntime.preferFailClosedDiagnosis(transientFailure, refusal),
                 "a refusal arriving after a transient must displace it, or status() would show"
                         + " no refusalReason for a deliberate stop");
-        assertSame(refusal, ParsleyRuntime.preferFailClosedDiagnosis(refusal, transientFailure),
+        assertSame(refusal, StreamsRuntime.preferFailClosedDiagnosis(refusal, transientFailure),
                 "a transient arriving after a refusal must never bury it: the refusal is what"
                         + " status() unwraps for the operator (D55)");
     }
@@ -205,16 +205,16 @@ class RecordFailureDiagnosticsTest {
      */
     @Test
     void betweenTwoRefusalsOrTwoTransientsTheFirstRecordedStands() {
-        Throwable refusalA = streamsWrapped(new ParsleyFailClosedException(
-                ParsleyFailClosedException.Reason.TASK_WIDTH_CHANGED, "first refusal"));
-        Throwable refusalB = streamsWrapped(new ParsleyFailClosedException(
-                ParsleyFailClosedException.Reason.ORDERING_STATE_LOST, "second refusal"));
+        Throwable refusalA = streamsWrapped(new FailClosedException(
+                FailClosedException.Reason.TASK_WIDTH_CHANGED, "first refusal"));
+        Throwable refusalB = streamsWrapped(new FailClosedException(
+                FailClosedException.Reason.ORDERING_STATE_LOST, "second refusal"));
         Throwable transientA = streamsWrapped(new IllegalStateException("first transient"));
         Throwable transientB = streamsWrapped(new IllegalStateException("second transient"));
 
-        assertSame(refusalA, ParsleyRuntime.preferFailClosedDiagnosis(refusalA, refusalB),
+        assertSame(refusalA, StreamsRuntime.preferFailClosedDiagnosis(refusalA, refusalB),
                 "the first recorded refusal stands; a second refusal must not displace it");
-        assertSame(transientA, ParsleyRuntime.preferFailClosedDiagnosis(transientA, transientB),
+        assertSame(transientA, StreamsRuntime.preferFailClosedDiagnosis(transientA, transientB),
                 "the first recorded transient stands; a later transient must not displace it");
     }
 
@@ -228,10 +228,10 @@ class RecordFailureDiagnosticsTest {
      */
     @Test
     void recordFailureRetainsTheRefusalThroughTheMergeWiring() {
-        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        StreamsRuntime runtime = new StreamsRuntime(null);
         Throwable transientFailure = streamsWrapped(new IllegalStateException("broker away"));
-        Throwable refusal = streamsWrapped(new ParsleyFailClosedException(
-                ParsleyFailClosedException.Reason.TASK_WIDTH_CHANGED, "width changed"));
+        Throwable refusal = streamsWrapped(new FailClosedException(
+                FailClosedException.Reason.TASK_WIDTH_CHANGED, "width changed"));
 
         // Captured and discarded: this test pins the merge, not the log lines, and the
         // scripted failures should not shout through the suite's output.
@@ -262,7 +262,7 @@ class RecordFailureDiagnosticsTest {
      */
     @Test
     void eachDiagnosisLogsItsOwnConditionAndRemedyAgainstItsOwnProcess() {
-        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        StreamsRuntime runtime = new StreamsRuntime(null);
         ByteArrayOutputStream captured = new ByteArrayOutputStream();
         PrintStream realErr = System.err;
         try {

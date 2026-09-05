@@ -26,12 +26,12 @@ import java.util.UUID;
 
 import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Effects;
-import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
+import io.github.tobyjamesclements.parsley.api.Process;
 import io.github.tobyjamesclements.parsley.api.Store;
 import io.github.tobyjamesclements.parsley.core.Causes;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -52,10 +52,10 @@ class TopologyWiringTest {
     private static final UUID IN1_ID = new UUID(100, 1);
     private static final UUID IN2_ID = new UUID(100, 2);
     private static final UUID OUT_ID = new UUID(100, 3);
-    private static final Map<String, TopicInfo> TOPICS = Map.of(
-            "in1", new TopicInfo(IN1_ID, 1),
-            "in2", new TopicInfo(IN2_ID, 1),
-            "out", new TopicInfo(OUT_ID, 1));
+    private static final Map<String, ResolvedTopic> TOPICS = Map.of(
+            "in1", new ResolvedTopic(IN1_ID, 1),
+            "in2", new ResolvedTopic(IN2_ID, 1),
+            "out", new ResolvedTopic(OUT_ID, 1));
     private static final ChannelId IN1 = new ChannelId(IN1_ID, 0);
     private static final ChannelId IN2 = new ChannelId(IN2_ID, 0);
 
@@ -71,36 +71,31 @@ class TopologyWiringTest {
         }
     }
 
-    private TopologyTestDriver newDriver(ProcessDefinition definition, ScriptedTopicIdentity identity) {
+    private TopologyTestDriver newDriver(Process definition, ScriptedTopicIdentity identity) {
         return newDriver(definition, identity, TOPICS);
     }
 
-    private TopologyTestDriver newDriver(ProcessDefinition definition, ScriptedTopicIdentity identity,
-                                         Map<String, TopicInfo> topics) {
-        return newDriver(definition, identity, topics, new ProcessDiagnostics());
-    }
-
-    private TopologyTestDriver newDriver(ProcessDefinition definition, ScriptedTopicIdentity identity,
-                                         Map<String, TopicInfo> topics, ProcessDiagnostics diagnostics) {
+    private TopologyTestDriver newDriver(Process definition, ScriptedTopicIdentity identity,
+                                         Map<String, ResolvedTopic> topics) {
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "wiring-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "unused:9092");
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toString());
         driver = new TopologyTestDriver(
-                ProcessTopology.build(definition, topics, identity, Duration.ofMillis(100), diagnostics), props);
+                ProcessTopology.build(definition, topics, identity, Duration.ofMillis(100)), props);
         return driver;
     }
 
     /**
-     * An emission carries the delivered message's timestamp unless given one of its own
-     * (D15, D111): a message emitted long after the one it answers may otherwise carry a
+     * A send carries the delivered message's timestamp unless given one of its own
+     * (D15, D111): a message sent long after the one it answers may otherwise carry a
      * timestamp old enough for time-based retention to discard it on the next segment roll.
      */
     @Test
-    void anEmissionInheritsTheDeliveredTimestampUnlessGivenItsOwn() {
+    void anSendInheritsTheDeliveredTimestampUnlessGivenItsOwn() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.builder()
                         .send(out, "inherited", delivery.value())
                         .send(out, "own", delivery.value(), 5_000L)
@@ -117,9 +112,9 @@ class TopologyWiringTest {
         var second = outTopic.readRecord();
         var third = outTopic.readRecord();
         assertEquals("inherited", new String(first.key()));
-        assertEquals(1_000L, first.timestamp(), "an emission without a timestamp inherits the delivered one");
+        assertEquals(1_000L, first.timestamp(), "a send without a timestamp inherits the delivered one");
         assertEquals("own", new String(second.key()));
-        assertEquals(5_000L, second.timestamp(), "an emission's own timestamp is the record's");
+        assertEquals(5_000L, second.timestamp(), "a send's own timestamp is the record's");
         assertEquals(6_000L, third.timestamp(), "with headers too");
         assertTrue(outTopic.isEmpty());
     }
@@ -135,7 +130,7 @@ class TopologyWiringTest {
     void aFirstInitialisationAsksAboutTheReceivedTopicsAndNoPunctuationAsksAgain() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.none())
                 .receives(in2, (delivery, state) -> Effects.none())
                 .build();
@@ -162,102 +157,25 @@ class TopologyWiringTest {
      */
     @Test
     void aRecreatedReceivedTopicRefusesTaskInitialisation() {
-        ProcessDefinition definition = twoInputRecorder(new ArrayList<>());
+        Process definition = twoInputRecorder(new ArrayList<>());
         ScriptedTopicIdentity identity = new ScriptedTopicIdentity();
         identity.verdicts = new TopicIdentityVerdicts(Set.of(), Set.of(IN1_ID));
         Throwable thrown = assertThrows(Throwable.class, () -> newDriver(definition, identity),
                 "a recreated received topic must refuse initialisation");
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.CHANNEL_IDENTITY_CHANGED),
                 () -> "expected CHANNEL_IDENTITY_CHANGED in " + thrown);
-    }
-
-    /**
-     * A task publishes what it holds and why (D103): the held channel, its head's position,
-     * every cause the head waits for with the position required and the position reached,
-     * and the frontier's size — refreshed each status interval, and cleared as the hold
-     * releases. An operator asking "what is this process waiting for?" reads it from
-     * {@code status()} rather than from logs. The release itself comes from receiving and
-     * delivering the record the cause names, not from a report and not from time (D115).
-     */
-    @Test
-    void taskStatusNamesWhatIsHeldAndWhichCauseItWaitsFor() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
-        List<String> delivered = new ArrayList<>();
-        ProcessDefinition definition = ProcessDefinition.named("p")
-                .receives(in1, (delivery, state) -> {
-                    delivered.add(delivery.value());
-                    return Effects.none();
-                })
-                .receives(in2, (delivery, state) -> {
-                    delivered.add(delivery.value());
-                    return Effects.none();
-                })
-                .build();
-        ScriptedTopicIdentity identity = new ScriptedTopicIdentity();
-        ProcessDiagnostics diagnostics = new ProcessDiagnostics();
-        newDriver(definition, identity, TOPICS, diagnostics);
-
-        io.github.tobyjamesclements.parsley.api.TaskStatus initial = diagnostics.snapshot().get(0);
-        assertEquals(0, initial.partition(), "the task receives partition 0 of each topic");
-        assertEquals(0, initial.heldMessages(), "nothing is held before anything is received");
-        assertEquals(List.of(), initial.heldChannels(), "nothing is held before the first receipt");
-
-        var headers = new RecordHeaders();
-        headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(IN1, 3L)))));
-        input("in2").pipeInput(new TestRecord<>("k".getBytes(), "b".getBytes(), headers));
-        driver.advanceWallClockTime(Duration.ofMillis(200));
-
-        io.github.tobyjamesclements.parsley.api.TaskStatus held = diagnostics.snapshot().get(0);
-        assertEquals(1, held.heldMessages(), "the effect is held behind its missing cause");
-        assertEquals(1, held.heldChannels().size(), "exactly one channel holds after the held receipt");
-        io.github.tobyjamesclements.parsley.api.TaskStatus.HeldChannel channel = held.heldChannels().get(0);
-        assertEquals("in2", channel.topic());
-        assertEquals(0, channel.partition());
-        assertEquals(1, channel.held());
-        assertEquals(0L, channel.headPosition(), "the head is the one held record, at offset 0");
-        assertEquals(1, channel.blockers().size(), "one cause is outstanding");
-        io.github.tobyjamesclements.parsley.api.TaskStatus.Blocker blocker = channel.blockers().get(0);
-        assertEquals("in1", blocker.topic(), "the blocker is named by topic, not by identity");
-        assertEquals(0, blocker.partition());
-        assertEquals(3L, blocker.requiredPosition(), "the position the cause named");
-        assertTrue(blocker.settledPosition().isEmpty(), "nothing is known of in1 yet");
-        assertEquals(1, held.frontierChannels(), "receipt merged the cause into the frontier");
-        assertEquals(CausesCodec.encode(Causes.of(Map.of(IN1, 3L))).length, held.frontierBytes(),
-                "the frontier's width is the encoded header's width");
-
-        for (int offset = 0; offset < 3; offset++) {
-            input("in1").pipeInput(new TestRecord<>("k".getBytes(), ("a" + offset).getBytes()));
-        }
-        driver.advanceWallClockTime(Duration.ofMillis(200));
-        assertEquals(List.of("a0", "a1", "a2"), delivered, "in1@2 does not satisfy a cause at in1@3");
-        assertEquals(java.util.OptionalLong.of(2L),
-                diagnostics.snapshot().get(0).heldChannels().get(0).blockers().get(0).settledPosition(),
-                "the blocker reports how far in1 has settled");
-        input("in1").pipeInput(new TestRecord<>("k".getBytes(), "a3".getBytes()));
-        assertEquals(List.of("a0", "a1", "a2", "a3", "b"), delivered,
-                "receiving and delivering in1@3 released the hold: no report, no clock");
-        driver.advanceWallClockTime(Duration.ofMillis(200));
-        io.github.tobyjamesclements.parsley.api.TaskStatus released = diagnostics.snapshot().get(0);
-        assertEquals(0, released.heldMessages(), "nothing remains held");
-        assertEquals(List.of(), released.heldChannels(), "a channel with nothing held is not listed");
-        assertEquals(2, released.frontierChannels(), "delivery merged the delivered position beside the cause");
-
-        driver.close();
-        driver = null;
-        assertEquals(List.of(), diagnostics.snapshot(), "a closed task retires its status rather than lingering");
     }
 
     private TestInputTopic<byte[], byte[]> input(String topic) {
         return driver.createInputTopic(topic, new ByteArraySerializer(), new ByteArraySerializer());
     }
 
-    /** Forwarding received headers on an emission works. */
+    /** Forwarding received headers on a send works. */
     @Test
-    void forwardingReceivedHeadersOnAnEmissionWorks() throws Exception {
+    void forwardingReceivedHeadersOnASendWorks() throws Exception {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(out, delivery.key(), delivery.value(), delivery.headers()).build())
                 .sends(out)
@@ -276,7 +194,7 @@ class TopologyWiringTest {
         assertNotNull(record.headers().lastHeader("app.trace"), "application headers forward");
         Causes stamped = CausesCodec.decode(record.headers().lastHeader(CausesCodec.HEADER_KEY).value());
         assertEquals(Map.of(IN1, 0L, IN2, 0L), stamped.byChannel(),
-                "the emission's causal metadata is parsley's own stamp, not the forwarded copy");
+                "the send's causal metadata is parsley's own stamp, not the forwarded copy");
     }
 
     /** Undecodable application payload fails the step. */
@@ -289,17 +207,17 @@ class TopologyWiringTest {
                             throw new RuntimeException("schema mismatch");
                         });
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), poison);
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.none())
                 .build();
         newDriver(definition, new ScriptedTopicIdentity());
 
         var thrown = org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
                 () -> input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException refusal =
-                io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.findIn(thrown);
+        io.github.tobyjamesclements.parsley.core.FailClosedException refusal =
+                io.github.tobyjamesclements.parsley.core.FailClosedException.findIn(thrown);
         assertNotNull(refusal, "the step must fail closed, not skip the message");
-        assertEquals(io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
+        assertEquals(io.github.tobyjamesclements.parsley.core.FailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
                 refusal.reason());
     }
 
@@ -317,7 +235,7 @@ class TopologyWiringTest {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("out", Serdes.String(),
                 Serdes.serdeFrom(smuggler, new org.apache.kafka.common.serialization.StringDeserializer()));
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(out, delivery.key(), delivery.value()).build())
                 .sends(out)
@@ -326,7 +244,7 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.RESERVED_HEADER_USED),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.RESERVED_HEADER_USED),
                 () -> "expected RESERVED_HEADER_USED in " + thrown);
     }
 
@@ -335,7 +253,7 @@ class TopologyWiringTest {
     void keyValueBytesPassThroughUntouchedAndCausesRideAHeader() throws Exception {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(out, delivery.key(), delivery.value() + "!").build())
                 .sends(out)
@@ -361,7 +279,7 @@ class TopologyWiringTest {
     @Test
     void effectArrivingBeforeItsCauseIsHeldAcrossChannels() {
         List<String> delivered = new ArrayList<>();
-        ProcessDefinition definition = twoInputRecorder(delivered);
+        Process definition = twoInputRecorder(delivered);
         newDriver(definition, new ScriptedTopicIdentity());
 
         RecordHeaders headers = new RecordHeaders();
@@ -384,10 +302,9 @@ class TopologyWiringTest {
     @Test
     void aCauseNamingAnUnreceivedPositionIsHeldAndVisibleUntilARecordReachesIt() {
         List<String> delivered = new ArrayList<>();
-        ProcessDefinition definition = twoInputRecorder(delivered);
+        Process definition = twoInputRecorder(delivered);
         ScriptedTopicIdentity identity = new ScriptedTopicIdentity();
-        ProcessDiagnostics diagnostics = new ProcessDiagnostics();
-        newDriver(definition, identity, TOPICS, diagnostics);
+        newDriver(definition, identity, TOPICS);
 
         RecordHeaders headers = new RecordHeaders();
         headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(IN1, 5L)))));
@@ -396,11 +313,6 @@ class TopologyWiringTest {
             driver.advanceWallClockTime(Duration.ofMillis(200));
         }
         assertEquals(List.of(), delivered, "no record has reached in1@5: time settles nothing");
-        io.github.tobyjamesclements.parsley.api.TaskStatus.Blocker blocker =
-                diagnostics.snapshot().get(0).heldChannels().get(0).blockers().get(0);
-        assertEquals("in1", blocker.topic(), "the hold is visible, naming the channel it waits on");
-        assertEquals(5L, blocker.requiredPosition(), "and the position the cause named");
-        assertTrue(blocker.settledPosition().isEmpty(), "and that nothing of in1 has been received");
 
         for (int offset = 0; offset <= 5; offset++) {
             input("in1").pipeInput(new TestRecord<>("k".getBytes(), ("a" + offset).getBytes()));
@@ -412,23 +324,23 @@ class TopologyWiringTest {
     /** Undecodable metadata fails the step. */
     @Test
     void undecodableMetadataFailsTheStep() {
-        ProcessDefinition definition = twoInputRecorder(new ArrayList<>());
+        Process definition = twoInputRecorder(new ArrayList<>());
         newDriver(definition, new ScriptedTopicIdentity());
 
         RecordHeaders headers = new RecordHeaders();
         headers.add(new RecordHeader(CausesCodec.HEADER_KEY, new byte[] {42, 42}));
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("g".getBytes(), "g".getBytes(), headers)));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.UNDECODABLE_METADATA),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.UNDECODABLE_METADATA),
                 () -> "expected UNDECODABLE_METADATA in " + thrown);
     }
 
-    /** Emission to undeclared channel fails the step. */
+    /** Send to undeclared channel fails the step. */
     @Test
     void emissionToUndeclaredChannelFailsTheStep() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> undeclared = Channel.of("out", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(undeclared, "k", "v").build())
                 .build();
@@ -436,30 +348,13 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL),
-                () -> "expected EMISSION_TO_UNDECLARED_CHANNEL in " + thrown);
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.SEND_TO_UNDECLARED_CHANNEL),
+                () -> "expected SEND_TO_UNDECLARED_CHANNEL in " + thrown);
     }
 
-    /** The composed changelog name is bounded at exactly Kafka's limit. */
+    /** A look-alike send serializes with the declared channel's serdes. */
     @Test
-    void composedChangelogNameIsBoundedAtExactlyKafkasLimit() {
-        String applicationId = "app";
-        // applicationId + "-" + store + "-changelog" == 249 characters exactly.
-        String storeAtLimit = "s".repeat(249 - applicationId.length() - 1 - "-changelog".length());
-        assertEquals(249, ProcessTopology.changelogName(applicationId, storeAtLimit).length(),
-                "a composite at exactly 249 characters is Kafka-legal and must compose");
-        assertThrows(IllegalArgumentException.class,
-                () -> ProcessTopology.changelogName(applicationId, storeAtLimit + "s"),
-                "one character past Kafka's limit must refuse; this is the kafka-side boundary"
-                        + " pin that keeps ProcessTopology's mirrored limit agreeing with"
-                        + " KafkaNames' declaration-site limit, which"
-                        + " ApiValidationTest#channelTopicAtExactlyTheLengthLimitIsAccepted pins"
-                        + " at the same boundary");
-    }
-
-    /** A look-alike emission serializes with the declared channel's serdes. */
-    @Test
-    void lookAlikeEmissionSerializesWithTheDeclaredSerdes() {
+    void lookAlikeSendSerializesWithTheDeclaredSerdes() {
         org.apache.kafka.common.serialization.Serializer<String> shouting = new StringSerializer() {
             @Override
             public byte[] serialize(String topic, String data) {
@@ -471,7 +366,7 @@ class TopologyWiringTest {
         Channel<String, String> declared = Channel.of("out", Serdes.String(),
                 Serdes.serdeFrom(shouting, new org.apache.kafka.common.serialization.StringDeserializer()));
         Channel<String, String> lookAlike = Channel.of("out", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(lookAlike, "k", "v").build())
                 .sends(declared)
@@ -487,13 +382,13 @@ class TopologyWiringTest {
                         + " to smuggle past sends(...)");
     }
 
-    /** An emission through a factory-built equal channel instance is sent, not refused. */
+    /** A send through a factory-built equal channel instance is sent, not refused. */
     @Test
     void emissionThroughAFactoryBuiltChannelInstanceIsSent() {
         java.util.function.Supplier<Channel<String, String>> outChannel =
                 () -> Channel.of("out", Serdes.String(), Serdes.String());
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(outChannel.get(), delivery.key(), delivery.value()).build())
                 .sends(outChannel.get())
@@ -505,16 +400,16 @@ class TopologyWiringTest {
                 driver.createOutputTopic("out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
         assertArrayEquals("v".getBytes(), outTopic.readRecord().value(),
                 "a Channel.of factory called at both sends(...) and send(...) names the same"
-                        + " declared topic; an emission on a declared topic must be sent"
+                        + " declared topic; a send on a declared topic must be sent"
                         + " (SPEC Structural 19)");
     }
 
-    /** A self-loop re-emitting via the delivered channel instance is sent, not refused. */
+    /** A self-loop re-sending via the delivered channel instance is sent, not refused. */
     @Test
-    void selfLoopReEmissionViaTheDeliveredChannelInstanceIsSent() {
+    void selfLoopResendViaTheDeliveredChannelInstanceIsSent() {
         Channel<String, String> loop = Channel.of("loop", Serdes.String(), Serdes.String());
         List<String> delivered = new ArrayList<>();
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(loop.startingAt(Channel.InitialPosition.LATEST), (delivery, state) -> {
                     delivered.add(delivery.value());
                     return "seed".equals(delivery.value())
@@ -523,23 +418,23 @@ class TopologyWiringTest {
                 })
                 .sends(loop)
                 .build();
-        newDriver(definition, new ScriptedTopicIdentity(), Map.of("loop", new TopicInfo(new UUID(100, 9), 1)));
+        newDriver(definition, new ScriptedTopicIdentity(), Map.of("loop", new ResolvedTopic(new UUID(100, 9), 1)));
 
         input("loop").pipeInput(new TestRecord<>("k".getBytes(), "seed".getBytes()));
         assertEquals(List.of("seed", "echo"), delivered,
                 "receives(channel.startingAt(...)) and sends(channel) are distinct instances of"
-                        + " one declared topic, so a handler re-emitting via delivery.channel()"
+                        + " one declared topic, so a handler re-sending via delivery.channel()"
                         + " must be sent, not refused");
     }
 
-    /** A type-mismatched look-alike emission fails closed before any write applies. */
+    /** A type-mismatched look-alike send fails closed before any write applies. */
     @Test
-    void typeMismatchedLookAlikeEmissionFailsClosedBeforeAnyWriteApplies() {
+    void typeMismatchedLookAlikeSendFailsClosedBeforeAnyWriteApplies() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, Long> declared = Channel.of("out", Serdes.String(), Serdes.Long());
         Channel<String, String> lookAlike = Channel.of("out", Serdes.String(), Serdes.String());
         Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.builder()
                         .put(store, "k", "v")
                         .send(lookAlike, "k", "v")
@@ -551,12 +446,12 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
                 () -> "the declared Long serializer cannot serialize the look-alike's String;"
                         + " the stop must carry its own reason, not a bare ClassCastException; got " + thrown);
         try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
             assertFalse(all.hasNext(),
-                    "emissions are serialized in the planning phase, so a serialization refusal"
+                    "sends are serialized in the planning phase, so a serialization refusal"
                             + " must fire before any state write reaches the store");
         }
     }
@@ -567,7 +462,7 @@ class TopologyWiringTest {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     try {
                         state.get(lookAlike, "k");
@@ -582,7 +477,7 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
                 () -> "the reader latches its refusal and deliver() rethrows after the handler"
                         + " returns, so a catch inside the handler cannot commit the step; got " + thrown);
         try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
@@ -599,13 +494,13 @@ class TopologyWiringTest {
      */
     @Test
     void deserializerLatchedRefusalFailsTheStepEvenWhenSwallowed() {
-        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.api.StateReader> captured =
+        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.api.State> captured =
                 new java.util.concurrent.atomic.AtomicReference<>();
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
         org.apache.kafka.common.serialization.Serde<String> capturingSerde = Serdes.serdeFrom(
                 new StringSerializer(), (topic, data) -> {
-                    io.github.tobyjamesclements.parsley.api.StateReader reader = captured.get();
+                    io.github.tobyjamesclements.parsley.api.State reader = captured.get();
                     if (reader != null) {
                         try {
                             reader.get(lookAlike, "k");
@@ -616,7 +511,7 @@ class TopologyWiringTest {
                     return new String(data, java.nio.charset.StandardCharsets.UTF_8);
                 });
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), capturingSerde);
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     captured.set(state);
                     return Effects.none();
@@ -628,7 +523,7 @@ class TopologyWiringTest {
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "first".getBytes()));
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "second".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
                 () -> "a refusal latched by the delivered payload's deserializer must fail the step, not be"
                         + " erased before the handler runs; got " + thrown);
     }
@@ -640,20 +535,20 @@ class TopologyWiringTest {
      */
     @Test
     void unswallowedReaderRefusalInADeserializerKeepsItsReason() {
-        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.api.StateReader> captured =
+        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.api.State> captured =
                 new java.util.concurrent.atomic.AtomicReference<>();
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
         org.apache.kafka.common.serialization.Serde<String> readingSerde = Serdes.serdeFrom(
                 new StringSerializer(), (topic, data) -> {
-                    io.github.tobyjamesclements.parsley.api.StateReader reader = captured.get();
+                    io.github.tobyjamesclements.parsley.api.State reader = captured.get();
                     if (reader != null) {
                         reader.get(lookAlike, "k");
                     }
                     return new String(data, java.nio.charset.StandardCharsets.UTF_8);
                 });
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), readingSerde);
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     captured.set(state);
                     return Effects.none();
@@ -665,9 +560,9 @@ class TopologyWiringTest {
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "first".getBytes()));
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "second".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
                 () -> "the reader's refusal carries its own reason; got " + thrown);
-        assertFalse(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE),
+        assertFalse(causeChainContains(thrown, FailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE),
                 () -> "the stop must not be relabeled as a payload-codec failure; got " + thrown);
     }
 
@@ -679,7 +574,7 @@ class TopologyWiringTest {
      */
     @Test
     void serializerLatchedRefusalDuringPlanningFailsTheStep() {
-        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.api.StateReader> captured =
+        java.util.concurrent.atomic.AtomicReference<io.github.tobyjamesclements.parsley.api.State> captured =
                 new java.util.concurrent.atomic.AtomicReference<>();
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
@@ -694,7 +589,7 @@ class TopologyWiringTest {
                 }, Serdes.String().deserializer());
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("out", Serdes.String(), readingSerializerSerde);
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     captured.set(state);
                     return Effects.builder().send(out, "k", "v").build();
@@ -706,7 +601,7 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
                 () -> "a refusal latched during planning must fail the step at the post-apply recheck;"
                         + " got " + thrown);
     }
@@ -739,7 +634,7 @@ class TopologyWiringTest {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(),
                 Serdes.serdeFrom(new StringSerializer(), headerAware));
         List<String> delivered = new ArrayList<>();
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     delivered.add(delivery.value());
                     return Effects.none();
@@ -767,14 +662,14 @@ class TopologyWiringTest {
     @Test
     void nullEffectsFromAHandlerFailClosedWithTheirOwnReason() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> null)
                 .build();
         newDriver(definition, new ScriptedTopicIdentity());
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.HANDLER_RETURNED_NULL_EFFECTS),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.HANDLER_RETURNED_NULL_EFFECTS),
                 () -> "a deliberate refusal that recurs on restart must name its reason; got " + thrown);
     }
 
@@ -791,7 +686,7 @@ class TopologyWiringTest {
                     throw new RuntimeException("schema moved on");
                 });
         Store<String, String> store = Store.of("app-store", Serdes.String(), poisonRead);
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     if (delivery.value().equals("first")) {
                         return Effects.builder().put(store, "k", "v").build();
@@ -810,7 +705,7 @@ class TopologyWiringTest {
         input("in1").pipeInput(new TestRecord<>("k".getBytes(), "first".getBytes()));
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "second".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE),
                 () -> "a stored value the declared serde cannot decode must fail the step with its"
                         + " reason, latched past any application catch; got " + thrown);
     }
@@ -826,7 +721,7 @@ class TopologyWiringTest {
         org.apache.kafka.common.serialization.Serde<String> nullKeySerde =
                 Serdes.serdeFrom((topic, data) -> null, Serdes.String().deserializer());
         Store<String, String> store = Store.of("app-store", nullKeySerde, Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     try {
                         state.get(store, "k");
@@ -841,7 +736,7 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
                 () -> "a key serialized to null cannot address a store entry and must fail the"
                         + " step with its reason, latched past any application catch; got " + thrown);
     }
@@ -855,14 +750,14 @@ class TopologyWiringTest {
      * different site: this key is non-null and the declared serde encodes it to null.
      */
     @Test
-    void nullReturningKeySerializerOnAStateWriteFailsThePlanBeforeAnyWriteApplies() {
+    void nullReturningKeySerializerOnAWriteFailsThePlanBeforeAnyWriteApplies() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         org.apache.kafka.common.serialization.Serde<String> nullOnPoison =
                 Serdes.serdeFrom((topic, data) -> "poison".equals(data) ? null
                         : data.getBytes(java.nio.charset.StandardCharsets.UTF_8),
                         Serdes.String().deserializer());
         Store<String, String> store = Store.of("app-store", nullOnPoison, Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.builder()
                         .put(store, "good", "v")
                         .put(store, "poison", "v")
@@ -873,10 +768,10 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
                 () -> "a write key serialized to null cannot address a store entry and must fail"
                         + " the plan with its reason, not as the store's bare NPE; got " + thrown);
-        ParsleyFailClosedException refusal = ParsleyFailClosedException.findIn(thrown);
+        FailClosedException refusal = FailClosedException.findIn(thrown);
         assertTrue(refusal.getMessage().contains("state write key serialized to null"),
                 () -> "the refusal names the write-key shape, not a generic payload failure: "
                         + refusal.getMessage());
@@ -903,7 +798,7 @@ class TopologyWiringTest {
                     throw new RuntimeException("key schema mismatch");
                 }, Serdes.String().deserializer());
         Store<String, String> store = Store.of("app-store", throwingKeySerde, Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     try {
                         state.get(store, "k");
@@ -918,10 +813,10 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE),
                 () -> "a read key the declared serde cannot serialize must fail the step with its"
                         + " reason, latched past any application catch; got " + thrown);
-        ParsleyFailClosedException refusal = ParsleyFailClosedException.findIn(thrown);
+        FailClosedException refusal = FailClosedException.findIn(thrown);
         assertTrue(refusal.getMessage().contains("state read key could not be serialized"),
                 () -> "the refusal names the throwing-read-key site: " + refusal.getMessage());
     }
@@ -931,16 +826,16 @@ class TopologyWiringTest {
      * naming the process and topic, not feed the engine a null channel whose NPE
      * diagnoses nothing. Staged through the width arm of init's channel map: channels
      * exist only for task partitions below the resolved width, so the driver's task 0
-     * against a zero-width TopicInfo exercises the same predicate as a task numbered at
+     * against a zero-width ResolvedTopic exercises the same predicate as a task numbered at
      * or above a received topic's real width.
      */
     @Test
     void recordFromATopicWithoutAChannelForThisTaskIsRefusedWithTheDiagnosis() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.none())
                 .build();
-        newDriver(definition, new ScriptedTopicIdentity(), Map.of("in1", new TopicInfo(IN1_ID, 0)));
+        newDriver(definition, new ScriptedTopicIdentity(), Map.of("in1", new ResolvedTopic(IN1_ID, 0)));
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
@@ -953,7 +848,7 @@ class TopologyWiringTest {
     @Test
     void nullStoreOnAStateReadIsRefusedWithAMessage() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     state.get(null, "k");
                     return Effects.none();
@@ -973,7 +868,7 @@ class TopologyWiringTest {
     void nullKeyOnAStateReadIsRefusedWithAMessage() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     state.get(store, null);
                     return Effects.none();
@@ -989,13 +884,13 @@ class TopologyWiringTest {
                         + " state backend as null bytes; got " + thrown);
     }
 
-    /** A state write ahead of a refused emission is not applied. */
+    /** A state write ahead of a refused send is not applied. */
     @Test
-    void stateWriteAheadOfARefusedEmissionIsNotApplied() {
+    void writeAheadOfARefusedSendIsNotApplied() {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> undeclared = Channel.of("out", Serdes.String(), Serdes.String());
         Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.builder()
                         .put(store, "k", "v")
                         .send(undeclared, "k", "v")
@@ -1006,8 +901,8 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.EMISSION_TO_UNDECLARED_CHANNEL),
-                () -> "expected EMISSION_TO_UNDECLARED_CHANNEL in " + thrown);
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.SEND_TO_UNDECLARED_CHANNEL),
+                () -> "expected SEND_TO_UNDECLARED_CHANNEL in " + thrown);
         try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
             assertFalse(all.hasNext(),
                     "every effect target is validated before any write is applied, so a refused"
@@ -1021,7 +916,7 @@ class TopologyWiringTest {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.builder()
                         .put(declared, "k", "v")
                         .put(lookAlike, "k2", "v2")
@@ -1032,7 +927,7 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
                 () -> "the store seam matches by identity and refuses with its own reason, so"
                         + " status() can report the refusal; got " + thrown);
         try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
@@ -1047,7 +942,7 @@ class TopologyWiringTest {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     state.get(lookAlike, "k");
                     return Effects.none();
@@ -1058,7 +953,7 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, ParsleyFailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.STATE_ACCESS_TO_UNDECLARED_STORE),
                 () -> "a read through a Store instance other than the declared one would smuggle"
                         + " a differently-typed codec into the application's frame; got " + thrown);
     }
@@ -1069,7 +964,7 @@ class TopologyWiringTest {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
         Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     String seen = state.get(store, "count");
                     String next = seen == null ? "1" : String.valueOf(Integer.parseInt(seen) + 1);
@@ -1099,7 +994,7 @@ class TopologyWiringTest {
     void stampedCausesRelayAcrossProcessesAndCompress() throws Exception {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
-        ProcessDefinition upstream = ProcessDefinition.named("up")
+        Process upstream = Process.named("up")
                 .receives(in1, (delivery, state) -> Effects.builder().send(out, "k", "v").build())
                 .sends(out)
                 .build();
@@ -1122,13 +1017,13 @@ class TopologyWiringTest {
     @Test
     void selfChannelTopologyIsAccepted() {
         Channel<String, String> loop = Channel.of("loop", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(loop, (delivery, state) -> delivery.value().length() < 3
                         ? Effects.builder().send(loop, delivery.key(), delivery.value() + "x").build()
                         : Effects.none())
                 .sends(loop)
                 .build();
-        newDriver(definition, new ScriptedTopicIdentity(), Map.of("loop", new TopicInfo(new UUID(100, 9), 1)));
+        newDriver(definition, new ScriptedTopicIdentity(), Map.of("loop", new ResolvedTopic(new UUID(100, 9), 1)));
 
         input("loop").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes()));
         TestOutputTopic<byte[], byte[]> out =
@@ -1144,7 +1039,7 @@ class TopologyWiringTest {
         Channel<String, String> out2 = Channel.of("in2", Serdes.String(), Serdes.String());
         Store<String, String> storeA = Store.of("store-a", Serdes.String(), Serdes.String());
         Store<String, String> storeB = Store.of("store-b", Serdes.String(), Serdes.String());
-        ProcessDefinition definition = ProcessDefinition.named("p")
+        Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     String a = state.get(storeA, "k");
                     String b = state.get(storeB, "k");
@@ -1173,10 +1068,10 @@ class TopologyWiringTest {
         assertArrayEquals("v2".getBytes(), out2Topic.readRecord().value());
     }
 
-    private static ProcessDefinition twoInputRecorder(List<String> delivered) {
+    private static Process twoInputRecorder(List<String> delivered) {
         Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
         Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
-        return ProcessDefinition.named("p")
+        return Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     delivered.add(delivery.value());
                     return Effects.none();
@@ -1188,8 +1083,8 @@ class TopologyWiringTest {
                 .build();
     }
 
-    private static boolean causeChainContains(Throwable thrown, ParsleyFailClosedException.Reason reason) {
-        ParsleyFailClosedException found = ParsleyFailClosedException.findIn(thrown);
+    private static boolean causeChainContains(Throwable thrown, FailClosedException.Reason reason) {
+        FailClosedException found = FailClosedException.findIn(thrown);
         return found != null && found.reason() == reason;
     }
 }

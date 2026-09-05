@@ -3,7 +3,7 @@
  *
  * <p>An application declares {@link io.github.tobyjamesclements.parsley.api.Channel} typed
  * topics, {@link io.github.tobyjamesclements.parsley.api.Store} typed stores, and one
- * {@link io.github.tobyjamesclements.parsley.api.ProcessDefinition} per process. Logic is a
+ * {@link io.github.tobyjamesclements.parsley.api.Process} per process. Logic is a
  * {@link io.github.tobyjamesclements.parsley.api.Handler}, which receives a
  * {@link io.github.tobyjamesclements.parsley.api.Delivery} and returns
  * {@link io.github.tobyjamesclements.parsley.api.Effects}.

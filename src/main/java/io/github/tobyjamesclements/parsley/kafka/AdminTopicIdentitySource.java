@@ -171,7 +171,7 @@ class AdminTopicIdentitySource implements TopicIdentitySource {
      * fail one future and still run the real tolerate-or-abort classification.
      */
     Map<Uuid, KafkaFuture<TopicDescription>> describeByIdFutures(Set<UUID> topicIds) {
-        var uuids = topicIds.stream().map(TopicInfo::toKafkaUuid).toList();
+        var uuids = topicIds.stream().map(ResolvedTopic::toKafkaUuid).toList();
         return admin.describeTopics(TopicCollection.ofTopicIds(uuids)).topicIdValues();
     }
 
@@ -186,7 +186,7 @@ class AdminTopicIdentitySource implements TopicIdentitySource {
     Set<UUID> describeByIds(Set<UUID> topicIds, long deadline) throws Exception {
         Set<UUID> alive = new HashSet<>();
         for (var entry : describeByIdFutures(topicIds).entrySet()) {
-            UUID id = TopicInfo.toJavaUuid(entry.getKey());
+            UUID id = ResolvedTopic.toJavaUuid(entry.getKey());
             try {
                 TopicDescription description = entry.getValue().get(remaining(deadline), TimeUnit.NANOSECONDS);
                 alive.add(id);
@@ -215,7 +215,7 @@ class AdminTopicIdentitySource implements TopicIdentitySource {
         for (var entry : futures.entrySet()) {
             try {
                 TopicDescription description = entry.getValue().get(remaining(deadline), TimeUnit.NANOSECONDS);
-                outcome.put(entry.getKey(), TopicInfo.toJavaUuid(description.topicId()));
+                outcome.put(entry.getKey(), ResolvedTopic.toJavaUuid(description.topicId()));
             } catch (ExecutionException e) {
                 if (e.getCause() instanceof UnknownTopicOrPartitionException) {
                     outcome.put(entry.getKey(), NameVerdict.NAME_GONE);

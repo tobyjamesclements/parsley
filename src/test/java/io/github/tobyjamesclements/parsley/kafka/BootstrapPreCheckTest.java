@@ -46,25 +46,25 @@ class BootstrapPreCheckTest {
      */
     @Test
     void partialCoverageOfTheReceivedSetLooksUnstable() {
-        assertTrue(ParsleyRuntime.preCheckLooksUnstable(Set.of(P0, P1), Set.of(P0)),
+        assertTrue(StreamsRuntime.preCheckLooksUnstable(Set.of(P0, P1), Set.of(P0)),
                 "a listing covering one received partition but not the other must be retried, not joined");
     }
 
     /** A first start lists nothing for the received set; waiting would tax every first start. */
     @Test
     void noCoverageOfTheReceivedSetDoesNotLookUnstable() {
-        assertFalse(ParsleyRuntime.preCheckLooksUnstable(Set.of(P0, P1), Set.of()),
+        assertFalse(StreamsRuntime.preCheckLooksUnstable(Set.of(P0, P1), Set.of()),
                 "an empty listing is a first start, not an unstable skip");
-        assertFalse(ParsleyRuntime.preCheckLooksUnstable(Set.of(P0, P1), Set.of(FORMER)),
+        assertFalse(StreamsRuntime.preCheckLooksUnstable(Set.of(P0, P1), Set.of(FORMER)),
                 "offsets only on formerly-received partitions carry no evidence about the received set");
     }
 
     /** Full coverage is the fast path; nothing to retry for. */
     @Test
     void fullCoverageDoesNotLookUnstable() {
-        assertFalse(ParsleyRuntime.preCheckLooksUnstable(Set.of(P0, P1), Set.of(P0, P1)),
+        assertFalse(StreamsRuntime.preCheckLooksUnstable(Set.of(P0, P1), Set.of(P0, P1)),
                 "a listing covering every received partition needs no retry");
-        assertFalse(ParsleyRuntime.preCheckLooksUnstable(Set.of(P0, P1), Set.of(P0, P1, FORMER)),
+        assertFalse(StreamsRuntime.preCheckLooksUnstable(Set.of(P0, P1), Set.of(P0, P1, FORMER)),
                 "extra formerly-received offsets do not disturb the fast path");
     }
 
@@ -82,7 +82,7 @@ class BootstrapPreCheckTest {
                 Map.of(P0, new OffsetAndMetadata(3), P1, new OffsetAndMetadata(4));
         AtomicInteger listings = new AtomicInteger();
 
-        Map<TopicPartition, OffsetAndMetadata> adopted = ParsleyRuntime.awaitStablePreCheck(APP,
+        Map<TopicPartition, OffsetAndMetadata> adopted = StreamsRuntime.awaitStablePreCheck(APP,
                 Set.of(P0, P1), () -> listings.incrementAndGet() == 1 ? partial : full,
                 NO_BACKOFF, AMPLE_BUDGET);
 
@@ -107,7 +107,7 @@ class BootstrapPreCheckTest {
         AtomicInteger coveringListings = new AtomicInteger();
         AtomicInteger emptyListings = new AtomicInteger();
 
-        assertEquals(full, ParsleyRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), () -> {
+        assertEquals(full, StreamsRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), () -> {
                     if (coveringListings.incrementAndGet() > 1) {
                         throw new AssertionError(
                                 "a listing that is not the unstable-skip shape must not be relisted");
@@ -115,7 +115,7 @@ class BootstrapPreCheckTest {
                     return full;
                 }, NO_BACKOFF, AMPLE_BUDGET),
                 "full first coverage is the fast path and must come back unchanged");
-        assertEquals(Map.of(), ParsleyRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), () -> {
+        assertEquals(Map.of(), StreamsRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), () -> {
                     if (emptyListings.incrementAndGet() > 1) {
                         throw new AssertionError("a first start's empty listing must not be relisted");
                     }
@@ -142,7 +142,7 @@ class BootstrapPreCheckTest {
         Map<TopicPartition, OffsetAndMetadata> partial = Map.of(P0, new OffsetAndMetadata(3));
         AtomicInteger listings = new AtomicInteger();
 
-        Map<TopicPartition, OffsetAndMetadata> adopted = ParsleyRuntime.awaitStablePreCheck(APP,
+        Map<TopicPartition, OffsetAndMetadata> adopted = StreamsRuntime.awaitStablePreCheck(APP,
                 Set.of(P0, P1), () -> {
                     if (listings.incrementAndGet() > 1_000_000) {
                         throw new AssertionError("the pre-check retry never gave up: the budget"
@@ -172,7 +172,7 @@ class BootstrapPreCheckTest {
         AtomicInteger listings = new AtomicInteger();
 
         assertRefusesWhenInterrupted(
-                () -> ParsleyRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), () -> {
+                () -> StreamsRuntime.awaitStablePreCheck(APP, Set.of(P0, P1), () -> {
                     if (listings.incrementAndGet() > 1) {
                         throw new AssertionError("an interrupted wait must refuse before relisting");
                     }
@@ -199,17 +199,17 @@ class BootstrapPreCheckTest {
      */
     @Test
     void anExpiredOffsetResumesAtTheCoveredPositionPlusOneOrFallsBackToTheSubstrate() {
-        assertEquals(java.util.OptionalLong.of(42), ParsleyRuntime.resumePosition(41L, true),
+        assertEquals(java.util.OptionalLong.of(42), StreamsRuntime.resumePosition(41L, true),
                 "covered up to 41: 42 is the next unread position");
-        assertEquals(java.util.OptionalLong.of(1), ParsleyRuntime.resumePosition(0L, true),
+        assertEquals(java.util.OptionalLong.of(1), StreamsRuntime.resumePosition(0L, true),
                 "covered up to 0: resume at 1");
-        assertEquals(java.util.OptionalLong.of(0), ParsleyRuntime.resumePosition(-1L, true),
+        assertEquals(java.util.OptionalLong.of(0), StreamsRuntime.resumePosition(-1L, true),
                 "a pre-D115 execution recorded coverage of -1 for a channel started at 0: resume at 0");
-        assertEquals(java.util.OptionalLong.of(0), ParsleyRuntime.resumePosition(null, true),
+        assertEquals(java.util.OptionalLong.of(0), StreamsRuntime.resumePosition(null, true),
                 "received before but never covered: the previous execution read from 0, so resume there");
-        assertEquals(java.util.OptionalLong.empty(), ParsleyRuntime.resumePosition(null, false),
+        assertEquals(java.util.OptionalLong.empty(), StreamsRuntime.resumePosition(null, false),
                 "a topic the state never named: the substrate's earliest or latest position is taken instead");
-        assertEquals(java.util.OptionalLong.empty(), ParsleyRuntime.resumePosition(Long.MAX_VALUE, true),
+        assertEquals(java.util.OptionalLong.empty(), StreamsRuntime.resumePosition(Long.MAX_VALUE, true),
                 "the fed-to-end sentinel is not a position an offset can follow");
     }
 }

@@ -21,7 +21,7 @@ import java.util.TreeMap;
  * @see OrderingStore
  * @see OrderingStateInspector
  */
-final class StoreCodec {
+final class OrderingStateCodec {
 
     /** Tag for the store format version entry. */
     static final byte TAG_VERSION = 'v';
@@ -39,7 +39,7 @@ final class StoreCodec {
     /**
      * Every state tag except {@link #TAG_VERSION}. The unversioned-state refusal iterates
      * this set; a new tag must be added here, or the state it marks silently escapes the
-     * changelog-head-loss check. {@code StoreCodecCorruptionTest#stateTagsCoverEveryTagConstantExceptVersion}
+     * changelog-head-loss check. {@code OrderingStateCodecCorruptionTest#stateTagsCoverEveryTagConstantExceptVersion}
      * pins the set against the {@code TAG_} constants by reflection, so a tag added above
      * without an entry here fails the build rather than drifting.
      */
@@ -62,7 +62,7 @@ final class StoreCodec {
     /** Version of the held-message value encoding. */
     static final byte HELD_BLOB_VERSION = 1;
 
-    private StoreCodec() {
+    private OrderingStateCodec() {
     }
 
     /**
@@ -130,14 +130,14 @@ final class StoreCodec {
     /**
      * @param key a key built by {@link #channelKey(byte, ChannelId)}
      * @return the channel it names
-     * @throws ParsleyFailClosedException with
-     *         {@link ParsleyFailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
+     * @throws FailClosedException with
+     *         {@link FailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
      *         key is not the exact length that builder writes
      */
     static ChannelId channelOfEntryKey(byte[] key) {
         if (key.length != 1 + ChannelId.ENCODED_LENGTH) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+            throw new FailClosedException(
+                    FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                     "corrupt ordering key: length " + key.length + " for tag '" + (char) key[0] + "'");
         }
         return ChannelId.readFrom(ByteBuffer.wrap(key, 1, ChannelId.ENCODED_LENGTH));
@@ -146,8 +146,8 @@ final class StoreCodec {
     /**
      * @param key a key built by {@link #heldKey(ChannelId, long)}
      * @return the channel it names
-     * @throws ParsleyFailClosedException with
-     *         {@link ParsleyFailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
+     * @throws FailClosedException with
+     *         {@link FailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
      *         key is not the exact length that builder writes
      */
     static ChannelId channelOfHeldKey(byte[] key) {
@@ -158,8 +158,8 @@ final class StoreCodec {
     /**
      * @param key a key built by {@link #heldKey(ChannelId, long)}
      * @return the position it names
-     * @throws ParsleyFailClosedException with
-     *         {@link ParsleyFailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
+     * @throws FailClosedException with
+     *         {@link FailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
      *         key is not the exact length that builder writes
      */
     static long positionOfHeldKey(byte[] key) {
@@ -169,8 +169,8 @@ final class StoreCodec {
 
     private static void requireHeldKeyLength(byte[] key) {
         if (key.length != 1 + ChannelId.ENCODED_LENGTH + Long.BYTES) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+            throw new FailClosedException(
+                    FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                     "corrupt held key: length " + key.length);
         }
     }
@@ -186,14 +186,14 @@ final class StoreCodec {
     /**
      * @param value an eight-byte encoding
      * @return the number it holds
-     * @throws ParsleyFailClosedException with
-     *         {@link ParsleyFailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
+     * @throws FailClosedException with
+     *         {@link FailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
      *         value is not exactly eight bytes
      */
     static long decodeLong(byte[] value) {
         if (value.length != Long.BYTES) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+            throw new FailClosedException(
+                    FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                     "corrupt ordering value: length " + value.length + " where 8 bytes were written");
         }
         return ByteBuffer.wrap(value).getLong();
@@ -215,13 +215,13 @@ final class StoreCodec {
      * @param causes    the frontier the message expressed
      * @return the encoded blob
      */
-    static byte[] encodeHeld(long timestamp, byte[] key, byte[] value, List<HeaderKV> headers, Causes causes) {
+    static byte[] encodeHeld(long timestamp, byte[] key, byte[] value, List<Header> headers, Causes causes) {
         int size = 1 + Long.BYTES + 1;
         size += key == null ? 0 : Integer.BYTES + key.length;
         size += value == null ? 0 : Integer.BYTES + value.length;
         size += Integer.BYTES;
         List<byte[]> headerKeys = new ArrayList<>(headers.size());
-        for (HeaderKV header : headers) {
+        for (Header header : headers) {
             byte[] headerKey = header.key().getBytes(StandardCharsets.UTF_8);
             headerKeys.add(headerKey);
             size += Integer.BYTES + headerKey.length + Integer.BYTES
@@ -242,7 +242,7 @@ final class StoreCodec {
         }
         buffer.putInt(headers.size());
         for (int i = 0; i < headers.size(); i++) {
-            HeaderKV header = headers.get(i);
+            Header header = headers.get(i);
             byte[] headerKey = headerKeys.get(i);
             buffer.putInt(headerKey.length).put(headerKey);
             if (header.value() == null) {
@@ -268,7 +268,7 @@ final class StoreCodec {
      * @param headers   the headers as received
      * @param causes    the frontier the message expressed
      */
-    record HeldBlob(long timestamp, byte[] key, byte[] value, List<HeaderKV> headers, Causes causes) {
+    record HeldBlob(long timestamp, byte[] key, byte[] value, List<Header> headers, Causes causes) {
     }
 
     /**
@@ -276,8 +276,8 @@ final class StoreCodec {
      *
      * @param blob bytes written by {@link #encodeHeld}
      * @return the decoded message
-     * @throws ParsleyFailClosedException with
-     *         {@link ParsleyFailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
+     * @throws FailClosedException with
+     *         {@link FailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
      *         blob carries an unknown version or is corrupt
      */
     static HeldBlob decodeHeld(byte[] blob) {
@@ -285,8 +285,8 @@ final class StoreCodec {
             ByteBuffer buffer = ByteBuffer.wrap(blob);
             byte version = buffer.get();
             if (version != HELD_BLOB_VERSION) {
-                throw new ParsleyFailClosedException(
-                        ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
+                throw new FailClosedException(
+                        FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                         "held blob version " + version);
             }
             long timestamp = buffer.getLong();
@@ -303,7 +303,7 @@ final class StoreCodec {
             if (headerCount < 0 || headerCount > buffer.remaining() / (2 * Integer.BYTES)) {
                 throw corrupt("header count " + headerCount + " with " + buffer.remaining() + " bytes remaining");
             }
-            List<HeaderKV> headers = new ArrayList<>(headerCount);
+            List<Header> headers = new ArrayList<>(headerCount);
             for (int i = 0; i < headerCount; i++) {
                 byte[] headerKey = readSizedBytes(buffer, "header key");
                 int valueLength = buffer.getInt();
@@ -318,7 +318,7 @@ final class StoreCodec {
                     headerValue = new byte[valueLength];
                     buffer.get(headerValue);
                 }
-                headers.add(new HeaderKV(new String(headerKey, StandardCharsets.UTF_8), headerValue));
+                headers.add(new Header(new String(headerKey, StandardCharsets.UTF_8), headerValue));
             }
             int causeCount = buffer.getInt();
             if (causeCount < 0
@@ -334,8 +334,8 @@ final class StoreCodec {
             return new HeldBlob(timestamp, key, value, List.copyOf(headers), Causes.of(causes));
         } catch (BufferUnderflowException | IllegalArgumentException | IndexOutOfBoundsException
                  | NegativeArraySizeException e) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, "corrupt held blob", e);
+            throw new FailClosedException(
+                    FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, "corrupt held blob", e);
         }
     }
 
@@ -349,8 +349,8 @@ final class StoreCodec {
         return bytes;
     }
 
-    private static ParsleyFailClosedException corrupt(String detail) {
-        return new ParsleyFailClosedException(
-                ParsleyFailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, "corrupt held blob: " + detail);
+    private static FailClosedException corrupt(String detail) {
+        return new FailClosedException(
+                FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, "corrupt held blob: " + detail);
     }
 }

@@ -20,6 +20,6 @@ public record DeliverableMessage(
         long timestamp,
         byte[] key,
         byte[] value,
-        List<HeaderKV> headers,
+        List<Header> headers,
         Causes causes) {
 }

@@ -4,19 +4,18 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * One process: the channels it receives, the channels it sends on, and the stores it owns.
  *
- * <p>A definition is the unit {@link Parsley#start} runs. Each definition becomes its own
- * Kafka Streams application. Declaring a channel as sent is what permits a {@link Handler}
- * to emit on it.
+ * <p>A process is the unit {@link Parsley#start} runs. Each one becomes its own Kafka
+ * Streams application. Declaring a channel as sent is what permits a {@link Handler}
+ * to send on it.
  *
  * @see Builder
- * @see Parsley#start(ParsleyConfig, ProcessDefinition...)
+ * @see Parsley#start(ParsleyConfig, Process...)
  */
-public final class ProcessDefinition {
+public final class Process {
 
     /**
      * A received channel and the logic that handles it.
@@ -45,41 +44,40 @@ public final class ProcessDefinition {
 
     private final String name;
     private final Map<String, Input<?, ?>> inputsByTopic;
-    private final Map<String, Channel<?, ?>> sendsByTopic;
+    private final Map<String, Channel<?, ?>> outputsByTopic;
     private final Map<String, Store<?, ?>> storesByName;
 
     // Declaration order is part of the contract: the topology's sources, state stores and
     // composed changelog names are derived by iterating these, and Map.copyOf randomises
     // iteration order per JVM, which would make the generated topology nondeterministic
     // across restarts.
-    private ProcessDefinition(String name, Map<String, Input<?, ?>> inputsByTopic,
-                              Map<String, Channel<?, ?>> sendsByTopic, Map<String, Store<?, ?>> storesByName) {
+    private Process(String name, Map<String, Input<?, ?>> inputsByTopic,
+                    Map<String, Channel<?, ?>> outputsByTopic, Map<String, Store<?, ?>> storesByName) {
         this.name = name;
         this.inputsByTopic = Collections.unmodifiableMap(new LinkedHashMap<>(inputsByTopic));
-        this.sendsByTopic = Collections.unmodifiableMap(new LinkedHashMap<>(sendsByTopic));
+        this.outputsByTopic = Collections.unmodifiableMap(new LinkedHashMap<>(outputsByTopic));
         this.storesByName = Collections.unmodifiableMap(new LinkedHashMap<>(storesByName));
     }
 
     /**
-     * Begins a definition.
+     * Begins a process.
      *
      * <p>The name identifies the process across restarts and appears in its Kafka
      * application id, so changing it starts a process with no committed state.
      *
-     * @param name the process name, a valid Kafka topic-name component
+     * @param name the process name, which becomes part of every changelog topic name, so
+     *             Kafka's topic-name rules apply to it
      * @return a builder
-     * @throws IllegalArgumentException if {@code name} is null, malformed, or contains the
-     *         reserved {@link Store#RESERVED_PREFIX} namespace; it becomes part of every
-     *         changelog topic name, so Kafka's topic-name rules apply
+     * @throws IllegalArgumentException if {@code name} is null or blank, or contains the
+     *         reserved {@link Parsley#RESERVED_PREFIX} namespace
      */
     public static Builder named(String name) {
-        if (!KafkaNames.isValidTopicName(name)) {
-            throw new IllegalArgumentException("process name must be a valid Kafka topic-name"
-                    + " component (" + KafkaNames.RULE + "), since it names changelog topics: " + name);
+        if (name == null || name.isBlank()) {
+            throw new IllegalArgumentException("process name must be non-blank");
         }
-        if (name.contains(Store.RESERVED_PREFIX)) {
+        if (name.contains(Parsley.RESERVED_PREFIX)) {
             throw new IllegalArgumentException("process name may not contain the reserved namespace "
-                    + Store.RESERVED_PREFIX + ": it becomes part of application ids, consumer groups"
+                    + Parsley.RESERVED_PREFIX + ": it becomes part of application ids, consumer groups"
                     + " and changelog topic names, which would then sit inside parsley's own"
                     + " namespace: " + name);
         }
@@ -96,12 +94,13 @@ public final class ProcessDefinition {
     }
 
     /**
-     * Returns the topics this process receives, in declaration order.
+     * Returns the channels this process receives, each with its handler, in declaration
+     * order.
      *
-     * @return the topics this process receives, in declaration order
+     * @return the received channels and their handlers, in declaration order
      */
-    public Set<String> receivedTopics() {
-        return inputsByTopic.keySet();
+    public List<Input<?, ?>> inputs() {
+        return List.copyOf(inputsByTopic.values());
     }
 
     /**
@@ -115,22 +114,22 @@ public final class ProcessDefinition {
     }
 
     /**
-     * Returns the topics this process may send on, in declaration order.
+     * Returns the channels this process may send on, in declaration order.
      *
-     * @return the topics this process may send on, in declaration order
+     * @return the channels this process may send on, in declaration order
      */
-    public Set<String> sendTopics() {
-        return sendsByTopic.keySet();
+    public List<Channel<?, ?>> outputs() {
+        return List.copyOf(outputsByTopic.values());
     }
 
     /**
-     * Looks up a sent channel.
+     * Looks up a channel this process may send on.
      *
      * @param topic a topic name
      * @return the channel declared for sending on {@code topic}, or {@code null}
      */
-    public Channel<?, ?> sendChannel(String topic) {
-        return sendsByTopic.get(topic);
+    public Channel<?, ?> output(String topic) {
+        return outputsByTopic.get(topic);
     }
 
     /**
@@ -156,7 +155,7 @@ public final class ProcessDefinition {
     public static final class Builder {
         private final String name;
         private final Map<String, Input<?, ?>> inputs = new LinkedHashMap<>();
-        private final Map<String, Channel<?, ?>> sends = new LinkedHashMap<>();
+        private final Map<String, Channel<?, ?>> outputs = new LinkedHashMap<>();
         private final Map<String, Store<?, ?>> stores = new LinkedHashMap<>();
 
         private Builder(String name) {
@@ -186,7 +185,7 @@ public final class ProcessDefinition {
          * Declares the channels this process may send on. Repeats of the same channel are
          * ignored; the same topic through a different {@code Channel} instance is refused,
          * because two instances for one topic leave it ambiguous which declared serdes the
-         * emissions on that topic carry.
+         * sends on that topic carry.
          *
          * <p>The whole argument list is validated before any of it is committed, so a
          * refused call leaves the builder exactly as it was.
@@ -201,7 +200,7 @@ public final class ProcessDefinition {
             if (channels == null) {
                 throw new IllegalArgumentException(name + ": sends requires a non-null channel array");
             }
-            Map<String, Channel<?, ?>> accepted = new LinkedHashMap<>(sends);
+            Map<String, Channel<?, ?>> accepted = new LinkedHashMap<>(outputs);
             for (Channel<?, ?> channel : channels) {
                 if (channel == null) {
                     throw new IllegalArgumentException(name + ": sent channels must be non-null");
@@ -209,14 +208,14 @@ public final class ProcessDefinition {
                 Channel<?, ?> existing = accepted.putIfAbsent(channel.topic(), channel);
                 if (existing != null && existing != channel) {
                     throw new IllegalArgumentException(name + " already declares sending on "
-                            + channel.topic() + " through a different Channel instance; emissions"
+                            + channel.topic() + " through a different Channel instance; sends"
                             + " on a topic serialize with its declared serdes, so declare each"
                             + " send topic once");
                 }
             }
             // Append-only commit: accepted was seeded from the field and putIfAbsent never
             // replaced an entry, so earlier declarations keep their order and identity.
-            sends.putAll(accepted);
+            outputs.putAll(accepted);
             return this;
         }
 
@@ -250,16 +249,16 @@ public final class ProcessDefinition {
         }
 
         /**
-         * Builds the definition.
+         * Builds the process.
          *
-         * @return the definition
+         * @return the process
          * @throws IllegalArgumentException if no channel is received
          */
-        public ProcessDefinition build() {
+        public Process build() {
             if (inputs.isEmpty()) {
                 throw new IllegalArgumentException("process " + name + " must receive from at least one channel");
             }
-            return new ProcessDefinition(name, inputs, sends, stores);
+            return new Process(name, inputs, outputs, stores);
         }
     }
 }

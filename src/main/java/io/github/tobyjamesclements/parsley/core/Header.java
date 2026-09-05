@@ -6,13 +6,13 @@ package io.github.tobyjamesclements.parsley.core;
  * @param key   the header name, never {@code null}
  * @param value the header bytes, which may be {@code null}
  */
-public record HeaderKV(String key, byte[] value) {
+public record Header(String key, byte[] value) {
     /**
      * Validates the header name.
      *
      * @throws IllegalArgumentException if {@code key} is null
      */
-    public HeaderKV {
+    public Header {
         if (key == null) {
             throw new IllegalArgumentException("header key must be non-null");
         }

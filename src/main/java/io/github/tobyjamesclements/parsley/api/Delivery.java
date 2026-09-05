@@ -2,7 +2,7 @@ package io.github.tobyjamesclements.parsley.api;
 
 import java.util.List;
 
-import io.github.tobyjamesclements.parsley.core.HeaderKV;
+import io.github.tobyjamesclements.parsley.core.Header;
 
 /**
  * One message, established as causally deliverable and handed to application logic.
@@ -13,7 +13,7 @@ import io.github.tobyjamesclements.parsley.core.HeaderKV;
  *
  * @param <K> key type
  * @param <V> value type
- * @see Handler#handle(Delivery, StateReader)
+ * @see Handler#handle(Delivery, State)
  */
 public final class Delivery<K, V> {
     private final Channel<K, V> channel;
@@ -22,9 +22,9 @@ public final class Delivery<K, V> {
     private final long timestamp;
     private final K key;
     private final V value;
-    private final List<HeaderKV> headers;
+    private final List<Header> headers;
 
-    Delivery(Channel<K, V> channel, int partition, long position, long timestamp, K key, V value, List<HeaderKV> headers) {
+    Delivery(Channel<K, V> channel, int partition, long position, long timestamp, K key, V value, List<Header> headers) {
         this.channel = channel;
         this.partition = partition;
         this.position = position;
@@ -51,7 +51,7 @@ public final class Delivery<K, V> {
      * @return the delivery
      */
     public static <K, V> Delivery<K, V> of(Channel<K, V> channel, int partition, long position, long timestamp,
-                                           K key, V value, List<HeaderKV> headers) {
+                                           K key, V value, List<Header> headers) {
         return new Delivery<>(channel, partition, position, timestamp, key, value, headers);
     }
 
@@ -114,7 +114,7 @@ public final class Delivery<K, V> {
      *
      * @return the application's own headers, with reserved entries removed
      */
-    public List<HeaderKV> headers() {
+    public List<Header> headers() {
         return headers;
     }
 }

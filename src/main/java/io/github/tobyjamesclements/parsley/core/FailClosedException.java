@@ -10,7 +10,7 @@ package io.github.tobyjamesclements.parsley.core;
  * @see #reason()
  * @see io.github.tobyjamesclements.parsley.api.ProcessStatus#refusalReason()
  */
-public final class ParsleyFailClosedException extends RuntimeException {
+public final class FailClosedException extends RuntimeException {
 
     /** Why delivery stopped. */
     public enum Reason {
@@ -45,8 +45,8 @@ public final class ParsleyFailClosedException extends RuntimeException {
         TASK_WIDTH_CHANGED,
         /** Stored ordering state carries a format version this build cannot read. */
         UNKNOWN_ORDERING_STATE_FORMAT,
-        /** A handler emitted on a channel its process never declared. */
-        EMISSION_TO_UNDECLARED_CHANNEL,
+        /** A handler sent on a channel its process never declared. */
+        SEND_TO_UNDECLARED_CHANNEL,
         /** Application logic read or wrote a store its process never declared. */
         STATE_ACCESS_TO_UNDECLARED_STORE,
         /** An application header used the prefix reserved for causal metadata. */
@@ -72,7 +72,7 @@ public final class ParsleyFailClosedException extends RuntimeException {
      * @param reason  why delivery stopped
      * @param message the diagnosis, prefixed with {@code reason}
      */
-    public ParsleyFailClosedException(Reason reason, String message) {
+    public FailClosedException(Reason reason, String message) {
         super(reason + ": " + message);
         this.reason = reason;
     }
@@ -84,7 +84,7 @@ public final class ParsleyFailClosedException extends RuntimeException {
      * @param message the diagnosis, prefixed with {@code reason}
      * @param cause   the underlying failure
      */
-    public ParsleyFailClosedException(Reason reason, String message, Throwable cause) {
+    public FailClosedException(Reason reason, String message, Throwable cause) {
         super(reason + ": " + message, cause);
         this.reason = reason;
     }
@@ -107,10 +107,10 @@ public final class ParsleyFailClosedException extends RuntimeException {
      * @param failure the throwable to search, which may be {@code null}
      * @return the first fail-closed exception found, or {@code null} when there is none
      */
-    public static ParsleyFailClosedException findIn(Throwable failure) {
+    public static FailClosedException findIn(Throwable failure) {
         Throwable cause = failure;
         for (int depth = 0; cause != null && depth < 64; depth++, cause = cause.getCause()) {
-            if (cause instanceof ParsleyFailClosedException parsley) {
+            if (cause instanceof FailClosedException parsley) {
                 return parsley;
             }
         }

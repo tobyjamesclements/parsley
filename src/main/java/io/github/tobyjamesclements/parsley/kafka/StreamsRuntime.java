@@ -28,9 +28,9 @@ import java.util.concurrent.TimeUnit;
 
 import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.ParsleyConfig;
-import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
+import io.github.tobyjamesclements.parsley.api.Process;
 import io.github.tobyjamesclements.parsley.api.Store;
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
+import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 /**
  * Owns the Kafka Streams application behind each running process.
@@ -44,8 +44,8 @@ import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
  *
  * @see io.github.tobyjamesclements.parsley.api.Parsley
  */
-public final class ParsleyRuntime implements AutoCloseable {
-    private static final Logger LOG = LoggerFactory.getLogger(ParsleyRuntime.class);
+public final class StreamsRuntime implements AutoCloseable {
+    private static final Logger LOG = LoggerFactory.getLogger(StreamsRuntime.class);
     private static final long TIMEOUT_SECONDS = 30;
     /**
      * The metadata stamp on every offset the bootstrap commits. Kafka Streams overwrites
@@ -75,15 +75,13 @@ public final class ParsleyRuntime implements AutoCloseable {
     private final java.util.concurrent.ConcurrentHashMap<String, Throwable> failuresByProcess =
             new java.util.concurrent.ConcurrentHashMap<>();
     private final List<KafkaStreams> streams = new java.util.concurrent.CopyOnWriteArrayList<>();
-    private final java.util.concurrent.ConcurrentHashMap<String, ProcessDiagnostics> diagnosticsByProcess =
-            new java.util.concurrent.ConcurrentHashMap<>();
     /** Counted down when any process stops or this runtime closes (D111). */
     private final java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(1);
 
     // Package-private for RecordFailureDiagnosticsTest, which drives recordFailure and
     // reads the merge's outcome directly — the failure path never touches the admin
     // client, so the test passes none. Production construction stays inside start().
-    ParsleyRuntime(Admin admin) {
+    StreamsRuntime(Admin admin) {
         this.admin = admin;
     }
 
@@ -99,22 +97,22 @@ public final class ParsleyRuntime implements AutoCloseable {
      * @param config      broker connection, identity and metadata budget
      * @param definitions the processes to run, with distinct names
      * @return the running runtime
-     * @throws ParsleyFailClosedException if a process cannot start without breaching the
+     * @throws FailClosedException if a process cannot start without breaching the
      *         guarantee, for example when messages remain held on a channel it no longer
      *         receives, or when a topic was recreated under a name it has state for
      * @throws IllegalArgumentException if names collide or a topic uses a reserved name
      */
-    public static ParsleyRuntime start(ParsleyConfig config, List<ProcessDefinition> definitions) {
+    public static StreamsRuntime start(ParsleyConfig config, List<Process> definitions) {
         validateDistinctNames(definitions);
         refuseReservedTopicNames(config, definitions);
-        Map<String, Object> adminProps = new HashMap<>(config.extraProperties());
+        Map<String, Object> adminProps = new HashMap<>(config.streamsProperties());
         adminProps.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers());
         Admin admin = Admin.create(adminProps);
-        ParsleyRuntime runtime = new ParsleyRuntime(admin);
+        StreamsRuntime runtime = new StreamsRuntime(admin);
         try {
-            Map<String, TopicInfo> topics = runtime.resolveTopics(declaredTopics(definitions));
+            Map<String, ResolvedTopic> topics = runtime.resolveTopics(declaredTopics(definitions));
 
-            for (ProcessDefinition definition : definitions) {
+            for (Process definition : definitions) {
                 String applicationId = config.applicationIdPrefix() + "-" + definition.name();
                 java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> changelog =
                         runtime.describeChangelog(applicationId);
@@ -143,11 +141,9 @@ public final class ParsleyRuntime implements AutoCloseable {
                 // learned as tasks initialise (D115).
                 AdminTopicIdentitySource identitySource = new AdminTopicIdentitySource(admin, applicationId,
                         namesById, CORROBORATION_BACKOFF);
-                ProcessDiagnostics diagnostics = new ProcessDiagnostics();
-                runtime.diagnosticsByProcess.put(definition.name(), diagnostics);
                 KafkaStreams kafkaStreams = new KafkaStreams(
                         ProcessTopology.build(definition, topics, identitySource, startPositions,
-                                config.statusInterval(), config.metadataBudgetBytes(), diagnostics),
+                                ProcessNode.PUNCTUATION_INTERVAL, config.metadataBudgetBytes()),
                         streamsProperties(config, applicationId));
                 java.time.Duration memberBound = bootstrapMemberSessionTimeout(clientPropsFor(config));
                 // A refused join is replaced only while another instance's bootstrap member can
@@ -190,7 +186,7 @@ public final class ParsleyRuntime implements AutoCloseable {
     }
 
     private static Map<String, Object> clientPropsFor(ParsleyConfig config) {
-        Map<String, Object> props = new HashMap<>(config.extraProperties());
+        Map<String, Object> props = new HashMap<>(config.streamsProperties());
         props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers());
         return props;
     }
@@ -228,9 +224,9 @@ public final class ParsleyRuntime implements AutoCloseable {
      * bootstrap member of an instance that never left — and the substrate, not the process,
      * must be corrected (D108).
      */
-    static ParsleyFailClosedException persistentProtocolConflict(String applicationId, java.time.Duration window,
+    static FailClosedException persistentProtocolConflict(String applicationId, java.time.Duration window,
                                                                  Throwable cause) {
-        return new ParsleyFailClosedException(ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
+        return new FailClosedException(FailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
                 applicationId + ": the group join has been refused as a protocol conflict for longer than " + window
                         + ", so a member speaking another group protocol persists in this group: a consumer"
                         + " configured with this application id as its group, or another instance's bootstrap"
@@ -332,7 +328,7 @@ public final class ParsleyRuntime implements AutoCloseable {
     /**
      * Walks a failure's cause chain outward-in and names the first recognised condition.
      *
-     * <p>The walk is bounded exactly as {@link ParsleyFailClosedException#findIn}, to guard
+     * <p>The walk is bounded exactly as {@link FailClosedException#findIn}, to guard
      * against a cyclic chain. Within each link the instanceof checks precede the message
      * probe, and the first match anywhere wins: an outer link's condition is named even
      * when a deeper link would match a different branch.
@@ -367,8 +363,8 @@ public final class ParsleyRuntime implements AutoCloseable {
      * a second.
      */
     static Throwable preferFailClosedDiagnosis(Throwable existing, Throwable latest) {
-        return ParsleyFailClosedException.findIn(existing) == null
-                && ParsleyFailClosedException.findIn(latest) != null ? latest : existing;
+        return FailClosedException.findIn(existing) == null
+                && FailClosedException.findIn(latest) != null ? latest : existing;
     }
 
     // Package-private so RecordFailureDiagnosticsTest can pin the merge wiring and the
@@ -380,21 +376,21 @@ public final class ParsleyRuntime implements AutoCloseable {
         // keyed on refusalReason must not read it as a transient and restart forever.
         FailureDiagnosis diagnosis = classifyFailure(exception);
         Throwable recorded = switch (diagnosis) {
-            case POSITIONS_DISCARDED_UNREAD -> new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
+            case POSITIONS_DISCARDED_UNREAD -> new FailClosedException(
+                    FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
                     "process " + process + ": the broker no longer retains this process's committed read"
                             + " position; positions were discarded before they were read (SPEC Safety 8)."
                             + " Reset the process's state and group offsets deliberately to proceed.",
                     exception);
-            case RECORD_TOO_LARGE -> new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
+            case RECORD_TOO_LARGE -> new FailClosedException(
+                    FailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
                     "process " + process + ": a record exceeded a size limit, typically a held message's"
                             + " persisted form against the ordering changelog's max.message.bytes; raise that"
                             + " limit and, if needed, producer.max.request.size, then restart.",
                     exception);
             default -> exception;
         };
-        failuresByProcess.merge(process, recorded, ParsleyRuntime::preferFailClosedDiagnosis);
+        failuresByProcess.merge(process, recorded, StreamsRuntime::preferFailClosedDiagnosis);
         stopped.countDown();
 
         switch (diagnosis) {
@@ -454,31 +450,29 @@ public final class ParsleyRuntime implements AutoCloseable {
         Map<String, io.github.tobyjamesclements.parsley.api.ProcessStatus> statuses = new LinkedHashMap<>();
         streamsByProcess.forEach((process, kafkaStreams) -> {
             KafkaStreams.State state = kafkaStreams.state();
-            io.github.tobyjamesclements.parsley.api.ProcessStatus.State mapped = switch (state) {
-                case RUNNING -> io.github.tobyjamesclements.parsley.api.ProcessStatus.State.RUNNING;
-                case REBALANCING -> io.github.tobyjamesclements.parsley.api.ProcessStatus.State.REBALANCING;
-                default -> io.github.tobyjamesclements.parsley.api.ProcessStatus.State.STOPPED;
+            io.github.tobyjamesclements.parsley.api.ProcessStatus.Lifecycle mapped = switch (state) {
+                case RUNNING -> io.github.tobyjamesclements.parsley.api.ProcessStatus.Lifecycle.RUNNING;
+                case REBALANCING -> io.github.tobyjamesclements.parsley.api.ProcessStatus.Lifecycle.REBALANCING;
+                default -> io.github.tobyjamesclements.parsley.api.ProcessStatus.Lifecycle.STOPPED;
             };
             Throwable failure = failuresByProcess.get(process);
-            ParsleyFailClosedException refusal =
-                    ParsleyFailClosedException.findIn(failure);
-            ProcessDiagnostics diagnostics = diagnosticsByProcess.get(process);
+            FailClosedException refusal =
+                    FailClosedException.findIn(failure);
             statuses.put(process, new io.github.tobyjamesclements.parsley.api.ProcessStatus(process, mapped,
-                    java.util.Optional.ofNullable(refusal).map(ParsleyFailClosedException::reason),
-                    java.util.Optional.ofNullable(failure).map(Throwable::getMessage),
-                    diagnostics == null ? List.of() : diagnostics.snapshot()));
+                    java.util.Optional.ofNullable(refusal).map(FailClosedException::reason),
+                    java.util.Optional.ofNullable(failure).map(Throwable::getMessage)));
         });
         return statuses;
     }
 
-    private static void refuseReservedTopicNames(ParsleyConfig config, List<ProcessDefinition> definitions) {
+    private static void refuseReservedTopicNames(ParsleyConfig config, List<Process> definitions) {
         // Composed changelog names must be distinct across every process: process names
         // are distinct, but composition can still collide ("app-orders" + "audit-log" and
         // "app-orders-audit" + "log" both give app-orders-audit-log-changelog), and a
         // silently deduped collision would have two Streams applications sharing one
         // changelog, each restoring the other's records.
         Map<String, String> ownerByChangelog = new HashMap<>();
-        for (ProcessDefinition definition : definitions) {
+        for (Process definition : definitions) {
             String applicationId = config.applicationIdPrefix() + "-" + definition.name();
             registerChangelog(ownerByChangelog,
                     ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE),
@@ -509,9 +503,9 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    private static void validateDistinctNames(List<ProcessDefinition> definitions) {
+    private static void validateDistinctNames(List<Process> definitions) {
         Set<String> names = new HashSet<>();
-        for (ProcessDefinition definition : definitions) {
+        for (Process definition : definitions) {
             if (!names.add(definition.name())) {
                 throw new IllegalArgumentException("duplicate process name " + definition.name());
             }
@@ -521,17 +515,17 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    private static Set<String> declaredTopics(List<ProcessDefinition> definitions) {
+    private static Set<String> declaredTopics(List<Process> definitions) {
         Set<String> topics = new HashSet<>();
-        for (ProcessDefinition definition : definitions) {
-            topics.addAll(definition.receivedTopics());
-            topics.addAll(definition.sendTopics());
+        for (Process definition : definitions) {
+            topics.addAll(ProcessTopology.inputTopics(definition));
+            topics.addAll(ProcessTopology.outputTopics(definition));
         }
         return topics;
     }
 
     /**
-     * Maps one resolved description to its {@link TopicInfo}, refusing a substrate that
+     * Maps one resolved description to its {@link ResolvedTopic}, refusing a substrate that
      * cannot provide channel identity.
      *
      * <p>The substrate reserves {@link org.apache.kafka.common.Uuid#ZERO_UUID} and never
@@ -540,18 +534,18 @@ public final class ParsleyRuntime implements AutoCloseable {
      * Assumption 2), and D83's whole identity machinery relies on this refusal keeping the
      * zero id out of every resolved view.
      */
-    static TopicInfo requireTopicId(String name, TopicDescription description) {
+    static ResolvedTopic requireTopicId(String name, TopicDescription description) {
         if (org.apache.kafka.common.Uuid.ZERO_UUID.equals(description.topicId())) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
+            throw new FailClosedException(
+                    FailClosedException.Reason.SUBSTRATE_MISCONFIGURED,
                     "topic '" + name + "' has no topic ID; brokers below the supported 3.7.0 floor cannot"
                             + " provide channel identity (SPEC Substrate 1, Assumption 2); refusing to start");
         }
-        return new TopicInfo(
-                TopicInfo.toJavaUuid(description.topicId()), description.partitions().size());
+        return new ResolvedTopic(
+                ResolvedTopic.toJavaUuid(description.topicId()), description.partitions().size());
     }
 
-    private Map<String, TopicInfo> resolveTopics(Set<String> names) {
+    private Map<String, ResolvedTopic> resolveTopics(Set<String> names) {
         return resolveTopicsCorroborated(
                 () -> admin.describeTopics(names).allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS),
                 CORROBORATION_BACKOFF);
@@ -571,13 +565,13 @@ public final class ParsleyRuntime implements AutoCloseable {
      * failure refuses at once, since nothing about it is a matter of corroboration. The same
      * evidence standard D84 applies to the ordering changelog's describe.
      */
-    static Map<String, TopicInfo> resolveTopicsCorroborated(TopicsDescribe describe, java.time.Duration backoff) {
+    static Map<String, ResolvedTopic> resolveTopicsCorroborated(TopicsDescribe describe, java.time.Duration backoff) {
         for (int attempt = 0; ; attempt++) {
             try {
-                Map<String, TopicInfo> topics = new LinkedHashMap<>();
+                Map<String, ResolvedTopic> topics = new LinkedHashMap<>();
                 describe.describe().forEach((name, description) -> topics.put(name, requireTopicId(name, description)));
                 return topics;
-            } catch (ParsleyFailClosedException e) {
+            } catch (FailClosedException e) {
                 throw e;
             } catch (Exception e) {
                 boolean unknown = e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
@@ -657,20 +651,20 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    private void refuseWidthChange(String applicationId, ProcessDefinition definition,
-                                   Map<String, TopicInfo> topics,
+    private void refuseWidthChange(String applicationId, Process definition,
+                                   Map<String, ResolvedTopic> topics,
                                    java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> changelog) {
         if (changelog.isEmpty()) {
             return;
         }
         int declaredWidth = 0;
-        for (String topic : definition.receivedTopics()) {
+        for (String topic : ProcessTopology.inputTopics(definition)) {
             declaredWidth = Math.max(declaredWidth, topics.get(topic).partitions());
         }
         int storedWidth = changelog.get().partitions().size();
         if (storedWidth != declaredWidth) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.TASK_WIDTH_CHANGED,
+            throw new FailClosedException(
+                    FailClosedException.Reason.TASK_WIDTH_CHANGED,
                     applicationId + ": this process's ordering state was built for " + storedWidth
                             + " task(s) but the declaration now induces " + declaredWidth
                             + " (the widest received topic's partition count changed). The ordering store's"
@@ -867,26 +861,26 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    private void refuseStrandedHeldMessages(String applicationId, ProcessDefinition definition,
-                                            Map<String, TopicInfo> topics, boolean priorState,
+    private void refuseStrandedHeldMessages(String applicationId, Process definition,
+                                            Map<String, ResolvedTopic> topics, boolean priorState,
                                             Map<byte[], byte[]> orderingState) {
         if (!priorState) {
             return;
         }
         Map<String, UUID> resolvedIds = new HashMap<>();
-        definition.receivedTopics().forEach(topic -> resolvedIds.put(topic, topics.get(topic).topicId()));
+        ProcessTopology.inputTopics(definition).forEach(topic -> resolvedIds.put(topic, topics.get(topic).topicId()));
         List<String> identityChanged = io.github.tobyjamesclements.parsley.core.OrderingStateInspector
                 .identityChangedTopics(orderingState, resolvedIds);
         if (!identityChanged.isEmpty()) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED,
+            throw new FailClosedException(
+                    FailClosedException.Reason.CHANNEL_IDENTITY_CHANGED,
                     applicationId + ": topics " + identityChanged + " now resolve to different identities than"
                             + " this process's state was built against; their read positions for those names cannot"
                             + " be trusted. Reset the process's state and group offsets deliberately to proceed.");
         }
         java.util.Set<io.github.tobyjamesclements.parsley.core.ChannelId> declared = new java.util.TreeSet<>();
-        for (String topic : definition.receivedTopics()) {
-            TopicInfo info = topics.get(topic);
+        for (String topic : ProcessTopology.inputTopics(definition)) {
+            ResolvedTopic info = topics.get(topic);
             for (int partition = 0; partition < info.partitions(); partition++) {
                 declared.add(new io.github.tobyjamesclements.parsley.core.ChannelId(info.topicId(), partition));
             }
@@ -896,8 +890,8 @@ public final class ParsleyRuntime implements AutoCloseable {
                         .heldChannels(orderingState));
         stranded.removeAll(declared);
         if (!stranded.isEmpty()) {
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES,
+            throw new FailClosedException(
+                    FailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES,
                     applicationId + ": received messages remain undelivered on " + stranded
                             + ", which the new declaration no longer receives");
         }
@@ -926,8 +920,8 @@ public final class ParsleyRuntime implements AutoCloseable {
      *
      * @return per received partition, the position the host feeds first
      */
-    private Map<TopicPartition, Long> commitInitialPositions(String applicationId, ProcessDefinition definition,
-                                                            Map<String, TopicInfo> topics, boolean priorState,
+    private Map<TopicPartition, Long> commitInitialPositions(String applicationId, Process definition,
+                                                            Map<String, ResolvedTopic> topics, boolean priorState,
                                                             ChangelogView orderingView,
                                                             Map<String, Object> clientProps) {
         java.util.Set<TopicPartition> received = receivedPartitions(definition, topics);
@@ -943,7 +937,7 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
 
         try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, applicationId)) {
-            committer.join(definition.receivedTopics(), streamsSessionTimeout(clientProps).multipliedBy(2));
+            committer.join(Set.copyOf(ProcessTopology.inputTopics(definition)), streamsSessionTimeout(clientProps).multipliedBy(2));
             Map<TopicPartition, OffsetAndMetadata> committed = committer.committed(received);
             // Re-checked against the member's fetch: the admin listing above silently
             // omits any partition whose offset has a pending transactional commit
@@ -988,7 +982,7 @@ public final class ParsleyRuntime implements AutoCloseable {
             committer.commit(toCommit);
             LOG.info("{}: committed initial positions for {}", applicationId, toCommit.keySet());
             return startPositions(received, committed, toCommit);
-        } catch (ParsleyFailClosedException | RetryableStartException e) {
+        } catch (FailClosedException | RetryableStartException e) {
             // The retryable transient keeps its own diagnosis: wrapping it in the terminal
             // "could not be established" shape would send the operator to a remedy the
             // next attempt makes destructive.
@@ -1101,8 +1095,8 @@ public final class ParsleyRuntime implements AutoCloseable {
             String provenance = offset.metadata().isEmpty()
                     ? "committed outside parsley (external tooling, or pre-seeded offsets)"
                     : "stamped by a previous Kafka Streams execution";
-            throw new ParsleyFailClosedException(
-                    ParsleyFailClosedException.Reason.ORDERING_STATE_LOST,
+            throw new FailClosedException(
+                    FailClosedException.Reason.ORDERING_STATE_LOST,
                     applicationId + ": committed read positions exist for " + entry.getKey() + ", "
                             + provenance + ", but " + shape
                             + ". If a prior execution ran, the ordering state of its most recent"
@@ -1200,10 +1194,10 @@ public final class ParsleyRuntime implements AutoCloseable {
         return coversSome && !listed.containsAll(received);
     }
 
-    private static java.util.Set<TopicPartition> receivedPartitions(ProcessDefinition definition,
-                                                                    Map<String, TopicInfo> topics) {
+    private static java.util.Set<TopicPartition> receivedPartitions(Process definition,
+                                                                    Map<String, ResolvedTopic> topics) {
         java.util.Set<TopicPartition> all = new java.util.HashSet<>();
-        for (String topic : definition.receivedTopics()) {
+        for (String topic : ProcessTopology.inputTopics(definition)) {
             for (int partition = 0; partition < topics.get(topic).partitions(); partition++) {
                 all.add(new TopicPartition(topic, partition));
             }
@@ -1220,7 +1214,7 @@ public final class ParsleyRuntime implements AutoCloseable {
 
     private static Properties streamsProperties(ParsleyConfig config, String applicationId) {
         Properties props = new Properties();
-        props.putAll(config.extraProperties());
+        props.putAll(config.streamsProperties());
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, applicationId);
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers());
 

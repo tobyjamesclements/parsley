@@ -51,7 +51,7 @@ class DeclaredTopicResolutionTest {
     void aLaggingUnknownAnswerIsRetriedAndTheTopicResolvesOnceDescribed() {
         AtomicInteger describes = new AtomicInteger();
         TopicDescription real = description("orders");
-        Map<String, TopicInfo> topics = ParsleyRuntime.resolveTopicsCorroborated(() -> {
+        Map<String, ResolvedTopic> topics = StreamsRuntime.resolveTopicsCorroborated(() -> {
             if (describes.incrementAndGet() < 3) {
                 throw unknown("orders");
             }
@@ -71,7 +71,7 @@ class DeclaredTopicResolutionTest {
     void threeConsistentUnknownAnswersRefuseNamingTheMissingTopic() {
         AtomicInteger describes = new AtomicInteger();
         IllegalStateException refusal = assertThrows(IllegalStateException.class,
-                () -> ParsleyRuntime.resolveTopicsCorroborated(() -> {
+                () -> StreamsRuntime.resolveTopicsCorroborated(() -> {
                     describes.incrementAndGet();
                     throw unknown("orders");
                 }, NO_BACKOFF),
@@ -93,7 +93,7 @@ class DeclaredTopicResolutionTest {
         AtomicInteger describes = new AtomicInteger();
         RuntimeException broken = new RuntimeException("broker unreachable");
         IllegalStateException refusal = assertThrows(IllegalStateException.class,
-                () -> ParsleyRuntime.resolveTopicsCorroborated(() -> {
+                () -> StreamsRuntime.resolveTopicsCorroborated(() -> {
                     describes.incrementAndGet();
                     throw broken;
                 }, NO_BACKOFF),
@@ -113,8 +113,8 @@ class DeclaredTopicResolutionTest {
         TopicDescription zeroId = new TopicDescription("orders", false,
                 List.of(new TopicPartitionInfo(0, node, List.of(node), List.of(node))), Set.of(), Uuid.ZERO_UUID);
         AtomicInteger describes = new AtomicInteger();
-        assertThrows(io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.class,
-                () -> ParsleyRuntime.resolveTopicsCorroborated(() -> {
+        assertThrows(io.github.tobyjamesclements.parsley.core.FailClosedException.class,
+                () -> StreamsRuntime.resolveTopicsCorroborated(() -> {
                     describes.incrementAndGet();
                     return Map.of("orders", zeroId);
                 }, NO_BACKOFF),

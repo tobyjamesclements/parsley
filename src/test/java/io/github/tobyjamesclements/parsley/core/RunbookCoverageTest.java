@@ -6,7 +6,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.Reason;
+import io.github.tobyjamesclements.parsley.core.FailClosedException.Reason;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 

@@ -17,8 +17,8 @@ class NullComponentRefusalTest {
     /** A null header key is refused with the taxonomy's exception, not an NPE. */
     @Test
     void nullHeaderKeyIsRefusedAsAnIllegalArgument() {
-        assertThrows(IllegalArgumentException.class, () -> new HeaderKV(null, new byte[0]),
-                "one rule for null components: HeaderKV must refuse like Causes and the api/"
+        assertThrows(IllegalArgumentException.class, () -> new Header(null, new byte[0]),
+                "one rule for null components: Header must refuse like Causes and the api/"
                         + " surface do, not with its own NullPointerException");
     }
 

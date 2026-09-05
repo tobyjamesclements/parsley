@@ -23,7 +23,7 @@ import java.util.UUID;
 
 import io.github.tobyjamesclements.parsley.api.Channel;
 import io.github.tobyjamesclements.parsley.api.Effects;
-import io.github.tobyjamesclements.parsley.api.ProcessDefinition;
+import io.github.tobyjamesclements.parsley.api.Process;
 import io.github.tobyjamesclements.parsley.core.CausesCodec;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -103,16 +103,16 @@ class FramedPayloadWireFormatTest {
         Serde<Order> framed = new FramedSerde();
         Channel<String, Order> in = Channel.of("framed-in", Serdes.String(), framed);
         Channel<String, Order> out = Channel.of("framed-out", Serdes.String(), framed);
-        ProcessDefinition definition = ProcessDefinition.named("framed")
+        Process definition = Process.named("framed")
                 .receives(in, (delivery, state) -> Effects.builder()
                         .send(out, delivery.key(), new Order(delivery.value().item(), delivery.value().qty() * 2))
                         .build())
                 .sends(out)
                 .build();
 
-        Map<String, TopicInfo> topics = Map.of(
-                "framed-in", new TopicInfo(new UUID(7, 1), 1),
-                "framed-out", new TopicInfo(new UUID(7, 2), 1));
+        Map<String, ResolvedTopic> topics = Map.of(
+                "framed-in", new ResolvedTopic(new UUID(7, 1), 1),
+                "framed-out", new ResolvedTopic(new UUID(7, 2), 1));
         Properties props = new Properties();
         props.put(StreamsConfig.APPLICATION_ID_CONFIG, "framed-test");
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "unused:9092");

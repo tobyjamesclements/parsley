@@ -3,11 +3,10 @@ package io.github.tobyjamesclements.parsley.api;
 import org.apache.kafka.common.serialization.Serdes;
 import org.junit.jupiter.api.Test;
 
-import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 
-import io.github.tobyjamesclements.parsley.core.HeaderKV;
+import io.github.tobyjamesclements.parsley.core.Header;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -65,19 +64,19 @@ class ApiValidationTest {
     @Test
     void reservedHeadersAreUnconstructible() {
         Channel<String, String> channel = channel("t");
-        io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException e =
-                assertThrows(io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.class,
+        io.github.tobyjamesclements.parsley.core.FailClosedException e =
+                assertThrows(io.github.tobyjamesclements.parsley.core.FailClosedException.class,
                         () -> Effects.builder().send(channel, "k", "v",
-                                List.of(new HeaderKV("parsley.causes", new byte[0]))).build(),
+                                List.of(new Header("parsley.causes", new byte[0]))).build(),
                         "application headers may never impersonate causal metadata (SPEC Structural 5)");
-        assertEquals(io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.Reason.RESERVED_HEADER_USED, e.reason(),
+        assertEquals(io.github.tobyjamesclements.parsley.core.FailClosedException.Reason.RESERVED_HEADER_USED, e.reason(),
                 "the refusal names its condition (SPEC Operational 6) and fails the step through the seam");
     }
 
     /** A topic colliding with a composed changelog name is refused before any broker contact. */
     @Test
     void topicCollidingWithAComposedChangelogNameIsRefusedBeforeAnyBrokerContact() {
-        ProcessDefinition p = ProcessDefinition.named("p")
+        Process p = Process.named("p")
                 .receives(channel("x-p-s-changelog"), (d, s) -> Effects.none())
                 .stores(store("s"))
                 .build();
@@ -90,11 +89,11 @@ class ApiValidationTest {
     /** Distinct processes composing one changelog topic name are refused. */
     @Test
     void composedChangelogNameCollisionAcrossProcessesIsRefused() {
-        ProcessDefinition p1 = ProcessDefinition.named("orders")
+        Process p1 = Process.named("orders")
                 .receives(channel("in1"), (d, s) -> Effects.none())
                 .stores(store("audit-log"))
                 .build();
-        ProcessDefinition p2 = ProcessDefinition.named("orders-audit")
+        Process p2 = Process.named("orders-audit")
                 .receives(channel("in2"), (d, s) -> Effects.none())
                 .stores(store("log"))
                 .build();
@@ -119,10 +118,10 @@ class ApiValidationTest {
      */
     @Test
     void duplicateProcessNamesAreRefusedBeforeAnyBrokerContact() {
-        ProcessDefinition p1 = ProcessDefinition.named("orders")
+        Process p1 = Process.named("orders")
                 .receives(channel("in1"), (d, s) -> Effects.none())
                 .build();
-        ProcessDefinition p2 = ProcessDefinition.named("orders")
+        Process p2 = Process.named("orders")
                 .receives(channel("in2"), (d, s) -> Effects.none())
                 .build();
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
@@ -206,7 +205,7 @@ class ApiValidationTest {
     /** Processes must receive something. */
     @Test
     void processesMustReceiveSomething() {
-        assertThrows(IllegalArgumentException.class, () -> ProcessDefinition.named("p").build(),
+        assertThrows(IllegalArgumentException.class, () -> Process.named("p").build(),
                 "a process with no received channels can never deliver");
     }
 
@@ -231,78 +230,17 @@ class ApiValidationTest {
                         + " every retained message");
     }
 
-    /** Channel topics with illegal characters are refused at declaration. */
-    @Test
-    void channelTopicsWithIllegalCharactersAreRefused() {
-        assertThrows(IllegalArgumentException.class, () -> channel("has space"),
-                "an invalid topic name should fail at declaration, not at topic resolution");
-    }
-
-    /** Channel topics beyond Kafka's length limit are refused at declaration. */
-    @Test
-    void channelTopicsBeyondKafkasLengthLimitAreRefused() {
-        assertThrows(IllegalArgumentException.class, () -> channel("a".repeat(250)),
-                "a topic name beyond Kafka's 249-character limit is unusable");
-    }
-
-    /** A channel topic at exactly the length limit is accepted. */
-    @Test
-    void channelTopicAtExactlyTheLengthLimitIsAccepted() {
-        assertEquals(249, channel("a".repeat(249)).topic().length(),
-                "the bound is Kafka's own 249, refusing at 250 and no earlier; this pins the"
-                        + " declaration-site limit the composed-changelog refusal mirrors");
-    }
-
-    /** Store names with illegal characters are refused at declaration. */
-    @Test
-    void storeNamesWithIllegalCharactersAreRefused() {
-        assertThrows(IllegalArgumentException.class, () -> store("has space"),
-                "a store name becomes its changelog topic name and must satisfy the same rules");
-    }
-
-    /** Dot and dot-dot store names are refused at declaration. */
-    @Test
-    void dotAndDotDotStoreNamesAreRefused() {
-        assertThrows(IllegalArgumentException.class, () -> store(".."),
-                "'.' and '..' would resolve the store's local directory outside its task directory");
-        assertThrows(IllegalArgumentException.class, () -> store("."),
-                "'.' and '..' would resolve the store's local directory outside its task directory");
-    }
-
-    /** The application id prefix is validated as a topic name component. */
-    @Test
-    void applicationIdPrefixIsValidatedAsATopicNameComponent() {
-        assertThrows(IllegalArgumentException.class,
-                () -> ParsleyConfig.builder("broker:9092", "has space"),
-                "the prefix becomes part of every changelog topic name and must satisfy the same"
-                        + " rules, matching the validation process names already get");
-        assertThrows(IllegalArgumentException.class,
-                () -> ParsleyConfig.builder("broker:9092", "a".repeat(250)),
-                "the same 249-character bound applies to every topic-name component");
-    }
-
-    /** Process names are validated as topic name components. */
-    @Test
-    void processNamesAreValidatedAsTopicNameComponents() {
-        assertThrows(IllegalArgumentException.class, () -> ProcessDefinition.named("has space"),
-                "the process name becomes part of every changelog topic name");
-        assertThrows(IllegalArgumentException.class, () -> ProcessDefinition.named("a".repeat(250)),
-                "the same 249-character bound applies to every topic-name component");
-        assertThrows(IllegalArgumentException.class, () -> ProcessDefinition.named("."),
-                "one rule for every component: '.' is refused everywhere the rule applies");
-    }
-
     /** A send topic declared through two different channel instances is refused. */
     @Test
     void sendTopicDeclaredThroughTwoInstancesIsRefused() {
         Channel<String, String> declared = channel("out");
-        ProcessDefinition.Builder builder = ProcessDefinition.named("p")
+        Process.Builder builder = Process.named("p")
                 .receives(channel("in"), (d, s) -> Effects.none())
                 .sends(declared);
         assertThrows(IllegalArgumentException.class, () -> builder.sends(channel("out")),
                 "two instances for one topic leave it ambiguous which declared serdes the"
-                        + " topic's emissions carry");
-        assertEquals(java.util.Set.of("out"), builder.sends(declared).build().sendTopics(),
+                        + " topic's sends carry");
+        assertEquals(List.of(declared), builder.sends(declared).build().outputs(),
                 "a repeat of the declared instance itself stays idempotent");
     }
 
@@ -310,27 +248,14 @@ class ApiValidationTest {
     @Test
     void refusedSendsCallCommitsNothing() {
         Channel<String, String> other = channel("other-out");
-        ProcessDefinition.Builder builder = ProcessDefinition.named("p")
+        Process.Builder builder = Process.named("p")
                 .receives(channel("in"), (d, s) -> Effects.none())
                 .sends(channel("out"));
         assertThrows(IllegalArgumentException.class, () -> builder.sends(other, channel("out")),
                 "the look-alike of the declared channel is refused");
-        assertEquals(java.util.Set.of("out"), builder.build().sendTopics(),
+        assertEquals(List.of("out"), builder.build().outputs().stream().map(Channel::topic).toList(),
                 "sends(...) is all-or-nothing: a refusal mid-list must not leave earlier"
                         + " arguments committed");
-    }
-
-    /** Overlong changelog names are refused before any broker contact. */
-    @Test
-    void overlongChangelogNamesAreRefusedBeforeAnyBrokerContact() {
-        ProcessDefinition p = ProcessDefinition.named("p")
-                .receives(channel("t"), (d, s) -> Effects.none())
-                .build();
-        assertThrows(IllegalArgumentException.class,
-                () -> Parsley.start(ParsleyConfig.builder("unreachable:1", "a".repeat(240)).build(), p),
-                "each component passes its own check, but the composed changelog topic name"
-                        + " exceeds Kafka's 249-character limit and would fail inside Streams"
-                        + " internal-topic creation");
     }
 
     /** A null send channel is refused at construction. */
@@ -354,7 +279,7 @@ class ApiValidationTest {
     void nullElementAmongEffectHeadersIsRefusedWithAMessage() {
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> Effects.builder().send(channel("t"), "k", "v",
-                        Arrays.asList(new HeaderKV("h", new byte[0]), null)),
+                        Arrays.asList(new Header("h", new byte[0]), null)),
                 "the javadoc promises IllegalArgumentException; List.copyOf would throw a bare"
                         + " NPE before the reserved-prefix loop ran");
         assertTrue(e.getMessage().contains("null element"), "the refusal names the mistake: " + e.getMessage());
@@ -394,10 +319,10 @@ class ApiValidationTest {
     }
 
     /**
-     * A null value on put is refused pointing at delete(): {@code Effects.StateWrite}
+     * A null value on put is refused pointing at delete(): {@code Effects.Write}
      * accepts a null value deliberately, because null <em>is</em> delete()'s
      * representation and tombstones pass through the seam unencoded (D29), so without
-     * this guard {@code put(store, key, null)} constructs a StateWrite byte-identical
+     * this guard {@code put(store, key, null)} constructs a Write byte-identical
      * to {@code delete(store, key)} — silently removing the entry the caller meant to
      * write instead of refusing the mistake (D73's declaration-site rule).
      */
@@ -415,7 +340,7 @@ class ApiValidationTest {
     @Test
     void nullReceivedChannelIsRefusedAtDeclaration() {
         assertThrows(IllegalArgumentException.class,
-                () -> ProcessDefinition.named("p").receives(null, (d, s) -> Effects.none()),
+                () -> Process.named("p").receives(null, (d, s) -> Effects.none()),
                 "a null channel must fail at the declaration site, not as an NPE inside the builder");
     }
 
@@ -423,7 +348,7 @@ class ApiValidationTest {
     @Test
     void nullHandlerIsRefusedAtDeclaration() {
         assertThrows(IllegalArgumentException.class,
-                () -> ProcessDefinition.named("p").receives(channel("t"), null),
+                () -> Process.named("p").receives(channel("t"), null),
                 "a null handler would otherwise surface as an NPE on the stream thread at first"
                         + " delivery — the exact failure mode D73 eliminated for serdes");
     }
@@ -437,7 +362,7 @@ class ApiValidationTest {
      */
     @Test
     void secondReceivesForOneTopicIsRefused() {
-        ProcessDefinition.Builder builder = ProcessDefinition.named("shipper")
+        Process.Builder builder = Process.named("shipper")
                 .receives(channel("orders"), (d, s) -> Effects.none());
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> builder.receives(channel("orders"), (d, s) -> Effects.none()),
@@ -458,7 +383,7 @@ class ApiValidationTest {
      */
     @Test
     void duplicateStoreDeclarationIsRefused() {
-        ProcessDefinition.Builder builder = ProcessDefinition.named("shipper")
+        Process.Builder builder = Process.named("shipper")
                 .receives(channel("orders"), (d, s) -> Effects.none())
                 .stores(store("inventory"));
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
@@ -472,7 +397,7 @@ class ApiValidationTest {
     /** A null element among sends varargs is refused. */
     @Test
     void nullElementAmongSendsVarargsIsRefused() {
-        ProcessDefinition.Builder builder = ProcessDefinition.named("p")
+        Process.Builder builder = Process.named("p")
                 .receives(channel("in"), (d, s) -> Effects.none());
         assertThrows(IllegalArgumentException.class,
                 () -> builder.sends(new Channel<?, ?>[] {null}),
@@ -482,7 +407,7 @@ class ApiValidationTest {
     /** A null element among stores varargs is refused. */
     @Test
     void nullElementAmongStoresVarargsIsRefused() {
-        ProcessDefinition.Builder builder = ProcessDefinition.named("p")
+        Process.Builder builder = Process.named("p")
                 .receives(channel("in"), (d, s) -> Effects.none());
         assertThrows(IllegalArgumentException.class,
                 () -> builder.stores(new Store<?, ?>[] {null}),
@@ -498,7 +423,7 @@ class ApiValidationTest {
      */
     @Test
     void nullSendsChannelArrayIsRefused() {
-        ProcessDefinition.Builder builder = ProcessDefinition.named("p")
+        Process.Builder builder = Process.named("p")
                 .receives(channel("in"), (d, s) -> Effects.none());
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> builder.sends((Channel<?, ?>[]) null),
@@ -515,7 +440,7 @@ class ApiValidationTest {
      */
     @Test
     void nullStoresArrayIsRefused() {
-        ProcessDefinition.Builder builder = ProcessDefinition.named("p")
+        Process.Builder builder = Process.named("p")
                 .receives(channel("in"), (d, s) -> Effects.none());
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
                 () -> builder.stores((Store<?, ?>[]) null),
@@ -564,8 +489,8 @@ class ApiValidationTest {
     /**
      * A zero or negative metadata budget is refused naming the parameter: the budget
      * bounds the causal metadata every message may carry (D52, enforced on receipt and
-     * on emission), so a non-positive bound would pass build() only to refuse the very
-     * first emission's metadata with a growth diagnosis when the actual mistake is a
+     * on send), so a non-positive bound would pass build() only to refuse the very
+     * first send's metadata with a growth diagnosis when the actual mistake is a
      * declaration typo.
      */
     @Test
@@ -580,99 +505,52 @@ class ApiValidationTest {
         }
     }
 
-    /** A null status interval is refused. */
+    /** A negative or null send timestamp is refused at construction. */
     @Test
-    void nullStatusIntervalIsRefused() {
-        assertThrows(IllegalArgumentException.class,
-                () -> ParsleyConfig.builder("broker:9092", "p").statusInterval(null),
-                "statusInterval(null) would otherwise NPE on isNegative() inside the builder");
-    }
-
-    /**
-     * A zero or negative status interval takes the positivity refusal, not the sibling
-     * sub-millisecond diagnosis: {@code statusInterval} runs two checks in sequence
-     * (non-positive, then sub-millisecond — D87), and zero and negative durations both
-     * satisfy {@code toMillis() < 1}, so deleting the positivity check would silently
-     * reroute them to "cannot be scheduled" — a diagnosis suggesting a coarser unit
-     * when the actual mistake is a direction-of-time error (a zero interval would spin
-     * the stream thread on status snapshots; the cadence is D115's).
-     */
-    @Test
-    void nonPositiveStatusIntervalIsRefused() {
-        for (Duration bad : new Duration[] {Duration.ZERO, Duration.ofSeconds(-1)}) {
-            IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                    () -> ParsleyConfig.builder("broker:9092", "p").statusInterval(bad),
-                    "statusInterval " + bad + " would spin or never publish a status");
-            assertTrue(e.getMessage().contains("statusInterval must be positive"),
-                    "zero and negative take the positivity refusal, not the sub-millisecond"
-                            + " \"cannot be scheduled\" diagnosis their toMillis() also"
-                            + " satisfies: " + e.getMessage());
-        }
-    }
-
-    /**
-     * A positive but sub-millisecond status interval is refused at declaration: Kafka
-     * Streams punctuation has millisecond granularity, so the value would pass build()
-     * only to crash the stream thread at task initialisation, unattributed, after the
-     * bootstrap had already committed initial positions (D87).
-     */
-    @Test
-    void subMillisecondStatusIntervalIsRefusedAtDeclaration() {
-        assertThrows(IllegalArgumentException.class,
-                () -> ParsleyConfig.builder("broker:9092", "p").statusInterval(Duration.ofNanos(500_000)),
-                "a sub-millisecond interval cannot be scheduled and must fail here, not on the stream thread");
-    }
-
-    /** A negative or null emission timestamp is refused at construction. */
-    @Test
-    void negativeOrNullEmissionTimestampsAreRefusedAtConstruction() {
+    void negativeOrNullSendTimestampsAreRefusedAtConstruction() {
         Channel<String, String> out = channel("out");
         assertThrows(IllegalArgumentException.class,
                 () -> Effects.builder().send(out, "k", "v", -1L),
                 "a negative timestamp cannot be a record timestamp");
         assertThrows(IllegalArgumentException.class,
-                () -> new Effects.Emission<>(out, "k", "v", java.util.List.of(), null),
+                () -> new Effects.Send<>(out, "k", "v", java.util.List.of(), null),
                 "absence is expressed through the empty OptionalLong, never through null");
         assertEquals(java.util.OptionalLong.empty(),
-                Effects.builder().send(out, "k", "v").build().emissions().get(0).timestamp(),
-                "an emission without a timestamp inherits the delivered one");
+                Effects.builder().send(out, "k", "v").build().sends().get(0).timestamp(),
+                "a send without a timestamp inherits the delivered one");
         assertEquals(java.util.OptionalLong.of(7L),
-                Effects.builder().send(out, "k", "v", 7L).build().emissions().get(0).timestamp());
+                Effects.builder().send(out, "k", "v", 7L).build().sends().get(0).timestamp());
     }
 
     /** Null status components are refused at construction. */
     @Test
     void nullStatusComponentsAreRefusedAtConstruction() {
         assertThrows(IllegalArgumentException.class,
-                () -> new ProcessStatus(null, ProcessStatus.State.RUNNING,
+                () -> new ProcessStatus(null, ProcessStatus.Lifecycle.RUNNING,
                         java.util.Optional.empty(), java.util.Optional.empty()),
                 "absence is expressed through the empty Optionals, never through null");
-        assertThrows(IllegalArgumentException.class,
-                () -> new ProcessStatus("p", ProcessStatus.State.RUNNING,
-                        java.util.Optional.empty(), java.util.Optional.empty(), null),
-                "no task detail is the empty list, never null");
-        assertEquals(java.util.List.of(),
-                new ProcessStatus("p", ProcessStatus.State.RUNNING,
-                        java.util.Optional.empty(), java.util.Optional.empty()).tasks(),
-                "the four-component form reports no task detail");
-        assertThrows(IllegalArgumentException.class,
-                () -> new TaskStatus(0, 0, 0, 0, null),
-                "a task status refuses null held channels");
-        assertThrows(IllegalArgumentException.class,
-                () -> new TaskStatus(0, 0, -1, 0, java.util.List.of()),
-                "a task status refuses a negative count");
-        assertThrows(IllegalArgumentException.class,
-                () -> new TaskStatus.Blocker(null, 0, 1L, java.util.OptionalLong.empty()),
-                "a blocker refuses a null topic");
-        assertThrows(IllegalArgumentException.class,
-                () -> new TaskStatus.HeldChannel("t", 0, 1, 0L, null),
-                "a held channel refuses null blockers");
+    }
+
+    /**
+     * Blank names are refused at declaration. Kafka's own topic-name rule is left to Kafka:
+     * a malformed declared topic cannot exist, so resolution refuses the start, and a
+     * malformed store, process or prefix fails changelog creation inside Streams.
+     */
+    @Test
+    void blankNamesAreRefusedAtDeclaration() {
+        assertThrows(IllegalArgumentException.class, () -> channel(" "), "a blank topic names nothing");
+        assertThrows(IllegalArgumentException.class, () -> channel(null), "a null topic names nothing");
+        assertThrows(IllegalArgumentException.class, () -> store(" "), "a blank store name names nothing");
+        assertThrows(IllegalArgumentException.class, () -> Process.named(" "),
+                "a blank process name would compose an application id with nothing to identify it");
+        assertThrows(IllegalArgumentException.class, () -> ParsleyConfig.builder("broker:9092", " "),
+                "a blank prefix would compose an application id with nothing to identify it");
     }
 
     /** A null config is refused by start with a message. */
     @Test
     void nullConfigIsRefusedByStart() {
-        ProcessDefinition p = ProcessDefinition.named("p")
+        Process p = Process.named("p")
                 .receives(channel("t"), (d, s) -> Effects.none())
                 .build();
         assertThrows(IllegalArgumentException.class, () -> Parsley.start(null, p),
@@ -685,7 +563,7 @@ class ApiValidationTest {
     void nullProcessArrayIsRefusedByStart() {
         assertThrows(IllegalArgumentException.class,
                 () -> Parsley.start(ParsleyConfig.builder("broker:9092", "p").build(),
-                        (ProcessDefinition[]) null),
+                        (Process[]) null),
                 "a null varargs array must be refused per the taxonomy, not surface as"
                         + " List.of's bare NPE");
     }
@@ -693,7 +571,7 @@ class ApiValidationTest {
     /** A null process element is refused by start with a message. */
     @Test
     void nullProcessElementIsRefusedByStart() {
-        ProcessDefinition p = ProcessDefinition.named("p")
+        Process p = Process.named("p")
                 .receives(channel("t"), (d, s) -> Effects.none())
                 .build();
         assertThrows(IllegalArgumentException.class,
@@ -705,7 +583,7 @@ class ApiValidationTest {
     /** Process names may not contain the reserved namespace. */
     @Test
     void processNamesMayNotContainTheReservedNamespace() {
-        assertThrows(IllegalArgumentException.class, () -> ProcessDefinition.named("x__parsley.y"),
+        assertThrows(IllegalArgumentException.class, () -> Process.named("x__parsley.y"),
                 "a process name containing __parsley. mints application ids, consumer groups"
                         + " and changelog topics inside parsley's own namespace — the namespace"
                         + " rule must not depend on which component carries the occurrence");
@@ -720,28 +598,10 @@ class ApiValidationTest {
                         + " inside parsley's own namespace");
     }
 
-    /** KafkaNames agrees with kafka-clients' own rule. */
-    @Test
-    void kafkaNamesAgreesWithKafkaClientsOwnRule() {
-        List<String> samples = new java.util.ArrayList<>(List.of(
-                "", "a", "a.b", "a_b", "a-b", "A9", ".", "..", "...", "a".repeat(249), "a".repeat(250),
-                "has space", "sl/ash", "col:on", "ast*erisk", "unié", "trailing.", "-lead"));
-        for (char c = 0; c < 128; c++) {
-            samples.add("a" + c + "b");
-        }
-        for (String sample : samples) {
-            assertEquals(org.apache.kafka.common.internals.Topic.isValid(sample),
-                    KafkaNames.isValidTopicName(sample),
-                    "KafkaNames must agree with kafka-clients' own Topic.isValid for '" + sample
-                            + "': parsley's spelling of the rule drifting from what the broker"
-                            + " accepts would recreate the late in-Streams failure D73 closed");
-        }
-    }
-
     /** Declaration order is preserved across the definition. */
     @Test
     void declarationOrderIsPreservedAcrossTheDefinition() {
-        ProcessDefinition.Builder builder = ProcessDefinition.named("p");
+        Process.Builder builder = Process.named("p");
         List<String> received = new java.util.ArrayList<>();
         List<String> sent = new java.util.ArrayList<>();
         List<String> stored = new java.util.ArrayList<>();
@@ -756,12 +616,12 @@ class ApiValidationTest {
             sent.add(out);
             stored.add(store);
         }
-        ProcessDefinition definition = builder.build();
-        assertEquals(received, List.copyOf(definition.receivedTopics()),
-                "receivedTopics() feeds the topology's sources array; a per-JVM iteration order"
+        Process definition = builder.build();
+        assertEquals(received, definition.inputs().stream().map(input -> input.channel().topic()).toList(),
+                "inputs() feeds the topology's sources array; a per-JVM iteration order"
                         + " makes the generated topology nondeterministic across restarts");
-        assertEquals(sent, List.copyOf(definition.sendTopics()),
-                "sendTopics() feeds the topology's sinks in declaration order");
+        assertEquals(sent, definition.outputs().stream().map(Channel::topic).toList(),
+                "outputs() feeds the topology's sinks in declaration order");
         assertEquals(stored, definition.stores().stream().map(Store::name).toList(),
                 "stores() feeds addStateStore ordering and composed changelog names in"
                         + " declaration order");
