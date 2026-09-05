@@ -14,9 +14,6 @@ import java.util.UUID;
  */
 interface TopicIdentitySource {
 
-    /** A source that reports every topic alive, for topologies driven without a broker. */
-    TopicIdentitySource ALL_ALIVE = topicIds -> TopicIdentityVerdicts.NONE;
-
     /**
      * Classifies topic ids.
      *

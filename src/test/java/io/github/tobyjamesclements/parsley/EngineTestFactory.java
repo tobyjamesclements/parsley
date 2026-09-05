@@ -7,8 +7,8 @@ import java.util.Set;
 /**
  * Builds engines and messages for the core tests.
  */
-public final class EngineTestFactory {
-    public enum SabotageMode {
+final class EngineTestFactory {
+    enum SabotageMode {
         NONE,
         IGNORE_CAUSES,
         NO_FIFO,
@@ -26,7 +26,7 @@ public final class EngineTestFactory {
     private EngineTestFactory() {
     }
 
-    public static ProcessEngine create(
+    static ProcessEngine create(
             String processName, Map<ChannelId, String> receivedChannels, OrderingStore store, SabotageMode mode) {
         return create(processName, receivedChannels, store, mode, Map.of());
     }
@@ -36,7 +36,7 @@ public final class EngineTestFactory {
      * Host obligation 2): the simulated host passes its committed read positions here the
      * way the Kafka host passes the bootstrap's.
      */
-    public static ProcessEngine create(
+    static ProcessEngine create(
             String processName, Map<ChannelId, String> receivedChannels, OrderingStore store, SabotageMode mode,
             Map<ChannelId, Long> startPositions) {
         Sabotage sabotage = mode == SabotageMode.NONE
@@ -50,7 +50,7 @@ public final class EngineTestFactory {
      * A received message with no causal stamp: the uid doubles as key and value, and the
      * position doubles as the offset.
      */
-    public static ReceivedMessage plain(ChannelId channel, long position, String uid) {
+    static ReceivedMessage plain(ChannelId channel, long position, String uid) {
         return new ReceivedMessage(channel, position, position, uid.getBytes(), uid.getBytes(), List.of());
     }
 }

@@ -114,8 +114,8 @@ class FramedPayloadWireFormatTest {
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "unused:9092");
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toString());
         driver = new TopologyTestDriver(ProcessTopology.build(
-                definition, topics, TopicIdentitySource.ALL_ALIVE,
-                Duration.ofSeconds(1)), props);
+                definition, topics, new ScriptedTopicIdentity(), Map.of(), Duration.ofSeconds(1),
+                ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES), props);
 
         byte[] valueIn = framed.serializer().serialize("framed-in", new Order("widget", 3));
         assertEquals(0, valueIn[0], "the framing must begin with a zero magic byte");

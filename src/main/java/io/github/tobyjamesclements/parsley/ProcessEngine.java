@@ -348,7 +348,7 @@ final class ProcessEngine {
      *
      * @return how far each channel has settled, for {@link Deliverability#decide}
      */
-    public Deliverability.SettledView settledView() {
+    private Deliverability.SettledView settledView() {
         return channel -> {
             ArrayDeque<Hold> channelHeld = held.get(channel);
             if (channelHeld != null && !channelHeld.isEmpty()) {

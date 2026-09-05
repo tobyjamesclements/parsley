@@ -101,21 +101,6 @@ final class ProcessTopology {
     }
 
     /**
-     * Builds a topology with the default metadata budget and no start positions.
-     *
-     * @param definition          the process to build
-     * @param topics              resolved identity and width for every topic it uses
-     * @param identitySource      where topic identity is checked at task initialisation
-     * @param punctuationInterval how often each task runs its punctuation
-     * @return the topology
-     */
-    static Topology build(Process definition, Map<String, ResolvedTopic> topics,
-                          TopicIdentitySource identitySource, Duration punctuationInterval) {
-        return build(definition, topics, identitySource, Map.of(), punctuationInterval,
-                io.github.tobyjamesclements.parsley.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES);
-    }
-
-    /**
      * Builds a topology.
      *
      * @param definition          the process to build

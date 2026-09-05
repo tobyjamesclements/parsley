@@ -51,7 +51,12 @@ import java.util.concurrent.TimeUnit;
 class AdminTopicIdentitySource implements TopicIdentitySource {
     private static final Logger LOG = LoggerFactory.getLogger(AdminTopicIdentitySource.class);
     private static final long TIMEOUT_SECONDS = 10;
-    /** How many consistent by-name answers confirm a verdict (D113's standard). */
+    /**
+     * The evidence standard for concluding a topic gone (D84, D113): this many consistent
+     * unknown-topic answers, each {@link StreamsRuntime#CORROBORATION_BACKOFF} after the
+     * last. One spelling for the declared topics, the ordering changelog and the identity
+     * check at task initialisation.
+     */
     static final int CORROBORATING_ANSWERS = 3;
 
     enum NameVerdict {

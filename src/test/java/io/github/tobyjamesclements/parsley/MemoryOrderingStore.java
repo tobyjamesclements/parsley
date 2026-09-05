@@ -9,7 +9,7 @@ import java.util.TreeMap;
  * An {@link io.github.tobyjamesclements.parsley.OrderingStore} in memory, with commit
  * and rollback, standing in for a transactional store.
  */
-public final class MemoryOrderingStore implements OrderingStore {
+final class MemoryOrderingStore implements OrderingStore {
     private static final java.util.Comparator<byte[]> UNSIGNED = Arrays::compareUnsigned;
 
     private TreeMap<byte[], byte[]> committed = new TreeMap<>(UNSIGNED);
@@ -42,11 +42,11 @@ public final class MemoryOrderingStore implements OrderingStore {
         }
     }
 
-    public void commit() {
+    void commit() {
         committed = deepCopy(working);
     }
 
-    public void rollback() {
+    void rollback() {
         working = deepCopy(committed);
     }
 

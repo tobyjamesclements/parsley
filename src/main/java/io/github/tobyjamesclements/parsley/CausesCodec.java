@@ -291,15 +291,4 @@ final class CausesCodec {
             shift += 7;
         }
     }
-
-    /**
-     * Builds a frontier from a plain map.
-     *
-     * @param byChannel per channel, the highest causal position
-     * @return the frontier
-     * @see Causes#of(Map)
-     */
-    public static Causes causes(Map<ChannelId, Long> byChannel) {
-        return Causes.of(byChannel);
-    }
 }

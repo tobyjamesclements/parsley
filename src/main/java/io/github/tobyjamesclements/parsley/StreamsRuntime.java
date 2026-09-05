@@ -52,13 +52,6 @@ final class StreamsRuntime implements AutoCloseable {
      * a future Streams version ever commits empty metadata.
      */
     static final String BOOTSTRAP_OFFSET_STAMP = "parsley.bootstrap";
-    /**
-     * The evidence standard for concluding a topic gone (D84, D113): this many consistent
-     * unknown-topic answers, each {@link #CORROBORATION_BACKOFF} after the last. One
-     * spelling for the declared topics, the ordering changelog and the identity check at
-     * task initialisation.
-     */
-    static final int CORROBORATING_ANSWERS = 3;
     static final java.time.Duration CORROBORATION_BACKOFF = java.time.Duration.ofMillis(500);
 
     private final Admin admin;
@@ -100,9 +93,8 @@ final class StreamsRuntime implements AutoCloseable {
     static StreamsRuntime start(ParsleyConfig config, List<Process> definitions) {
         validateDistinctNames(definitions);
         refuseReservedTopicNames(config, definitions);
-        Map<String, Object> adminProps = new HashMap<>(config.streamsProperties());
-        adminProps.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, config.bootstrapServers());
-        Admin admin = Admin.create(adminProps);
+        Map<String, Object> clientProps = clientPropsFor(config);
+        Admin admin = Admin.create(clientProps);
         StreamsRuntime runtime = new StreamsRuntime(admin);
         try {
             Map<String, ResolvedTopic> topics = runtime.resolveTopics(declaredTopics(definitions));
@@ -112,7 +104,7 @@ final class StreamsRuntime implements AutoCloseable {
                 java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> changelog =
                         runtime.describeChangelog(applicationId);
                 ChangelogView orderingView = changelog.isPresent()
-                        ? runtime.readOrderingChangelog(applicationId, adminProps,
+                        ? runtime.readOrderingChangelog(applicationId, clientProps,
                                 changelog.get().partitions().size())
                         : ChangelogView.ABSENT;
                 Map<byte[], byte[]> orderingState = orderingView.latest();
@@ -127,7 +119,7 @@ final class StreamsRuntime implements AutoCloseable {
                 runtime.refuseStrandedHeldMessages(applicationId, definition, topics, priorState, orderingState);
                 runtime.refuseWidthChange(applicationId, definition, topics, changelog);
                 Map<TopicPartition, Long> startPositions = runtime.commitInitialPositions(applicationId,
-                        definition, topics, priorState, orderingView, adminProps);
+                        definition, topics, priorState, orderingView, clientProps);
                 Map<UUID, String> namesById = new HashMap<>();
                 topics.forEach((name, info) -> namesById.put(info.topicId(), name));
 
@@ -140,7 +132,7 @@ final class StreamsRuntime implements AutoCloseable {
                         ProcessTopology.build(definition, topics, identitySource, startPositions,
                                 ProcessNode.PUNCTUATION_INTERVAL, config.metadataBudgetBytes()),
                         streamsProperties(config, applicationId));
-                java.time.Duration memberBound = bootstrapMemberSessionTimeout(clientPropsFor(config));
+                java.time.Duration memberBound = sessionTimeout(clientProps, java.time.Duration.ofSeconds(10));
                 // A refused join is replaced only while another instance's bootstrap member can
                 // still be lingering: twice its session timeout from here covers the pre-start
                 // wait below and one ungraceful exit. Past that, a member speaking another
@@ -229,16 +221,22 @@ final class StreamsRuntime implements AutoCloseable {
     }
 
     /**
-     * The session timeout the bootstrap member joins with (D48): the configured consumer
-     * session timeout in any Streams spelling, else the committer's ten-second default. An
-     * ungraceful bootstrap exit holds the group for exactly this long, which is what bounds
-     * both the pre-start wait and the window in which a refused join is replaced (D108).
+     * The configured consumer session timeout in any Streams spelling, else {@code fallback}.
+     *
+     * <p>Two callers want different fallbacks. The bootstrap member joins with the
+     * committer's ten-second default (D48), and an ungraceful bootstrap exit holds the group
+     * for exactly that long, which is what bounds both the pre-start wait and the window in
+     * which a refused join is replaced (D108). The join wait uses Kafka Streams' own
+     * forty-five-second default, since that is what a stream thread's membership expires on.
+     *
+     * @param clientProps the resolved client properties
+     * @param fallback    the timeout to use where none is configured
+     * @return the session timeout
      */
-    static java.time.Duration bootstrapMemberSessionTimeout(Map<String, Object> clientProps) {
+    private static java.time.Duration sessionTimeout(Map<String, Object> clientProps,
+                                                     java.time.Duration fallback) {
         java.util.OptionalLong configured = GroupMembershipCommitter.configuredSessionTimeoutMillis(clientProps);
-        return configured.isEmpty()
-                ? java.time.Duration.ofSeconds(10)
-                : java.time.Duration.ofMillis(configured.getAsLong());
+        return configured.isEmpty() ? fallback : java.time.Duration.ofMillis(configured.getAsLong());
     }
 
     /**
@@ -569,7 +567,7 @@ final class StreamsRuntime implements AutoCloseable {
                 throw e;
             } catch (Exception e) {
                 boolean unknown = e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
-                if (!unknown || attempt == CORROBORATING_ANSWERS - 1) {
+                if (!unknown || attempt == AdminTopicIdentitySource.CORROBORATING_ANSWERS - 1) {
                     throw new IllegalStateException("declared topics could not be resolved; refusing to start", e);
                 }
                 try {
@@ -630,7 +628,7 @@ final class StreamsRuntime implements AutoCloseable {
                     throw new IllegalStateException(
                             applicationId + ": could not determine prior state; refusing to start", e);
                 }
-                if (attempt == CORROBORATING_ANSWERS - 1) {
+                if (attempt == AdminTopicIdentitySource.CORROBORATING_ANSWERS - 1) {
                     return java.util.Optional.empty();
                 }
                 try {
@@ -931,7 +929,7 @@ final class StreamsRuntime implements AutoCloseable {
         }
 
         try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, applicationId)) {
-            committer.join(Set.copyOf(ProcessTopology.inputTopics(definition)), streamsSessionTimeout(clientProps).multipliedBy(2));
+            committer.join(Set.copyOf(ProcessTopology.inputTopics(definition)), sessionTimeout(clientProps, java.time.Duration.ofSeconds(45)).multipliedBy(2));
             Map<TopicPartition, OffsetAndMetadata> committed = committer.committed(received);
             // Re-checked against the member's fetch: the admin listing above silently
             // omits any partition whose offset has a pending transactional commit
@@ -1197,13 +1195,6 @@ final class StreamsRuntime implements AutoCloseable {
             }
         }
         return all;
-    }
-
-    private static java.time.Duration streamsSessionTimeout(Map<String, Object> clientProps) {
-        java.util.OptionalLong configured = GroupMembershipCommitter.configuredSessionTimeoutMillis(clientProps);
-        return configured.isEmpty()
-                ? java.time.Duration.ofSeconds(45)
-                : java.time.Duration.ofMillis(configured.getAsLong());
     }
 
     private static Properties streamsProperties(ParsleyConfig config, String applicationId) {

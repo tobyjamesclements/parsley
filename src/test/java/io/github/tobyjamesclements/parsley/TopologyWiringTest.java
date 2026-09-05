@@ -74,7 +74,8 @@ class TopologyWiringTest {
         props.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG, "unused:9092");
         props.put(StreamsConfig.STATE_DIR_CONFIG, stateDir.toString());
         driver = new TopologyTestDriver(
-                ProcessTopology.build(definition, topics, identity, Duration.ofMillis(100)), props);
+                ProcessTopology.build(definition, topics, identity, Map.of(), Duration.ofMillis(100),
+                        ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES), props);
         return driver;
     }
 
