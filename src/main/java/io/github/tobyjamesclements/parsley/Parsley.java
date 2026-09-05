@@ -42,7 +42,7 @@ public final class Parsley implements AutoCloseable {
      * @param config    broker connection, application identity and metadata budget
      * @param processes the processes to run, at least one
      * @return a handle owning the running processes
-     * @throws io.github.tobyjamesclements.parsley.core.FailClosedException
+     * @throws io.github.tobyjamesclements.parsley.FailClosedException
      *         if a process cannot start without breaching the guarantee, for example when
      *         messages remain held on a channel the process no longer receives
      * @throws IllegalArgumentException if {@code config}, {@code processes} or an element

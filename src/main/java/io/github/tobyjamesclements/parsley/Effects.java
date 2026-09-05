@@ -3,8 +3,6 @@ package io.github.tobyjamesclements.parsley;
 import java.util.ArrayList;
 import java.util.List;
 
-import io.github.tobyjamesclements.parsley.core.CausesCodec;
-import io.github.tobyjamesclements.parsley.core.Header;
 
 /**
  * Everything one step changes: the messages it sends and the state it writes.
@@ -56,7 +54,7 @@ public final class Effects {
          * @throws IllegalArgumentException if {@code channel}, {@code headers} or
          *         {@code timestamp} is null, {@code headers} contains a null element, or
          *         the timestamp is negative
-         * @throws io.github.tobyjamesclements.parsley.core.FailClosedException
+         * @throws io.github.tobyjamesclements.parsley.FailClosedException
          *         if any header uses {@link CausesCodec#RESERVED_HEADER_PREFIX}
          */
         public Send {
@@ -84,8 +82,8 @@ public final class Effects {
                             + ": headers may not contain a null element");
                 }
                 if (header.key().startsWith(CausesCodec.RESERVED_HEADER_PREFIX)) {
-                    throw new io.github.tobyjamesclements.parsley.core.FailClosedException(
-                            io.github.tobyjamesclements.parsley.core.FailClosedException.Reason.RESERVED_HEADER_USED,
+                    throw new io.github.tobyjamesclements.parsley.FailClosedException(
+                            io.github.tobyjamesclements.parsley.FailClosedException.Reason.RESERVED_HEADER_USED,
                             "application headers may not use the reserved prefix "
                                     + CausesCodec.RESERVED_HEADER_PREFIX);
                 }
@@ -202,7 +200,7 @@ public final class Effects {
          * @return this builder
          * @throws IllegalArgumentException if {@code channel} or {@code headers} is null,
          *         or {@code headers} contains a null element
-         * @throws io.github.tobyjamesclements.parsley.core.FailClosedException
+         * @throws io.github.tobyjamesclements.parsley.FailClosedException
          *         if a header uses the reserved prefix
          */
         public <K, V> Builder send(Channel<K, V> channel, K key, V value, List<Header> headers) {
@@ -244,7 +242,7 @@ public final class Effects {
          * @return this builder
          * @throws IllegalArgumentException if {@code channel} or {@code headers} is null,
          *         {@code headers} contains a null element, or {@code timestamp} is negative
-         * @throws io.github.tobyjamesclements.parsley.core.FailClosedException
+         * @throws io.github.tobyjamesclements.parsley.FailClosedException
          *         if a header uses the reserved prefix
          */
         public <K, V> Builder send(Channel<K, V> channel, K key, V value, List<Header> headers, long timestamp) {

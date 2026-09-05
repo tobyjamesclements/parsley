@@ -27,10 +27,6 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
 
-import io.github.tobyjamesclements.parsley.core.Causes;
-import io.github.tobyjamesclements.parsley.core.CausesCodec;
-import io.github.tobyjamesclements.parsley.core.ChannelId;
-import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;

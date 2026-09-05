@@ -6,7 +6,6 @@ import org.apache.kafka.streams.state.KeyValueStore;
 
 import java.util.Arrays;
 
-import io.github.tobyjamesclements.parsley.core.OrderingStore;
 
 /**
  * An {@link OrderingStore} over a Kafka Streams key-value store.

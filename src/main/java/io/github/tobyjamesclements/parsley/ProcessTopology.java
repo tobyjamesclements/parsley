@@ -112,7 +112,7 @@ final class ProcessTopology {
     static Topology build(Process definition, Map<String, ResolvedTopic> topics,
                           TopicIdentitySource identitySource, Duration punctuationInterval) {
         return build(definition, topics, identitySource, Map.of(), punctuationInterval,
-                io.github.tobyjamesclements.parsley.core.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES);
+                io.github.tobyjamesclements.parsley.ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES);
     }
 
     /**

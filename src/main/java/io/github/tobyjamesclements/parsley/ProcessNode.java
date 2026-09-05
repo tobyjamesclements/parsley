@@ -26,14 +26,6 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
-import io.github.tobyjamesclements.parsley.core.CausesCodec;
-import io.github.tobyjamesclements.parsley.core.ChannelId;
-import io.github.tobyjamesclements.parsley.core.DeliverableMessage;
-import io.github.tobyjamesclements.parsley.core.Header;
-import io.github.tobyjamesclements.parsley.core.IdentityReport;
-import io.github.tobyjamesclements.parsley.core.FailClosedException;
-import io.github.tobyjamesclements.parsley.core.ProcessEngine;
-import io.github.tobyjamesclements.parsley.core.ReceivedMessage;
 
 /**
  * The Kafka Streams processor driving one {@link ProcessEngine}.

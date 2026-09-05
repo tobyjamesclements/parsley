@@ -2,7 +2,6 @@ package io.github.tobyjamesclements.parsley;
 
 import java.util.List;
 
-import io.github.tobyjamesclements.parsley.core.Header;
 
 /**
  * One message, established as causally deliverable and handed to application logic.
@@ -32,7 +31,7 @@ public final class Delivery<K, V> {
         this.key = key;
         this.value = value;
         this.headers = headers.stream()
-                .filter(header -> !header.key().startsWith(io.github.tobyjamesclements.parsley.core.CausesCodec.RESERVED_HEADER_PREFIX))
+                .filter(header -> !header.key().startsWith(io.github.tobyjamesclements.parsley.CausesCodec.RESERVED_HEADER_PREFIX))
                 .toList();
     }
 

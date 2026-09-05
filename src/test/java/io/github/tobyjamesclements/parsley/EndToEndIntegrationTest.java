@@ -34,9 +34,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.BooleanSupplier;
 
-import io.github.tobyjamesclements.parsley.core.Causes;
-import io.github.tobyjamesclements.parsley.core.CausesCodec;
-import io.github.tobyjamesclements.parsley.core.ChannelId;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -433,7 +430,7 @@ class EndToEndIntegrationTest {
                     "nothing may be delivered past the discarded positions");
             await("the consumer's out-of-range stop to reach status() with its reason",
                     () -> parsley.status().get("pt").refusalReason().isPresent(), Duration.ofSeconds(30));
-            assertEquals(io.github.tobyjamesclements.parsley.core.FailClosedException.Reason
+            assertEquals(io.github.tobyjamesclements.parsley.FailClosedException.Reason
                             .POSITIONS_DISCARDED_UNREAD,
                     parsley.status().get("pt").refusalReason().orElseThrow(),
                     "the fetch is the one judge of retention, and its stop names Safety 8's condition (D109)");

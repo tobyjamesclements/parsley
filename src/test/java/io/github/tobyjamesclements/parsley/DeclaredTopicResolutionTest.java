@@ -113,7 +113,7 @@ class DeclaredTopicResolutionTest {
         TopicDescription zeroId = new TopicDescription("orders", false,
                 List.of(new TopicPartitionInfo(0, node, List.of(node), List.of(node))), Set.of(), Uuid.ZERO_UUID);
         AtomicInteger describes = new AtomicInteger();
-        assertThrows(io.github.tobyjamesclements.parsley.core.FailClosedException.class,
+        assertThrows(io.github.tobyjamesclements.parsley.FailClosedException.class,
                 () -> StreamsRuntime.resolveTopicsCorroborated(() -> {
                     describes.incrementAndGet();
                     return Map.of("orders", zeroId);

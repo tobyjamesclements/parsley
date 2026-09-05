@@ -4,7 +4,6 @@ import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.Uuid;
 import org.junit.jupiter.api.Test;
 
-import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;

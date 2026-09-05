@@ -2,7 +2,6 @@ package io.github.tobyjamesclements.parsley;
 
 import java.util.Optional;
 
-import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 /**
  * The state of one process at a moment in time.

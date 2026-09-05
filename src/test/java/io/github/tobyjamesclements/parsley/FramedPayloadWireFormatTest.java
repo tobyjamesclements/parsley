@@ -21,7 +21,6 @@ import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 
-import io.github.tobyjamesclements.parsley.core.CausesCodec;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;

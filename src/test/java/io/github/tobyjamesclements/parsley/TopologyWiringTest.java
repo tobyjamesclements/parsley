@@ -24,10 +24,6 @@ import java.util.Properties;
 import java.util.Set;
 import java.util.UUID;
 
-import io.github.tobyjamesclements.parsley.core.Causes;
-import io.github.tobyjamesclements.parsley.core.CausesCodec;
-import io.github.tobyjamesclements.parsley.core.ChannelId;
-import io.github.tobyjamesclements.parsley.core.FailClosedException;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -210,10 +206,10 @@ class TopologyWiringTest {
 
         var thrown = org.junit.jupiter.api.Assertions.assertThrows(RuntimeException.class,
                 () -> input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        io.github.tobyjamesclements.parsley.core.FailClosedException refusal =
-                io.github.tobyjamesclements.parsley.core.FailClosedException.findIn(thrown);
+        io.github.tobyjamesclements.parsley.FailClosedException refusal =
+                io.github.tobyjamesclements.parsley.FailClosedException.findIn(thrown);
         assertNotNull(refusal, "the step must fail closed, not skip the message");
-        assertEquals(io.github.tobyjamesclements.parsley.core.FailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
+        assertEquals(io.github.tobyjamesclements.parsley.FailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
                 refusal.reason());
     }
 
