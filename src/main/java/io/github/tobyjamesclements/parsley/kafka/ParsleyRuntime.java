@@ -57,6 +57,14 @@ public final class ParsleyRuntime implements AutoCloseable {
      * a future Streams version ever commits empty metadata.
      */
     static final String BOOTSTRAP_OFFSET_STAMP = "parsley.bootstrap";
+    /**
+     * The evidence standard for concluding a topic gone (D84, D113): this many consistent
+     * unknown-topic answers, each {@link #CORROBORATION_BACKOFF} after the last. One
+     * spelling for the declared topics, the ordering changelog and the identity check at
+     * task initialisation.
+     */
+    static final int CORROBORATING_ANSWERS = 3;
+    static final java.time.Duration CORROBORATION_BACKOFF = java.time.Duration.ofMillis(500);
 
     private final Admin admin;
     // Populated by start() and read by status()/healthy()/close() from monitoring threads,
@@ -67,18 +75,10 @@ public final class ParsleyRuntime implements AutoCloseable {
     private final java.util.concurrent.ConcurrentHashMap<String, Throwable> failuresByProcess =
             new java.util.concurrent.ConcurrentHashMap<>();
     private final List<KafkaStreams> streams = new java.util.concurrent.CopyOnWriteArrayList<>();
-    private final List<AdminFactsSource> factsSources = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final java.util.concurrent.ConcurrentHashMap<String, ProcessDiagnostics> diagnosticsByProcess =
             new java.util.concurrent.ConcurrentHashMap<>();
     /** Counted down when any process stops or this runtime closes (D111). */
     private final java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(1);
-
-    private final java.util.concurrent.ExecutorService factsExecutor =
-            java.util.concurrent.Executors.newSingleThreadExecutor(runnable -> {
-                Thread thread = new Thread(runnable, "parsley-facts");
-                thread.setDaemon(true);
-                return thread;
-            });
 
     // Package-private for RecordFailureDiagnosticsTest, which drives recordFailure and
     // reads the merge's outcome directly — the failure path never touches the admin
@@ -114,7 +114,6 @@ public final class ParsleyRuntime implements AutoCloseable {
         try {
             Map<String, TopicInfo> topics = runtime.resolveTopics(declaredTopics(definitions));
 
-            long factsClockOrigin = System.nanoTime();
             for (ProcessDefinition definition : definitions) {
                 String applicationId = config.applicationIdPrefix() + "-" + definition.name();
                 java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> changelog =
@@ -134,20 +133,21 @@ public final class ParsleyRuntime implements AutoCloseable {
                 boolean priorState = !orderingState.isEmpty();
                 runtime.refuseStrandedHeldMessages(applicationId, definition, topics, priorState, orderingState);
                 runtime.refuseWidthChange(applicationId, definition, topics, changelog);
-                runtime.commitInitialPositions(applicationId, definition, topics, priorState, orderingView,
-                        adminProps);
+                Map<TopicPartition, Long> startPositions = runtime.commitInitialPositions(applicationId,
+                        definition, topics, priorState, orderingView, adminProps);
                 Map<UUID, String> namesById = new HashMap<>();
                 topics.forEach((name, info) -> namesById.put(info.topicId(), name));
 
-                AdminFactsSource factsSource = new AdminFactsSource(admin, applicationId, namesById, adminProps,
-                        Math.max(config.factsInterval().toMillis() * 3, 3_000L),
-                        () -> (System.nanoTime() - factsClockOrigin) / 1_000_000L);
-                runtime.factsSources.add(factsSource);
+                // The declared names are what let a task's initialisation tell a deleted
+                // received topic from a denied describe (D75); names of upstream topics are
+                // learned as tasks initialise (D115).
+                AdminTopicIdentitySource identitySource = new AdminTopicIdentitySource(admin, applicationId,
+                        namesById, CORROBORATION_BACKOFF);
                 ProcessDiagnostics diagnostics = new ProcessDiagnostics();
                 runtime.diagnosticsByProcess.put(definition.name(), diagnostics);
                 KafkaStreams kafkaStreams = new KafkaStreams(
-                        ProcessTopology.build(definition, topics, factsSource, config.factsInterval(),
-                                runtime.factsExecutor, config.metadataBudgetBytes(), diagnostics),
+                        ProcessTopology.build(definition, topics, identitySource, startPositions,
+                                config.statusInterval(), config.metadataBudgetBytes(), diagnostics),
                         streamsProperties(config, applicationId));
                 java.time.Duration memberBound = bootstrapMemberSessionTimeout(clientPropsFor(config));
                 // A refused join is replaced only while another instance's bootstrap member can
@@ -323,6 +323,8 @@ public final class ParsleyRuntime implements AutoCloseable {
         RECORD_TOO_LARGE,
         /** The partition shape of the process's topics changed while it ran (D59). */
         PARTITION_SHAPE_CHANGED,
+        /** A received topic was missing when the host rebalanced: deleted, or deleted and recreated (D115). */
+        SOURCE_TOPIC_MISSING,
         /** No named condition; the failure is logged as-is. */
         UNRECOGNISED
     }
@@ -346,6 +348,9 @@ public final class ParsleyRuntime implements AutoCloseable {
             }
             if (cause instanceof org.apache.kafka.common.errors.RecordTooLargeException) {
                 return FailureDiagnosis.RECORD_TOO_LARGE;
+            }
+            if (cause instanceof org.apache.kafka.streams.errors.MissingSourceTopicException) {
+                return FailureDiagnosis.SOURCE_TOPIC_MISSING;
             }
             if (String.valueOf(cause.getMessage()).contains("invalid partitions")) {
                 return FailureDiagnosis.PARTITION_SHAPE_CHANGED;
@@ -417,6 +422,13 @@ public final class ParsleyRuntime implements AutoCloseable {
                         + " partitions at start(). Restart the application: a width-preserving expansion is"
                         + " re-resolved and pre-committed; a width change refuses with TASK_WIDTH_CHANGED and its"
                         + " remedy (failing closed)", process, exception);
+            case SOURCE_TOPIC_MISSING ->
+                LOG.error("process {}: a received topic was missing when the host rebalanced: it was deleted,"
+                        + " or deleted and recreated under its name, while the process ran (SPEC Assumption 17)."
+                        + " Restart the application: a topic still missing refuses the start until it is"
+                        + " restored or removed from the declaration; one recreated under its name refuses with"
+                        + " CHANNEL_IDENTITY_CHANGED and its remedy; one that merely lagged in a broker's"
+                        + " metadata resumes (failing closed)", process, exception);
             case UNRECOGNISED ->
                 LOG.error("process {} failed; shutting its application down (failing closed)", process, exception);
         }
@@ -542,7 +554,7 @@ public final class ParsleyRuntime implements AutoCloseable {
     private Map<String, TopicInfo> resolveTopics(Set<String> names) {
         return resolveTopicsCorroborated(
                 () -> admin.describeTopics(names).allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS),
-                java.time.Duration.ofMillis(500));
+                CORROBORATION_BACKOFF);
     }
 
     /** The describe of every declared topic, behind a seam so tests can script the answers. */
@@ -569,7 +581,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                 throw e;
             } catch (Exception e) {
                 boolean unknown = e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
-                if (!unknown || attempt == 2) {
+                if (!unknown || attempt == CORROBORATING_ANSWERS - 1) {
                     throw new IllegalStateException("declared topics could not be resolved; refusing to start", e);
                 }
                 try {
@@ -591,14 +603,15 @@ public final class ParsleyRuntime implements AutoCloseable {
      * trusted one stale answer would misdiagnose a healthy sibling's state as
      * ORDERING_STATE_LOST — with a remedy that deletes that sibling's offsets. Absence is
      * concluded only after three consistent unknown answers spaced half a second apart,
-     * the same evidence standard the facts source applies to deletion (D44/D75), scaled
-     * to a start-time budget (D84). A genuine first start pays the extra describes once.
+     * the evidence standard every deletion verdict in this runtime takes (D44/D75, D84,
+     * D115's identity check at task initialisation). A genuine first start pays the extra
+     * describes once.
      */
     private java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelog(String applicationId) {
         String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
         return describeChangelogCorroborated(applicationId, () -> admin.describeTopics(List.of(changelog))
                 .allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(changelog),
-                java.time.Duration.ofMillis(500));
+                CORROBORATION_BACKOFF);
     }
 
     /** One describe of the ordering changelog, as the substrate answers it — the seam the
@@ -629,7 +642,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                     throw new IllegalStateException(
                             applicationId + ": could not determine prior state; refusing to start", e);
                 }
-                if (attempt == 2) {
+                if (attempt == CORROBORATING_ANSWERS - 1) {
                     return java.util.Optional.empty();
                 }
                 try {
@@ -890,9 +903,33 @@ public final class ParsleyRuntime implements AutoCloseable {
         }
     }
 
-    private void commitInitialPositions(String applicationId, ProcessDefinition definition,
-                                        Map<String, TopicInfo> topics, boolean priorState,
-                                        ChangelogView orderingView, Map<String, Object> clientProps) {
+    /**
+     * Establishes the position Kafka Streams will feed each received partition from, and
+     * returns it: the group's committed position where one exists, else the one the
+     * bootstrap commits here.
+     *
+     * <p>With prior state, a partition whose committed position is missing — expired during
+     * a long stop — resumes at the ordering state's covered position plus one (D115): every
+     * position at or below the covered one was fed or will never arrive, so that is exactly
+     * where the previous execution would have read next. A received partition the ordering
+     * state names but never covered — received by an earlier execution that started it at
+     * 0 and was never fed from it — resumes at 0, the only position it can show it read
+     * from; the substrate's earliest, which may have moved past positions it never read, is
+     * not a position it covered. Whether retention still holds the resumed position is the
+     * substrate's to decide at the first fetch: under {@code auto.offset.reset=none} a
+     * position below the log start refuses the fetch, and {@link #classifyFailure} names it
+     * {@code POSITIONS_DISCARDED_UNREAD} (SPEC Safety 8, D9/D81/D109). A channel the state
+     * has never named — a genuinely first start, a channel joining the received set, or a
+     * bootstrap that crashed before Streams ever ran — takes the substrate's earliest or
+     * latest position instead, a one-off query: the declared initial position on a first
+     * start, earliest wherever prior state exists (D36).
+     *
+     * @return per received partition, the position the host feeds first
+     */
+    private Map<TopicPartition, Long> commitInitialPositions(String applicationId, ProcessDefinition definition,
+                                                            Map<String, TopicInfo> topics, boolean priorState,
+                                                            ChangelogView orderingView,
+                                                            Map<String, Object> clientProps) {
         java.util.Set<TopicPartition> received = receivedPartitions(definition, topics);
         Map<TopicPartition, OffsetAndMetadata> preCheck = awaitStablePreCheck(applicationId, received,
                 () -> listStableOffsets(applicationId),
@@ -902,7 +939,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                         description.partitions().size()));
         refuseLostOrderingState(applicationId, orderingView, preCheck, recheck);
         if (preCheck.keySet().containsAll(received)) {
-            return;
+            return startPositions(received, preCheck, Map.of());
         }
 
         try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, applicationId)) {
@@ -915,27 +952,42 @@ public final class ParsleyRuntime implements AutoCloseable {
             // member's committed() is a stable fetch that retries until the transaction
             // resolves, so what it returns is authoritative.
             refuseLostOrderingState(applicationId, orderingView, committed, recheck);
+            Map<io.github.tobyjamesclements.parsley.core.ChannelId, Long> covered =
+                    io.github.tobyjamesclements.parsley.core.OrderingStateInspector.coveredPositions(orderingView.latest());
+            java.util.Set<String> receivedBefore =
+                    io.github.tobyjamesclements.parsley.core.OrderingStateInspector.nameBindings(orderingView.latest())
+                            .keySet();
+            Map<TopicPartition, OffsetAndMetadata> toCommit = new HashMap<>();
             Map<TopicPartition, OffsetSpec> wanted = new HashMap<>();
             for (TopicPartition tp : received) {
-                if (committed.get(tp) == null) {
-                    Channel.InitialPosition initial = priorState
-                            ? Channel.InitialPosition.EARLIEST
-                            : definition.input(tp.topic()).channel().initialPosition();
-                    wanted.put(tp, initial == Channel.InitialPosition.EARLIEST
-                            ? OffsetSpec.earliest() : OffsetSpec.latest());
+                if (committed.get(tp) != null) {
+                    continue;
                 }
+                Long coveredUpTo = covered.get(new io.github.tobyjamesclements.parsley.core.ChannelId(
+                        topics.get(tp.topic()).topicId(), tp.partition()));
+                java.util.OptionalLong resume = resumePosition(coveredUpTo, receivedBefore.contains(tp.topic()));
+                if (resume.isPresent()) {
+                    toCommit.put(tp, new OffsetAndMetadata(resume.getAsLong(), BOOTSTRAP_OFFSET_STAMP));
+                    continue;
+                }
+                Channel.InitialPosition initial = priorState
+                        ? Channel.InitialPosition.EARLIEST
+                        : definition.input(tp.topic()).channel().initialPosition();
+                wanted.put(tp, initial == Channel.InitialPosition.EARLIEST
+                        ? OffsetSpec.earliest() : OffsetSpec.latest());
             }
-            if (wanted.isEmpty()) {
-                return;
+            if (!wanted.isEmpty()) {
+                admin.listOffsets(wanted, new ListOffsetsOptions(IsolationLevel.READ_COMMITTED)).all()
+                        .get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                        .forEach((tp, info) -> toCommit.put(tp,
+                                new OffsetAndMetadata(info.offset(), BOOTSTRAP_OFFSET_STAMP)));
             }
-            Map<TopicPartition, OffsetAndMetadata> toCommit = new HashMap<>();
-            admin.listOffsets(wanted, new ListOffsetsOptions(IsolationLevel.READ_COMMITTED)).all()
-                    .get(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-                    .forEach((tp, info) -> toCommit.put(tp,
-                            new OffsetAndMetadata(info.offset(), BOOTSTRAP_OFFSET_STAMP)));
-            refusePositionsDiscardedUnread(applicationId, topics, orderingView.latest(), toCommit);
+            if (toCommit.isEmpty()) {
+                return startPositions(received, committed, Map.of());
+            }
             committer.commit(toCommit);
             LOG.info("{}: committed initial positions for {}", applicationId, toCommit.keySet());
+            return startPositions(received, committed, toCommit);
         } catch (ParsleyFailClosedException | RetryableStartException e) {
             // The retryable transient keeps its own diagnosis: wrapping it in the terminal
             // "could not be established" shape would send the operator to a remedy the
@@ -945,6 +997,45 @@ public final class ParsleyRuntime implements AutoCloseable {
             throw new IllegalStateException(
                     applicationId + ": initial read positions could not be established; refusing to start", e);
         }
+    }
+
+    /**
+     * The position a partition with an expired committed offset resumes at, from the
+     * ordering state's coverage of it: the covered position plus one, the next position the
+     * previous execution would have read. A partition the state names as received but never
+     * covered — started at 0 and never fed, or a pre-D115 execution that recorded coverage
+     * of -1 for it — resumes at 0, the one position it can show it read from. Empty where
+     * the state never named the topic (the substrate's earliest or latest position is taken
+     * instead) and where the coverage is the engine's fed-to-end sentinel, which a channel
+     * settled on its topic's deletion carries and which no offset can follow.
+     *
+     * @param coveredUpTo    the channel's covered position from the ordering state, or null
+     * @param receivedBefore whether the ordering state binds the channel's topic name, which
+     *                       every execution that received the topic writes
+     * @return the position to commit, or empty to query the substrate
+     */
+    static java.util.OptionalLong resumePosition(Long coveredUpTo, boolean receivedBefore) {
+        if (coveredUpTo == null) {
+            return receivedBefore ? java.util.OptionalLong.of(0) : java.util.OptionalLong.empty();
+        }
+        if (io.github.tobyjamesclements.parsley.core.OrderingStateInspector.isFedToEnd(coveredUpTo)) {
+            return java.util.OptionalLong.empty();
+        }
+        return java.util.OptionalLong.of(Math.max(coveredUpTo, -1) + 1);
+    }
+
+    /** The received partitions' start positions: the committed ones, overlaid by this bootstrap's commits. */
+    private static Map<TopicPartition, Long> startPositions(java.util.Set<TopicPartition> received,
+                                                            Map<TopicPartition, OffsetAndMetadata> committed,
+                                                            Map<TopicPartition, OffsetAndMetadata> justCommitted) {
+        Map<TopicPartition, Long> positions = new HashMap<>();
+        for (TopicPartition tp : received) {
+            OffsetAndMetadata offset = justCommitted.containsKey(tp) ? justCommitted.get(tp) : committed.get(tp);
+            if (offset != null) {
+                positions.put(tp, offset.offset());
+            }
+        }
+        return positions;
     }
 
     /**
@@ -1019,51 +1110,6 @@ public final class ParsleyRuntime implements AutoCloseable {
                             + " silently under-express causes delivered before the loss. Restore the"
                             + " changelog topic and its records, or reset (delete) the process's group"
                             + " offsets deliberately to start fresh.");
-        }
-    }
-
-    /**
-     * Refuses a re-established read position that would jump positions discarded unread.
-     *
-     * <p>On an expiry restart, missing offsets are re-established at the current log
-     * start. Where retention advanced past the previous execution's covered position
-     * while the process was stopped, that log start lies beyond positions this process
-     * never read: committing it would fabricate a read-position report the host never
-     * made, and the engine's own truncation check — which compares log starts against
-     * coverage the same round's report has just advanced — could then never fire. The
-     * comparison belongs here, against the durable coverage restored from the ordering
-     * changelog (SPEC Safety 8). On a genuinely first start the coverage view is empty
-     * and every partition passes.
-     *
-     * <p>The refusal is deliberately conservative: positions in the gap may in truth have
-     * held only transaction markers or aborted batches, but once retention has discarded
-     * them nothing can show that, and Safety 8 forbids assuming it.
-     */
-    private static void refusePositionsDiscardedUnread(String applicationId, Map<String, TopicInfo> topics,
-                                                       Map<byte[], byte[]> orderingState,
-                                                       Map<TopicPartition, OffsetAndMetadata> toCommit) {
-        Map<io.github.tobyjamesclements.parsley.core.ChannelId, Long> covered =
-                io.github.tobyjamesclements.parsley.core.OrderingStateInspector.coveredPositions(orderingState);
-        for (var entry : toCommit.entrySet()) {
-            TopicPartition tp = entry.getKey();
-            io.github.tobyjamesclements.parsley.core.ChannelId channel =
-                    new io.github.tobyjamesclements.parsley.core.ChannelId(
-                            topics.get(tp.topic()).topicId(), tp.partition());
-            Long coveredUpTo = covered.get(channel);
-            // Spelled offset - 1 > coveredUpTo (offsets are non-negative, so this cannot
-            // underflow) rather than offset > coveredUpTo + 1: the stored coverage can be
-            // the engine's fed-to-end sentinel, Long.MAX_VALUE, which the addition would
-            // wrap to Long.MIN_VALUE and refuse every offset. The engine's own truncation
-            // check excludes that sentinel the same way.
-            if (coveredUpTo != null && entry.getValue().offset() - 1 > coveredUpTo) {
-                throw new ParsleyFailClosedException(
-                        ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
-                        applicationId + ": " + tp + " earliest retained position " + entry.getValue().offset()
-                                + " is beyond this process's covered position " + coveredUpTo + "; positions"
-                                + " this process cannot show it covered were discarded while its committed"
-                                + " offsets were missing (SPEC Safety 8). Reset the process's state and group"
-                                + " offsets deliberately to proceed.");
-            }
         }
     }
 
@@ -1234,18 +1280,6 @@ public final class ParsleyRuntime implements AutoCloseable {
                 }
             } catch (RuntimeException e) {
                 LOG.warn("a streams application failed to close; continuing with the remaining resources", e);
-            }
-        }
-        try {
-            factsExecutor.shutdownNow();
-        } catch (RuntimeException e) {
-            LOG.warn("the facts executor failed to shut down; continuing", e);
-        }
-        for (AdminFactsSource factsSource : factsSources) {
-            try {
-                factsSource.close();
-            } catch (RuntimeException e) {
-                LOG.warn("a facts source failed to close; continuing", e);
             }
         }
         try {

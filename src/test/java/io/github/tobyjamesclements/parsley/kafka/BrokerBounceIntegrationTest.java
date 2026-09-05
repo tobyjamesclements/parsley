@@ -83,7 +83,7 @@ class BrokerBounceIntegrationTest {
 
         ParsleyConfig config = ParsleyConfig.builder(cluster.bootstrapServers(), "bounce")
                 .stateDir(stateDir.resolve("bounce").toString())
-                .factsInterval(Duration.ofMillis(500))
+                .statusInterval(Duration.ofMillis(500))
                 .build();
         try (Parsley parsley = Parsley.start(config, pb)) {
             ClusterTestSupport.awaitFedAndHeld(admin, "bounce-pb", "bounce-b", delivered);

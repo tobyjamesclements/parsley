@@ -1,8 +1,6 @@
 package io.github.tobyjamesclements.parsley.api;
 
-import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
 import java.util.OptionalLong;
 
 /**
@@ -10,9 +8,10 @@ import java.util.OptionalLong;
  * and how much causal metadata it carries.
  *
  * <p>A task is the specification's process — partition {@link #partition()} of every topic
- * its process receives. The snapshot is taken on the task's own thread once per facts
- * interval, so a reading is at most one interval old; a task that has been reassigned away
- * disappears from its process's status rather than lingering stale.
+ * its process receives. The snapshot is taken on the task's own thread once per status
+ * interval ({@link ParsleyConfig#statusInterval()}), so a reading is at most one interval
+ * old; a task that has been reassigned away disappears from its process's status rather
+ * than lingering stale.
  *
  * <p>A held message is not a failure: it is waiting for a cause, and {@link HeldChannel#blockers()}
  * names which one, with the position required and the position the channel has reached.
@@ -23,8 +22,6 @@ import java.util.OptionalLong;
  *                         and which {@link ParsleyConfig#metadataBudgetBytes()} bounds
  * @param heldMessages     how many received messages are waiting for a cause, over all channels
  * @param heldChannels     the channels with at least one held message, in channel order
- * @param sinceLastFacts   how long ago broker position facts were last applied, or empty when
- *                         none have been in this task's current execution
  * @see Parsley#status()
  * @see ProcessStatus#tasks()
  */
@@ -33,17 +30,16 @@ public record TaskStatus(
         int frontierChannels,
         int frontierBytes,
         int heldMessages,
-        List<HeldChannel> heldChannels,
-        Optional<Duration> sinceLastFacts) {
+        List<HeldChannel> heldChannels) {
 
     /**
      * Copies the held channels and refuses null components.
      *
-     * @throws IllegalArgumentException if {@code heldChannels} contains null, or if {@code heldChannels} or {@code sinceLastFacts} is
-     *         null, or any count is negative
+     * @throws IllegalArgumentException if {@code heldChannels} is null or contains null, or
+     *         any count is negative
      */
     public TaskStatus {
-        if (heldChannels == null || sinceLastFacts == null) {
+        if (heldChannels == null) {
             throw new IllegalArgumentException("every component of a task status must be non-null");
         }
         if (partition < 0 || frontierChannels < 0 || frontierBytes < 0 || heldMessages < 0) {

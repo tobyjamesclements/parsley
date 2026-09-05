@@ -20,9 +20,12 @@ import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.Reaso
  * The protocol, driven by a host.
  *
  * <p>The engine holds a causal frontier, a per-channel hold-back buffer, and the record of
- * what it has already delivered. A host feeds it messages and broker position facts, asks it
- * what is deliverable, and tells it what was delivered. It names no host type, consults no
- * clock and opens no connection, so the same engine runs under a simulator and under Kafka
+ * what it has already delivered. A host feeds it messages, asks it what is deliverable, and
+ * tells it what was delivered; at initialisation it also tells the engine where each channel's
+ * feed will start and which channels no longer exist. Nothing is reported between deliveries:
+ * a cause names the position of a message that was sent (wire-format constraint 8), so
+ * receiving that message is what satisfies it (D115). The engine names no host type, consults
+ * no clock and opens no connection, so the same engine runs under a simulator and under Kafka
  * Streams.
  *
  * <p>The delivery rule itself lives in {@link Deliverability#decide}, which is a pure
@@ -43,7 +46,7 @@ public final class ProcessEngine {
         DUPLICATE_DROPPED
     }
 
-    private static final long FED_TO_END_OF_CHANNEL = Long.MAX_VALUE;
+    static final long FED_TO_END_OF_CHANNEL = Long.MAX_VALUE;
 
     /** Metadata budget applied where a configuration names none. */
     public static final int DEFAULT_METADATA_BUDGET_BYTES = 256 * 1024;
@@ -127,7 +130,7 @@ public final class ProcessEngine {
     }
 
     /**
-     * Builds an engine with the default metadata budget.
+     * Builds an engine with the default metadata budget and no start positions.
      *
      * @param processName      the process name, used in diagnostics
      * @param receivedChannels the channels this process receives, mapped to their topic names
@@ -136,11 +139,11 @@ public final class ProcessEngine {
      *         cannot read
      */
     public ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store) {
-        this(processName, receivedChannels, store, DEFAULT_METADATA_BUDGET_BYTES, Sabotage.NONE);
+        this(processName, receivedChannels, store, DEFAULT_METADATA_BUDGET_BYTES, Sabotage.NONE, Map.of());
     }
 
     /**
-     * Builds an engine with an explicit metadata budget.
+     * Builds an engine with an explicit metadata budget and no start positions.
      *
      * @param processName         the process name, used in diagnostics
      * @param receivedChannels    the channels this process receives, mapped to topic names
@@ -151,15 +154,37 @@ public final class ProcessEngine {
      */
     public ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,
                          int metadataBudgetBytes) {
-        this(processName, receivedChannels, store, metadataBudgetBytes, Sabotage.NONE);
+        this(processName, receivedChannels, store, metadataBudgetBytes, Sabotage.NONE, Map.of());
     }
 
-    ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store, Sabotage sabotage) {
-        this(processName, receivedChannels, store, DEFAULT_METADATA_BUDGET_BYTES, sabotage);
+    /**
+     * Builds an engine with an explicit metadata budget and the positions the host feeds
+     * from.
+     *
+     * <p>{@code startPositions} is, per received channel, the first position the host will
+     * feed in this execution: every position below it was fed to an earlier execution of
+     * this process and committed, or lies below the position the process was started at. A
+     * cause naming a position below it is therefore treated as satisfied (SPEC Structural
+     * 12, Host obligation 2), which is what lets a process started at a channel's end, or
+     * one whose channel joined the received set above discarded history, deliver an effect
+     * whose cause it will never receive. Coverage the store already holds is never lowered;
+     * a channel absent from the map, or at position zero, is restored unchanged.
+     *
+     * @param processName         the process name, used in diagnostics
+     * @param receivedChannels    the channels this process receives, mapped to topic names
+     * @param store               durable ordering state
+     * @param metadataBudgetBytes the largest causal metadata a message may carry
+     * @param startPositions      per received channel, the first position the host feeds
+     * @throws ParsleyFailClosedException if the store carries a format version this build
+     *         cannot read
+     */
+    public ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,
+                         int metadataBudgetBytes, Map<ChannelId, Long> startPositions) {
+        this(processName, receivedChannels, store, metadataBudgetBytes, Sabotage.NONE, startPositions);
     }
 
     ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,
-                  int metadataBudgetBytes, Sabotage sabotage) {
+                  int metadataBudgetBytes, Sabotage sabotage, Map<ChannelId, Long> startPositions) {
         this.processName = processName;
         this.receivedChannels = new TreeSet<>(receivedChannels.keySet());
         this.store = store;
@@ -245,6 +270,17 @@ public final class ProcessEngine {
                 advanceFedUpTo(channel, past);
             }
         }
+        // The host's start position is the one position it reports (Host obligation 2):
+        // everything below it was fed and committed by an earlier execution, or was skipped
+        // by the initial position the process was started at. Raising coverage to just
+        // below it is Structural 12's baseline, taken here so that it lies within the
+        // session floor: a feed below the start position is the host re-feeding a
+        // committed past, a replay to drop, never a contradiction (D10, D115).
+        startPositions.forEach((channel, start) -> {
+            if (this.receivedChannels.contains(channel) && start > 0) {
+                advanceFedUpTo(channel, start - 1);
+            }
+        });
         this.sessionFloor = Map.copyOf(fedUpTo);
     }
 
@@ -333,11 +369,11 @@ public final class ProcessEngine {
      * @param message the message, whose position must exceed any already fed for its channel
      * @return whether the message was accepted or recognised as already delivered
      * @throws ParsleyFailClosedException if the host fed out of order within this execution,
-     *         if the message's position was already covered by a read-position report — a
-     *         report/feed contradiction, which is a false report or this execution observing
-     *         its successor's progress after being superseded, not a feed-order breach — if
-     *         the metadata cannot be decoded, or if the metadata exceeds the configured
-     *         budget
+     *         if the message's position lies above the session floor yet inside coverage
+     *         this execution already recorded as fed or never arriving — a contradiction
+     *         between the host's feed and the engine's own record, kept as an invariant
+     *         guard though no path in this tree reaches it (D115) — if the metadata cannot
+     *         be decoded, or if the metadata exceeds the configured budget
      */
     public ReceiveOutcome onReceive(ReceivedMessage message) {
         ChannelId channel = message.channel();
@@ -373,18 +409,20 @@ public final class ProcessEngine {
                                 + " on a channel recorded as no longer existing");
             }
             Long floor = sessionFloor.get(channel);
-            if ((floor == null || message.position() > floor)
-                    && !sabotage.has(Sabotage.Mode.TREAT_COVERED_FEED_AS_REPLAY)) {
+            if (floor == null || message.position() > floor) {
                 // Not a feed-order violation: in-execution order is checked against
-                // fedThisExecution above. This position was covered by a read-position
-                // report, so the report and the feed contradict each other.
+                // fedThisExecution above. Coverage above the session floor is only ever
+                // raised by this execution's own receipts, which fedThisExecution already
+                // guards, so this branch is an invariant guard with no known trigger (D115):
+                // it is kept so that a contradiction between the host's feed and the
+                // engine's record can never fall through to a silent drop or a delivery.
                 throw new ParsleyFailClosedException(Reason.COVERED_POSITION_FED,
                         "process " + processName + ": fed " + channel + "@" + message.position()
-                                + " which a read-position report already covered as fed-or-never-arriving"
-                                + " (fedUpTo=" + fed + "). Either the report was false, or this execution has"
-                                + " been superseded and a facts round observed its successor's committed"
-                                + " progress; a superseded execution's step cannot commit, a restart recovers,"
-                                + " and this refusal then does not recur.");
+                                + " which this execution's own coverage already records as fed or never"
+                                + " arriving (fedUpTo=" + fed + "), above the session floor of " + floor
+                                + "; the host's feed and the engine's record contradict each other."
+                                + " A restart resumes from the committed record, and this refusal then"
+                                + " does not recur.");
             }
 
             return ReceiveOutcome.DUPLICATE_DROPPED;
@@ -435,20 +473,27 @@ public final class ProcessEngine {
     }
 
     /**
-     * Takes the broker's current view of the channels this process reads.
+     * Takes what the host learned of channel identity when it initialised this process.
      *
-     * <p>Facts are what let a channel settle past positions that will never yield a message,
-     * such as those consumed by an aborted transaction. Without them a process holding for a
-     * cause on an idle channel could not tell whether the wait would end.
+     * <p>A received channel whose topic was deleted settles to its end: nothing more can
+     * arrive on it, so every cause on it is satisfied (D21) — unless messages from it are
+     * still held, whose place in causal order can then no longer be preserved, which refuses
+     * (SPEC Safety 9, D46). A received channel whose topic was recreated under its name
+     * refuses: records fed under the old identity can no longer be trusted (SPEC Assumption
+     * 2). Frontier and delivered-past entries for dead and recreated channels are pruned —
+     * the one discarding Structural 13 permits, since a cause on a channel that no longer
+     * exists can no longer matter. Nothing is pruned by retention: a cause names a message
+     * that was sent, its holder keeps it until its own causes arrive, and its senders keep
+     * expressing it, so retention crossing a held message costs nothing but the message's
+     * copy on its topic (D115 supersedes D104).
      *
-     * @param facts the broker's view
-     * @throws ParsleyFailClosedException if positions were discarded before this process read
-     *         them, if a received topic was recreated or deleted while its messages remain
-     *         held, or if a channel left the received set holding messages
+     * @param report the host's identity report
+     * @throws ParsleyFailClosedException if a received topic was recreated under its name,
+     *         or deleted while messages from it remain held
      */
-    public void onFacts(PositionFacts facts) {
+    public void onIdentityReport(IdentityReport report) {
         if (!sabotage.has(Sabotage.Mode.IGNORE_RECREATION)) {
-            for (ChannelId channel : facts.recreatedChannels()) {
+            for (ChannelId channel : report.recreatedChannels()) {
                 if (receivedChannels.contains(channel)) {
                     throw new ParsleyFailClosedException(Reason.CHANNEL_IDENTITY_CHANGED,
                             "process " + processName + ": the topic of received channel " + channel
@@ -458,12 +503,7 @@ public final class ProcessEngine {
                 }
             }
         }
-        facts.committedNextRead().forEach((channel, nextRead) -> {
-            if (receivedChannels.contains(channel)) {
-                advanceFedUpTo(channel, nextRead - 1);
-            }
-        });
-        for (ChannelId channel : facts.deadChannels()) {
+        for (ChannelId channel : report.deadChannels()) {
             if (receivedChannels.contains(channel)) {
                 ArrayDeque<Hold> channelHeld = held.get(channel);
                 if (channelHeld != null && !channelHeld.isEmpty() && !sabotage.has(Sabotage.Mode.DELIVER_PAST_DEAD_HOLDS)) {
@@ -478,48 +518,10 @@ public final class ProcessEngine {
                 advanceFedUpTo(channel, FED_TO_END_OF_CHANNEL);
             }
         }
-        for (ChannelId channel : receivedChannels) {
-            Long logStart = facts.logStart().get(channel);
-            if (logStart == null || sabotage.has(Sabotage.Mode.IGNORE_TRUNCATION)) {
-                continue;
-            }
-            // The check runs against the settled position, not the fed one (D104). A held
-            // message has advanced fedUpTo past itself, so a log start that has crossed the
-            // head of the buffer would pass a fed-based check while the substrate has
-            // discarded a message this process still owes. Its senders prune it on the same
-            // evidence (Structural 13), and their later sends then express nothing about it:
-            // delivering those past the hold would invert causal order with no refusal
-            // anywhere — the retention dual of D46's deleted channel.
-            ArrayDeque<Hold> channelHeld = held.get(channel);
-            if (channelHeld != null && !channelHeld.isEmpty()) {
-                long head = channelHeld.peekFirst().position;
-                if (logStart > head) {
-                    throw new ParsleyFailClosedException(Reason.POSITIONS_DISCARDED_UNREAD,
-                            "process " + processName + ": " + channel + " earliest retained position " + logStart
-                                    + " is beyond the held message at position " + head + ", which this process"
-                                    + " received but has not delivered. The substrate discarded it while it waited"
-                                    + " for a cause, and its senders may since have pruned it from the causes they"
-                                    + " express, so its place in causal order can no longer be preserved (SPEC"
-                                    + " Assumption 10 breached, Safety 8). Retention must cover hold-back time;"
-                                    + " reset the process's state and group offsets deliberately to proceed.");
-                }
-                continue;
-            }
-            Long base = fedUpTo.get(channel);
-            if (base != null && base != FED_TO_END_OF_CHANNEL && logStart > base + 1) {
-                throw new ParsleyFailClosedException(Reason.POSITIONS_DISCARDED_UNREAD,
-                        "process " + processName + ": " + channel + " earliest retained position " + logStart
-                                + " is beyond this process's covered position " + base);
-            }
-        }
 
         List<ChannelId> prune = null;
-        for (var entry : frontier.entrySet()) {
-            ChannelId channel = entry.getKey();
-            Long logStart = facts.logStart().get(channel);
-
-            boolean dead = facts.deadChannels().contains(channel) || facts.recreatedChannels().contains(channel);
-            if (dead || (logStart != null && entry.getValue() < logStart)) {
+        for (ChannelId channel : frontier.keySet()) {
+            if (report.deadChannels().contains(channel) || report.recreatedChannels().contains(channel)) {
                 if (prune == null) {
                     prune = new ArrayList<>();
                 }
@@ -536,11 +538,8 @@ public final class ProcessEngine {
         }
 
         List<ChannelId> pastPrune = null;
-        for (var entry : deliveredPast.entrySet()) {
-            ChannelId channel = entry.getKey();
-            Long logStart = facts.logStart().get(channel);
-            if (facts.deadChannels().contains(channel) || facts.recreatedChannels().contains(channel)
-                    || (logStart != null && entry.getValue() < logStart)) {
+        for (ChannelId channel : deliveredPast.keySet()) {
+            if (report.deadChannels().contains(channel) || report.recreatedChannels().contains(channel)) {
                 if (pastPrune == null) {
                     pastPrune = new ArrayList<>();
                 }

@@ -51,8 +51,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Establishes delivery order against a real broker under exactly-once semantics.
  *
- * <p>Covers causal chains, restart with held messages, causes on aborted positions, log
- * truncation, and a crash part-way through a step.
+ * <p>Covers causal chains, restart with held messages, a cause naming an aborted position,
+ * retention crossing a held message, log truncation, and a crash part-way through a step.
  */
 class EndToEndIntegrationTest {
     private static KafkaClusterTestKit cluster;
@@ -83,7 +83,7 @@ class EndToEndIntegrationTest {
     private static ParsleyConfig config(String prefix) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(prefix).toString())
-                .factsInterval(Duration.ofMillis(500))
+                .statusInterval(Duration.ofMillis(500))
                 .build();
     }
 
@@ -246,7 +246,7 @@ class EndToEndIntegrationTest {
     private static ParsleyConfig instanceConfig(String prefix, String instanceDir) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(instanceDir).toString())
-                .factsInterval(Duration.ofMillis(500))
+                .statusInterval(Duration.ofMillis(500))
                 .build();
     }
 
@@ -312,9 +312,19 @@ class EndToEndIntegrationTest {
         }
     }
 
-    /** Cause on aborted positions resolves from read position reports. */
+    /**
+     * A cause naming a position no committed record occupies — here the abort marker of a
+     * transaction, a hand-built header exactly like an out-of-contract stamper's (wire-format
+     * constraint 8) — is held and visible in {@code status()}, neither rescued by a report nor
+     * refused: the blocker names the position and what the channel has settled to, the
+     * process stays healthy, and nothing delivers past the hold until a later record on the
+     * channel settles the run below it — receipt of gap-a@3 asserts everything below was fed
+     * or never will be, and B goes with it (D115). A parsley stamper never produces this
+     * header; the facts round that used to rescue it served stampers this library does not
+     * control.
+     */
     @Test
-    void causeOnAbortedPositionsResolvesFromReadPositionReports() throws Exception {
+    void causeNamingAnAbortedPositionIsHeldAndVisibleUntilALaterRecordSettlesIt() throws Exception {
         createTopics("gap-a", "gap-b");
         Channel<String, String> a = Channel.of("gap-a", Serdes.String(), Serdes.String());
         Channel<String, String> b = Channel.of("gap-b", Serdes.String(), Serdes.String());
@@ -334,23 +344,55 @@ class EndToEndIntegrationTest {
             produce("gap-a", "k", "A0");
             await("A0 delivered", () -> delivered.contains("A0"), Duration.ofSeconds(120));
 
+            // Offset 1 is the aborted record, offset 2 its abort marker: no committed record
+            // will ever occupy either, so a cause naming 2 is out of contract.
             produceAborted("gap-a", "ghost");
             produce("gap-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("gap-a"), 0), 2L)));
 
-            await("B freed by the read-position report over the aborted trailing run",
-                    () -> delivered.contains("B"), Duration.ofSeconds(120));
+            await("status to name the hold and its out-of-contract cause", () -> {
+                var tasks = parsley.status().get("pg").tasks();
+                if (tasks.size() != 1 || tasks.get(0).heldMessages() != 1) {
+                    return false;
+                }
+                var held = tasks.get(0).heldChannels().get(0);
+                return held.topic().equals("gap-b") && held.blockers().size() == 1
+                        && held.blockers().get(0).topic().equals("gap-a")
+                        && held.blockers().get(0).requiredPosition() == 2L
+                        && held.blockers().get(0).settledPosition().equals(java.util.OptionalLong.of(0L));
+            }, Duration.ofSeconds(30));
+            Thread.sleep(3_000);
+            assertEquals(List.of("A0"), List.copyOf(delivered), "no report and no clock rescues the hold");
+            assertTrue(parsley.healthy(), "an out-of-contract cause is held, not refused");
+
+            produce("gap-a", "k", "A3");
+            await("B to go once the record that settles the run below it is received",
+                    () -> delivered.contains("B") && delivered.contains("A3"), Duration.ofSeconds(120));
+            // B and A3 are causally independent — B names gap-a@2, not A3 — so once gap-a@3
+            // is received both are deliverable and their relative order is the drain's, not
+            // causal order. What is pinned: B went only after that receipt (the 3 s pause
+            // above showed it held), and nothing was dropped or delivered twice.
+            assertEquals(3, delivered.size(), "each message delivers exactly once");
+            assertEquals(java.util.Set.of("A0", "A3", "B"), java.util.Set.copyOf(delivered),
+                    "gap-a@3 settles positions 1..2 as never yielding, and B is released by that receipt");
+            assertEquals("A0", delivered.peek(), "A0 stays first");
             assertTrue(parsley.healthy());
         }
     }
 
-    /** Cause on trailing aborted run resolves even after a restart. */
+    /**
+     * Retention crossing a held message no longer stops the holder (D115 supersedes D104):
+     * the message it owes lives in the ordering changelog, its senders keep expressing it,
+     * and it delivers in causal order — here from a restart's changelog restore, after its
+     * copy on the topic was discarded — once its cause arrives. Assumption 10's intent, and
+     * strictly better liveness than a refusal.
+     */
     @Test
-    void causeOnTrailingAbortedRunResolvesEvenAfterARestart() throws Exception {
-        createTopics("gapr-a", "gapr-b");
-        Channel<String, String> a = Channel.of("gapr-a", Serdes.String(), Serdes.String());
-        Channel<String, String> b = Channel.of("gapr-b", Serdes.String(), Serdes.String());
+    void heldMessageDiscardedByRetentionStillDeliversInOrderFromTheChangelog() throws Exception {
+        createTopics("ret-a", "ret-b");
+        Channel<String, String> a = Channel.of("ret-a", Serdes.String(), Serdes.String());
+        Channel<String, String> b = Channel.of("ret-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition pg = ProcessDefinition.named("pgr")
+        ProcessDefinition pr = ProcessDefinition.named("pr")
                 .receives(a, (d, s) -> {
                     delivered.add(d.value());
                     return Effects.none();
@@ -361,18 +403,31 @@ class EndToEndIntegrationTest {
                 })
                 .build();
 
-        try (Parsley parsley = Parsley.start(config("gapr"), pg)) {
-            produce("gapr-a", "k", "A0");
-            await("A0 delivered", () -> delivered.contains("A0"), Duration.ofSeconds(120));
+        produce("ret-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("ret-a"), 0), 0L)));
+
+        try (Parsley parsley = Parsley.start(config("ret"), pr)) {
+            awaitFedAndHeld("ret-pr", "ret-b", delivered);
         }
 
-        produceAborted("gapr-a", "ghost");
-        produce("gapr-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("gapr-a"), 0), 2L)));
+        // Retention discards the held message's copy on its topic while the process is stopped.
+        TopicPartition retB = new TopicPartition("ret-b", 0);
+        admin.deleteRecords(Map.of(retB, RecordsToDelete.beforeOffset(1))).all().get(30, TimeUnit.SECONDS);
+        await("the log start of ret-b to pass the held message", () -> {
+            try {
+                return admin.listOffsets(Map.of(retB, org.apache.kafka.clients.admin.OffsetSpec.earliest()))
+                        .all().get(10, TimeUnit.SECONDS).get(retB).offset() == 1L;
+            } catch (Exception e) {
+                return false;
+            }
+        }, Duration.ofSeconds(30));
 
-        try (Parsley parsley = Parsley.start(config("gapr"), pg)) {
-            await("B freed after restart despite no record ever arriving on gapr-a again",
-                    () -> delivered.contains("B"), Duration.ofSeconds(120));
-            assertTrue(parsley.healthy());
+        try (Parsley parsley = Parsley.start(config("ret"), pr)) {
+            produce("ret-a", "k", "A");
+            await("A then B, with B restored from the changelog", () -> delivered.size() == 2,
+                    Duration.ofSeconds(120));
+            assertEquals(List.of("A", "B"), List.copyOf(delivered),
+                    "the held message delivers in causal order from the changelog, its topic copy gone");
+            assertTrue(parsley.healthy(), "retention crossing a held message is not a refusal");
         }
     }
 
@@ -407,6 +462,12 @@ class EndToEndIntegrationTest {
                     () -> !parsley.healthy(), Duration.ofSeconds(120));
             assertEquals(List.of("m0", "m1", "m2"), List.copyOf(delivered),
                     "nothing may be delivered past the discarded positions");
+            await("the consumer's out-of-range stop to reach status() with its reason",
+                    () -> parsley.status().get("pt").refusalReason().isPresent(), Duration.ofSeconds(30));
+            assertEquals(io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException.Reason
+                            .POSITIONS_DISCARDED_UNREAD,
+                    parsley.status().get("pt").refusalReason().orElseThrow(),
+                    "the fetch is the one judge of retention, and its stop names Safety 8's condition (D109)");
         } finally {
             parsley.close();
         }

@@ -13,6 +13,7 @@ import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -56,6 +57,24 @@ class SubstrateDetectedStopStatusTest {
         assertEquals(ParsleyFailClosedException.Reason.SUBSTRATE_MISCONFIGURED, refusal.reason(),
                 "a record too large for the changelog is a substrate limit, not a transient");
         assertTrue(refusal.getMessage().contains("max.message.bytes"), refusal.getMessage());
+    }
+
+    /**
+     * A received topic missing at a rebalance stays transient (D115): a restart either
+     * resumes it — the topic merely lagged in a broker's metadata — or refuses with the
+     * start path's own diagnosis of what became of it, so the stop itself carries no reason.
+     */
+    @Test
+    void aMissingSourceTopicStaysATransientWithNoRefusalReason() {
+        ParsleyRuntime runtime = new ParsleyRuntime(null);
+        StreamsException stop = new StreamsException("stream thread died",
+                new org.apache.kafka.streams.errors.MissingSourceTopicException(
+                        "One or more source topics were missing during rebalance"));
+        runtime.recordFailure("p", stop);
+        assertSame(stop, runtime.recordedFailure("p"),
+                "the stop is recorded — status() and awaitStopped depend on it — merely without a reason");
+        assertNull(ParsleyFailClosedException.findIn(runtime.recordedFailure("p")),
+                "a missing source topic is diagnosed by the restart, so it must not read as a deliberate stop");
     }
 
     /** A stop a restart resolves stays transient: no refusal reason. */

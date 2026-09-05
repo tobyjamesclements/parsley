@@ -59,7 +59,7 @@ class ConcurrentColdStartIntegrationTest {
     private static ParsleyConfig config(String prefix, String instance) {
         return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
                 .stateDir(stateDir.resolve(prefix + "-" + instance).toString())
-                .factsInterval(Duration.ofMillis(500))
+                .statusInterval(Duration.ofMillis(500))
                 .build();
     }
 

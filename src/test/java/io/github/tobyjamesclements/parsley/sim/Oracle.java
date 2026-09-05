@@ -267,4 +267,9 @@ public final class Oracle {
     public List<String> violations() {
         return List.copyOf(violations);
     }
+
+    /** Records a violation the simulated host observed at the moment it happened. */
+    public void flag(String violation) {
+        violations.add(violation);
+    }
 }

@@ -56,9 +56,9 @@ by reordering, skipping, or adding a timeout. Where the guarantee cannot be uphe
   `Effects`, `StateReader`, `ProcessStatus` with its per-task `TaskStatus`, and
   `KafkaNames`, the one spelling of the topic-name rule every declared name satisfies.
 - `…/parsley/kafka`, the Kafka Streams adapter: byte topologies (`ProcessTopology`,
-  `ParsleyProcessor`), position facts from the admin client (`AdminFactsSource`), the
-  store over a Streams state store (`StreamsOrderingStore`), and the EOS lifecycle
-  (`ParsleyRuntime`).
+  `ParsleyProcessor`), topic identity at task initialisation (`TopicIdentitySource`,
+  `AdminTopicIdentitySource`), the store over a Streams state store
+  (`StreamsOrderingStore`), and the EOS lifecycle (`ParsleyRuntime`).
 - `…/parsley/session`, the companion surface for session consistency at the pipeline's
   edge (issue #96, D99): `CausalPast`, a causal frontier carried as a client token or
   recorded beside projected data, with a coverage check that fails closed over channels
@@ -73,8 +73,10 @@ prove it catches each violation class.
 ## Verifying anything
 
 - `./mvnw verify` is the full gate: **the whole suite, green, roughly five minutes** (the
-  surefire summary prints the count; it was 716 at D113). It must be green at every commit,
-  and it grows. It never shrinks.
+  surefire summary prints the count; it was 716 at D113 and 698 at D115, after the facts
+  round's suites went with the round). It must be green at every commit, and it grows. It
+  shrinks only when a mechanism is deleted with its pins, and the record that deletes it
+  says so.
 - Three layers. Unit tests over the pure core and the `session` companion. A **simulation harness** driving real engines
   under a simulated host that honours the spec's Host obligations, over randomised topologies,
   interleavings, gaps from aborted transactions, crashes, restarts and offset rewinds,
@@ -126,7 +128,7 @@ an operator does with that diagnosis, one runbook per refusal reason. A reason a
 
 - Keep `core` pure. `CorePurityTest` will tell you if you did not.
 - No mock frameworks; hand-rolled test doubles behind the narrow seams (`OrderingStore`,
-  `FactsSource`).
+  `TopicIdentitySource`).
 - Every test that builds a Kafka Streams instance takes its `state.dir` from a JUnit
   `@TempDir`; shared directories contend on one RocksDB lock.
 - camelCase test method names, Javadoc on every `@Test`, assertion messages.

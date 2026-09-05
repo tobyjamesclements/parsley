@@ -7,12 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.LongStream;
 
-import io.github.tobyjamesclements.parsley.core.ChannelId;
-import io.github.tobyjamesclements.parsley.core.EngineTestFactory;
 import io.github.tobyjamesclements.parsley.core.EngineTestFactory.SabotageMode;
-import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
-import io.github.tobyjamesclements.parsley.core.PositionFacts;
-import io.github.tobyjamesclements.parsley.core.ProcessEngine;
 import io.github.tobyjamesclements.parsley.sim.TargetedScenarioTest.Rig;
 
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
@@ -29,6 +24,27 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * makes the rest of the suite load-bearing.
  */
 class SabotageMetaTest {
+    /**
+     * A seed the sweep catches IGNORE_RECREATION on under the current generator (D43's
+     * rule). Assumption 2 is judged at the moment a process commits a step while receiving
+     * a dead incarnation whose name is bound to a live other id — the same judgement the
+     * host's identity report makes — rather than at the end of the run, where a process
+     * that later failed closed for another reason, or whose fresh incarnation was itself
+     * killed, used to be excused: 177 of 300 seeds catch the mode this way, against 5 of
+     * 300 judged at the end (D115).
+     */
+    static final long RECREATION_SEED = 1;
+    /** Half of the recreation catches measured over 300 seeds under the current generator (177). */
+    static final long RECREATION_FLOOR = 88;
+    /**
+     * Half of the host-reset catches measured over 120 seeds under the current generator
+     * (68: 42 through the Safety 8 obligation judged from world truth, the rest through the
+     * delivery-time Safety 1 check alone).
+     */
+    static final long HOST_RESET_FLOOR = 34;
+    /** A seed the sweep catches the host reset on through the Safety 8 obligation. */
+    static final long HOST_RESET_SEED = 4;
+
     /** Delivering despite unsatisfied causes is caught. */
     @Test
     void deliveringDespiteCausesIsCaught() {
@@ -102,41 +118,28 @@ class SabotageMetaTest {
                         + violations);
     }
 
-    /** Ignoring truncation is caught. */
-    @Test
-    void ignoringTruncationIsCaught() {
-        Rig rig = TargetedScenarioTest.truncation(SabotageMode.IGNORE_TRUNCATION);
-
-        assertDoesNotThrow(() -> rig.proc("p").ingestFacts(),
-                "the sabotage must disarm the refusal, or the oracle assertion below tests nothing");
-
-        List<String> violations = Scenario.run(4, SabotageMode.IGNORE_TRUNCATION).violations();
-        assertTrue(violations.stream().anyMatch(v -> v.startsWith("Safety 8")),
-                () -> "seed 4 must catch the engine sailing past truncation, got: " + violations);
-    }
-
     /**
-     * Delivering past a hold that retention discarded inverts causal order and the oracle
-     * sees it (D104): with the log-start check disarmed, the holder delivers the effect B,
-     * whose sender legally pruned the discarded cause, before the held cause X. Both the
-     * delivery-time check (a cause this process still holds is never settled by world
-     * truth) and the end-of-run pair check flag it.
+     * A host that resets a read position past discarded positions — {@code auto.offset.reset=earliest}
+     * where D9 pins {@code none} — is caught by the harness's Safety 8 obligation, judged
+     * from world truth the host cannot launder: a committed record between where the process
+     * first read the channel and where it committed reading to that was never fed to it. The
+     * engine no longer checks retention (D115), so the fault is the host's: the simulated
+     * host's fetch refusal is disarmed, the process reads on past the gap, and the scenario
+     * flags the records it skipped — whether or not a message depending on one of them is
+     * later delivered, which is the only shape the delivery-time Safety 1 check sees.
      */
     @Test
-    void deliveringPastARetentionDiscardedHoldInvertsCausalOrderAndTheOracleSeesIt() {
-        Rig rig = TargetedScenarioTest.retentionCrossesAHeldMessage(SabotageMode.IGNORE_TRUNCATION);
+    void aHostResettingPastDiscardedPositionsIsCaught() {
+        Rig rig = TargetedScenarioTest.truncation(SabotageMode.NONE);
         SimProcess p = rig.proc("p");
-        assertDoesNotThrow(p::ingestFacts, "the sabotage must disarm the refusal, or the assertion below tests nothing");
-        p.feedOne(rig.chans.get("b"));
-        p.feedOne(rig.chans.get("w"));
-        p.drain();
-        p.commitStep();
-        List<String> violations = rig.violationsAfterFinalChecks();
-        assertTrue(violations.stream().anyMatch(v -> v.startsWith("Safety 1 (delivery-time)")),
-                () -> "expected the delivery-time check to flag the effect delivered past its held cause, got: "
-                        + violations);
-        assertTrue(violations.stream().anyMatch(v -> v.startsWith("Safety 1:")),
-                () -> "expected the pair check to flag the inversion once X delivers, got: " + violations);
+        p.hostFault(SimProcess.HostFault.RESET_PAST_LOG_START);
+        assertDoesNotThrow(() -> p.feedOne(rig.chans.get("c1")),
+                "the host fault must disarm the fetch refusal, or the assertion below tests nothing");
+
+        List<String> violations = Scenario.run(HOST_RESET_SEED, SabotageMode.NONE,
+                SimProcess.HostFault.RESET_PAST_LOG_START).violations();
+        assertTrue(violations.stream().anyMatch(v -> v.startsWith("Safety 8")),
+                () -> "seed " + HOST_RESET_SEED + " must catch the host sailing past truncation, got: " + violations);
     }
 
     /** Starting without a removed held channel is caught. */
@@ -165,14 +168,13 @@ class SabotageMetaTest {
     void ignoringRecreationIsCaught() {
         Rig rig = TargetedScenarioTest.recreatedTopic(SabotageMode.IGNORE_RECREATION);
 
-        assertDoesNotThrow(() -> rig.proc("p").ingestFacts(),
+        assertDoesNotThrow(() -> rig.proc("p").reinitialise(),
                 "the sabotage must disarm the refusal, or the oracle assertion below tests nothing");
 
-        // Re-pinned from seed 65 when D104 biased the sweep's truncation events toward held
-        // channels; 13 of 300 seeds catch this mode under the current generator, 17 the first.
-        List<String> violations = Scenario.run(17, SabotageMode.IGNORE_RECREATION).violations();
+        List<String> violations = Scenario.run(RECREATION_SEED, SabotageMode.IGNORE_RECREATION).violations();
         assertTrue(violations.stream().anyMatch(v -> v.startsWith("Assumption 2")),
-                () -> "seed 17 must catch the engine running across a recreation, got: " + violations);
+                () -> "seed " + RECREATION_SEED + " must catch the engine running across a recreation, got: "
+                        + violations);
     }
 
     /**
@@ -186,7 +188,8 @@ class SabotageMetaTest {
     void deliveringPastDeadChannelHoldsIsCaught() {
         Rig rig = TargetedScenarioTest.deadChannelWithHeldMessages(SabotageMode.DELIVER_PAST_DEAD_HOLDS);
 
-        assertDoesNotThrow(() -> rig.proc("p").ingestFacts());
+        assertDoesNotThrow(() -> rig.proc("p").reinitialise(),
+                "the sabotage must disarm the refusal, or the oracle assertion below tests nothing");
     }
 
     /** Delivering past dead channel holds inverts causal order and the oracle sees it. */
@@ -218,12 +221,12 @@ class SabotageMetaTest {
         p.commitStep();
 
         rig.world.killChannel(cx);
-        q.ingestFacts();
+        q.reinitialise();
         q.feedOne(ct);
         q.drain();
         q.commitStep();
 
-        p.ingestFacts();
+        p.reinitialise();
         p.feedOne(cq);
         p.feedOne(c9);
         p.feedOne(c9);
@@ -247,21 +250,22 @@ class SabotageMetaTest {
     /** Random sweep catches broken engines with margin. */
     @Test
     void randomSweepCatchesBrokenEnginesWithMargin() {
-        // Half of the catches measured over these 120 seeds after D104 biased truncation
-        // toward held channels and D106 decorrelated timestamps (D43's rule; counts in D112).
+        // Half of the catches measured over these 120 seeds after D115 retired the facts
+        // event, re-initialised a lost topic's receivers at the event, and stopped clamping
+        // rewinds to the log start (D43's rule; counts in D115): 74, 14, 83, 87, 83, 59, 19,
+        // 29 and 93.
         Map<SabotageMode, Integer> floors = new EnumMap<>(SabotageMode.class);
-        floors.put(SabotageMode.IGNORE_CAUSES, 29);
-        floors.put(SabotageMode.NO_FIFO, 5);
-        floors.put(SabotageMode.REDELIVER_REFEEDS, 28);
-        floors.put(SabotageMode.UNDECODABLE_AS_ABSENT, 39);
-        floors.put(SabotageMode.SKIP_RECEIPT_MERGE, 28);
-        floors.put(SabotageMode.DROP_HELD, 37);
-        floors.put(SabotageMode.IGNORE_TRUNCATION, 25);
-        floors.put(SabotageMode.IGNORE_REMOVED_CHANNELS, 16);
-        floors.put(SabotageMode.SILENT_DROP, 15);
-        floors.put(SabotageMode.OVEREXPRESS, 41);
-        // DELIVER_PAST_DEAD_HOLDS and TREAT_COVERED_FEED_AS_REPLAY have no floor: calibration
-        // found 0 catches in 300 seeds for each. Their oracle evidence is deterministic.
+        floors.put(SabotageMode.IGNORE_CAUSES, 37);
+        floors.put(SabotageMode.NO_FIFO, 7);
+        floors.put(SabotageMode.REDELIVER_REFEEDS, 41);
+        floors.put(SabotageMode.UNDECODABLE_AS_ABSENT, 43);
+        floors.put(SabotageMode.SKIP_RECEIPT_MERGE, 41);
+        floors.put(SabotageMode.DROP_HELD, 29);
+        floors.put(SabotageMode.IGNORE_REMOVED_CHANNELS, 9);
+        floors.put(SabotageMode.SILENT_DROP, 14);
+        floors.put(SabotageMode.OVEREXPRESS, 46);
+        // DELIVER_PAST_DEAD_HOLDS has no floor: calibration found 0 catches in 300 seeds. Its
+        // oracle evidence is deterministic.
         floors.forEach((mode, floor) -> {
             long caught = LongStream.rangeClosed(1, 120)
                     .filter(seed -> !Scenario.run(seed, mode).clean())
@@ -273,39 +277,15 @@ class SabotageMetaTest {
         long recreationCaught = LongStream.rangeClosed(1, 300)
                 .filter(seed -> !Scenario.run(seed, SabotageMode.IGNORE_RECREATION).clean())
                 .count();
-        assertTrue(recreationCaught >= 6, "sabotage mode IGNORE_RECREATION caught by only " + recreationCaught
-                + " of 300 seeds (floor 6, half of the calibrated 13): the sweep's margin for this mode has collapsed");
-    }
+        assertTrue(recreationCaught >= RECREATION_FLOOR, "sabotage mode IGNORE_RECREATION caught by only "
+                + recreationCaught + " of 300 seeds (floor " + RECREATION_FLOOR + ", half of the calibrated count):"
+                + " the sweep's margin for this mode has collapsed");
 
-    /**
-     * Silently dropping a feed at a report-covered position is caught. The mode disarms the
-     * refusal's silent-drop direction, which the random sweep cannot reach (D91: the harness
-     * derives read-position reports from a process's own progress, so a successor-ahead
-     * report never arises), so the evidence runs directly over {@link ProcessEngine}, the way
-     * {@code SupersessionTest} stages the honest refusal: the same shape that makes the honest
-     * engine refuse makes the sabotaged one drop the feed as a replay, which is what turns
-     * {@code ProcessEngineTest#feedAtAReportCoveredPositionFailsClosedAsCoveredPositionFed}
-     * red. This mode carries no sweep floor.
-     */
-    @Test
-    void treatingACoveredFeedAsAReplayIsCaught() {
-        ChannelId c1 = new ChannelId(new java.util.UUID(12, 1), 0);
-        Map<ChannelId, String> received = Map.of(c1, "c1");
-        for (SabotageMode mode : List.of(SabotageMode.NONE, SabotageMode.TREAT_COVERED_FEED_AS_REPLAY)) {
-            ProcessEngine engine = EngineTestFactory.create("p", received, new MemoryOrderingStore(), mode);
-            engine.onReceive(EngineTestFactory.plain(c1, 2, "A"));
-            engine.markDelivered(c1, 2);
-            engine.onFacts(new PositionFacts(Map.of(c1, 10L), Map.of(), java.util.Set.of()));
-            if (mode == SabotageMode.NONE) {
-                ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
-                        () -> engine.onReceive(EngineTestFactory.plain(c1, 7, "M")),
-                        "the honest engine refuses a feed the report already covered");
-                assertEquals(ParsleyFailClosedException.Reason.COVERED_POSITION_FED, e.reason());
-            } else {
-                assertEquals(ProcessEngine.ReceiveOutcome.DUPLICATE_DROPPED,
-                        assertDoesNotThrow(() -> engine.onReceive(EngineTestFactory.plain(c1, 7, "M"))),
-                        "the sabotage must disarm the refusal into a silent drop, or the pin tests nothing");
-            }
-        }
+        long hostResetCaught = LongStream.rangeClosed(1, 120)
+                .filter(seed -> !Scenario.run(seed, SabotageMode.NONE, SimProcess.HostFault.RESET_PAST_LOG_START).clean())
+                .count();
+        assertTrue(hostResetCaught >= HOST_RESET_FLOOR, "host fault RESET_PAST_LOG_START caught by only "
+                + hostResetCaught + " of 120 seeds (floor " + HOST_RESET_FLOOR + "): the sweep's margin for the"
+                + " host fault has collapsed");
     }
 }

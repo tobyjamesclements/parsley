@@ -34,20 +34,94 @@ class ProcessEngineTest {
                 List.of(new HeaderKV(CausesCodec.HEADER_KEY, header)));
     }
 
-    /** Holds until facts settle the cause. */
+    /**
+     * A cause is satisfied by receiving and delivering the message it names, and by nothing
+     * else (D115): the effect waits while the cause's position is unreceived, waits while
+     * the cause is received but undelivered, and goes once the cause has been delivered.
+     */
     @Test
-    void holdsUntilFactsSettleTheCause() {
+    void holdsUntilTheCauseItNamesIsDelivered() {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         engine.onReceive(caused(C2, 0, "B", Map.of(C1, 3L)));
-        assertTrue(engine.nextDeliverable().isEmpty());
+        assertTrue(engine.nextDeliverable().isEmpty(), "c1@3 has not been received");
 
-        engine.onFacts(new PositionFacts(Map.of(C1, 4L), Map.of(), Set.of()));
+        engine.onReceive(plain(C1, 3, "A"));
+        Deliverability.Verdict effectWhileCauseHeld = engine.headVerdict(C2).orElseThrow();
+        assertTrue(effectWhileCauseHeld instanceof Deliverability.Held,
+                "received but undelivered, the cause still holds the effect: " + effectWhileCauseHeld);
+        Deliverability.Blocker blocker = ((Deliverability.Held) effectWhileCauseHeld).blockers().get(0);
+        assertEquals(C1, blocker.channel(), "the blocker names the cause's channel");
+        assertEquals(3L, blocker.requiredPosition(), "the blocker names the cause's position");
+        assertEquals(java.util.OptionalLong.of(2), blocker.settledPosition(),
+                "the settled view stops below the held head, so c1@3 is not yet settled");
+        DeliverableMessage a = engine.nextDeliverable().orElseThrow();
+        assertEquals(C1, a.channel(), "the cause is offered first: the effect still waits behind the held cause");
+        engine.markDelivered(C1, 3);
         Optional<DeliverableMessage> next = engine.nextDeliverable();
-        assertTrue(next.isPresent());
+        assertTrue(next.isPresent(), "delivering c1@3 satisfies the cause");
         assertEquals("B", new String(next.get().value()));
         engine.markDelivered(C2, 0);
         assertEquals(0, engine.heldCountTotal());
+    }
+
+    /**
+     * A cause naming a position no record occupies — an aborted transaction's slot, a
+     * marker — is settled by the receipt of the next record on the channel and by nothing
+     * before it (SPEC Liveness 3 as D115 restates it): a record below the named position
+     * leaves the effect held with the gap still open, and the record after it, once
+     * delivered, releases the effect without the named position ever being fed.
+     */
+    @Test
+    void aGapBelowAReceivedRecordIsSettledByThatReceiptAndNothingBeforeIt() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
+        engine.onReceive(caused(C2, 0, "B", Map.of(C1, 2L)));
+        engine.onReceive(plain(C1, 1, "A1"));
+        engine.markDelivered(C1, 1);
+        Deliverability.Verdict verdict = engine.headVerdict(C2).orElseThrow();
+        assertTrue(verdict instanceof Deliverability.Held, "c1@1 settles nothing at or above 2: " + verdict);
+        assertEquals(java.util.OptionalLong.of(1),
+                ((Deliverability.Held) verdict).blockers().get(0).settledPosition());
+        assertTrue(engine.nextDeliverable().isEmpty(), "nothing but a record at or past c1@2 releases the effect");
+
+        engine.onReceive(plain(C1, 3, "A3"));
+        engine.markDelivered(C1, 3);
+        Optional<DeliverableMessage> next = engine.nextDeliverable();
+        assertTrue(next.isPresent(), "receipt of c1@3 settles 2 as never yielding a message");
+        assertEquals("B", new String(next.get().value()));
+    }
+
+    /**
+     * The host's start position raises coverage to just below it (SPEC Host obligation 2,
+     * Structural 12): a cause below the start position is satisfied without the message
+     * ever being received, a feed below it is a replay dropped rather than a contradiction
+     * refused, coverage the store already holds is never lowered, and a start position of
+     * zero, or one for a channel not received, changes nothing (D115).
+     */
+    @Test
+    void aStartPositionCoversEverythingBelowItWithinTheSessionFloor() {
+        MemoryOrderingStore store = new MemoryOrderingStore();
+        ProcessEngine started = new ProcessEngine("p", BOTH, store, ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES,
+                Map.of(C1, 5L, C2, 0L, new ChannelId(new UUID(9, 3), 0), 9L));
+        assertEquals(java.util.OptionalLong.of(4), started.fedUpTo(C1), "coverage sits just below the start");
+        assertTrue(started.fedUpTo(C2).isEmpty(), "a start position of zero covers nothing");
+        assertEquals(Causes.none(), started.frontierSnapshot(), "a start position is coverage, not a cause");
+        started.onReceive(caused(C2, 0, "B", Map.of(C1, 4L)));
+        assertTrue(started.nextDeliverable().isPresent(), "a cause below the start position is satisfied");
+        started.markDelivered(C2, 0);
+        assertEquals(ProcessEngine.ReceiveOutcome.DUPLICATE_DROPPED, started.onReceive(plain(C1, 2, "old")),
+                "a feed below the start position is the host re-feeding a committed past: a replay, dropped");
+        assertEquals(ProcessEngine.ReceiveOutcome.ACCEPTED, started.onReceive(plain(C1, 5, "A5")),
+                "the start position itself is the first position fed");
+        started.markDelivered(C1, 5);
+        started.flushHolds();
+        store.commit();
+
+        ProcessEngine lower = new ProcessEngine("p", BOTH, store, ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES,
+                Map.of(C1, 3L));
+        assertEquals(java.util.OptionalLong.of(5), lower.fedUpTo(C1),
+                "a start position below the store's coverage never lowers it");
     }
 
     /** Frontier merges receipt delivery and stamps emissions. */
@@ -98,36 +172,15 @@ class ProcessEngineTest {
         assertEquals(ParsleyFailClosedException.Reason.OUT_OF_ORDER_FEED, e.reason());
     }
 
-    /**
-     * A feed at a position a read-position report covered is not a feed-order violation —
-     * in-execution order is checked separately — and carries its own reason: the report and
-     * the feed contradict each other, which is either a false report or this execution
-     * observing a successor's committed progress after being superseded.
-     */
+    /** A received channel reported recreated at initialisation fails closed. */
     @Test
-    void feedAtAReportCoveredPositionFailsClosedAsCoveredPositionFed() {
-        MemoryOrderingStore store = new MemoryOrderingStore();
-        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
-        engine.onReceive(plain(C1, 2, "A"));
-        engine.markDelivered(C1, 2);
-        engine.onFacts(new PositionFacts(Map.of(C1, 10L), Map.of(), Set.of()));
-
-        ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
-                () -> engine.onReceive(plain(C1, 7, "M")),
-                "a feed contradicting a read-position report must fail closed");
-        assertEquals(ParsleyFailClosedException.Reason.COVERED_POSITION_FED, e.reason(),
-                "the condition is a report/feed contradiction, not a host feed-order breach");
-    }
-
-    /** Recreated received channel fact fails closed. */
-    @Test
-    void recreatedReceivedChannelFactFailsClosed() {
+    void recreatedReceivedChannelReportFailsClosed() {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         engine.onReceive(plain(C1, 0, "M"));
         engine.markDelivered(C1, 0);
         ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
-                () -> engine.onFacts(new PositionFacts(Map.of(), Map.of(), Set.of(C1), Set.of(C1))),
+                () -> engine.onIdentityReport(new IdentityReport(Set.of(), Set.of(C1))),
                 "a received topic recreated under its name means the feed path can no longer be trusted");
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
     }
@@ -143,7 +196,7 @@ class ProcessEngineTest {
         assertEquals(Causes.of(Map.of(C1, 0L, foreign, 7L)),
                 CausesCodec.decode(engine.causesHeaderForEmission()));
 
-        engine.onFacts(new PositionFacts(Map.of(), Map.of(), Set.of(), Set.of(foreign)));
+        engine.onIdentityReport(new IdentityReport(Set.of(), Set.of(foreign)));
         assertEquals(Causes.of(Map.of(C1, 0L)), CausesCodec.decode(engine.causesHeaderForEmission()),
                 "a recreated topic's old incarnation can no longer matter (SPEC Structural 13)");
     }
@@ -196,8 +249,7 @@ class ProcessEngineTest {
         assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
                 "after a position-raising re-merge of a tracked channel, which must not re-count it");
 
-        engine.onFacts(new PositionFacts(Map.of(), Map.of(),
-                Set.of(new ChannelId(new UUID(40, 1), 1)), Set.of()));
+        engine.onIdentityReport(new IdentityReport(Set.of(new ChannelId(new UUID(40, 1), 1)), Set.of()));
         assertEquals(4, engine.frontierSize(), "staging: the dead channel must actually leave the frontier");
         assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
                 "after pruning a mid-group partition");
@@ -216,8 +268,7 @@ class ProcessEngineTest {
         assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
                 "with a 130-partition group and 128 distinct topics, both count varints two bytes wide");
 
-        engine.onFacts(new PositionFacts(Map.of(), Map.of(),
-                Set.of(new ChannelId(new UUID(40, 2), 300)), Set.of()));
+        engine.onIdentityReport(new IdentityReport(Set.of(new ChannelId(new UUID(40, 2), 300)), Set.of()));
         assertEquals(257, engine.frontierSize(),
                 "staging: the emptied topic's only channel must actually leave the frontier");
         assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),
@@ -282,9 +333,9 @@ class ProcessEngineTest {
         engine.flushHolds();
         store.commit();
 
-        ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
+        ProcessEngine restarted = new ProcessEngine("p", BOTH, store, ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES,
+                Map.of(C1, 9L));
         assertEquals(1, restarted.heldCount(C2));
-        restarted.onFacts(new PositionFacts(Map.of(C1, 9L), Map.of(), Set.of()));
         DeliverableMessage message = restarted.nextDeliverable().orElseThrow();
         assertEquals("held", new String(message.value()));
         assertEquals("held", new String(message.key()));
@@ -342,22 +393,6 @@ class ProcessEngineTest {
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
     }
 
-    /** Truncation covered by the same facts batch does not fail closed. */
-    @Test
-    void truncationCoveredByTheSameFactsBatchDoesNotFailClosed() {
-        MemoryOrderingStore store = new MemoryOrderingStore();
-        ProcessEngine engine = new ProcessEngine("p", BOTH, store);
-        engine.onReceive(plain(C1, 5, "M"));
-        engine.markDelivered(C1, 5);
-
-        engine.onFacts(new PositionFacts(Map.of(C1, 11L), Map.of(C1, 11L), Set.of()));
-        assertEquals(java.util.OptionalLong.of(10), engine.fedUpTo(C1));
-
-        assertThrows(ParsleyFailClosedException.class, () ->
-                        engine.onFacts(new PositionFacts(Map.of(C1, 11L), Map.of(C1, 20L), Set.of())),
-                "positions the report does not cover must still fail closed when discarded");
-    }
-
     /** Causes of a join clamp dropped message still bind sends. */
     @Test
     void causesOfAJoinClampDroppedMessageStillBindSends() throws Exception {
@@ -393,7 +428,7 @@ class ProcessEngineTest {
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         engine.onReceive(plain(C1, 0, "A"));
         engine.markDelivered(C1, 0);
-        engine.onFacts(new PositionFacts(Map.of(), Map.of(), Set.of(C1)));
+        engine.onIdentityReport(new IdentityReport(Set.of(C1), Set.of()));
         engine.flushHolds();
         store.commit();
 
@@ -415,27 +450,36 @@ class ProcessEngineTest {
         assertThrows(ParsleyFailClosedException.class, () -> new ProcessEngine("p", BOTH, store));
     }
 
-    /** Facts prune causes below log start and on dead channels. */
+    /**
+     * The one discarding Structural 13 permits after D115: a cause on a channel whose topic
+     * no longer exists leaves the frontier at the identity report, and a cause on a live
+     * channel is kept whatever the report says about others — there is no retention input
+     * left to prune by.
+     */
     @Test
-    void factsPruneCausesBelowLogStartAndOnDeadChannels() throws Exception {
+    void identityReportPrunesCausesOnDeadChannelsAndNothingElse() throws Exception {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         ChannelId foreign = new ChannelId(new UUID(9, 9), 0);
-        engine.onReceive(caused(C1, 0, "A", Map.of(foreign, 4L)));
+        ChannelId foreign2 = new ChannelId(new UUID(9, 10), 0);
+        engine.onReceive(caused(C1, 0, "A", Map.of(foreign, 4L, foreign2, 2L)));
         engine.markDelivered(C1, 0);
-        assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)),
+        assertEquals(Causes.of(Map.of(foreign, 4L, foreign2, 2L, C1, 0L)),
                 CausesCodec.decode(engine.causesHeaderForEmission()));
 
-        engine.onFacts(new PositionFacts(Map.of(), Map.of(foreign, 5L), Set.of()));
-        assertEquals(Causes.of(Map.of(C1, 0L)), CausesCodec.decode(engine.causesHeaderForEmission()),
-                "a cause below its channel's earliest retained position can no longer matter");
+        engine.onIdentityReport(new IdentityReport(Set.of(foreign2), Set.of()));
+        assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+                "a cause on a channel that no longer exists can no longer matter; every other cause stays");
 
-        ChannelId foreign2 = new ChannelId(new UUID(9, 10), 0);
-        engine.onReceive(caused(C1, 1, "B", Map.of(foreign2, 2L)));
-        engine.markDelivered(C1, 1);
-        engine.onFacts(new PositionFacts(Map.of(), Map.of(), Set.of(foreign2)));
-        assertEquals(Causes.of(Map.of(C1, 1L)), CausesCodec.decode(engine.causesHeaderForEmission()),
-                "a cause on a channel that no longer exists can no longer matter");
+        engine.onIdentityReport(IdentityReport.NONE);
+        assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)), CausesCodec.decode(engine.causesHeaderForEmission()),
+                "a report naming nothing prunes nothing");
+
+        engine.flushHolds();
+        store.commit();
+        ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
+        assertEquals(Causes.of(Map.of(foreign, 4L, C1, 0L)), CausesCodec.decode(restarted.causesHeaderForEmission()),
+                "the prune reached the store: a restart does not restore the dead channel's cause");
     }
 
     /** Joining channel whose old messages aged out starts cleanly from its pre committed position. */
@@ -448,9 +492,10 @@ class ProcessEngineTest {
         first.flushHolds();
         store.commit();
 
-        ProcessEngine second = new ProcessEngine("p", BOTH, store);
-        second.onFacts(new PositionFacts(Map.of(C1, 100L), Map.of(C1, 100L), Set.of()));
-        assertEquals(java.util.OptionalLong.of(99), second.fedUpTo(C1));
+        ProcessEngine second = new ProcessEngine("p", BOTH, store, ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES,
+                Map.of(C1, 100L));
+        assertEquals(java.util.OptionalLong.of(99), second.fedUpTo(C1),
+                "the joined channel's coverage is its start position less one, above the stale clamp");
     }
 
     /** Dead received channel with held messages refuses rather than settling. */
@@ -463,12 +508,12 @@ class ProcessEngineTest {
         store.commit();
 
         ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class,
-                () -> engine.onFacts(new PositionFacts(Map.of(), Map.of(), Set.of(C1))));
+                () -> engine.onIdentityReport(new IdentityReport(Set.of(C1), Set.of())));
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
 
         ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
         ParsleyFailClosedException again = assertThrows(ParsleyFailClosedException.class,
-                () -> restarted.onFacts(new PositionFacts(Map.of(), Map.of(), Set.of(C1))));
+                () -> restarted.onIdentityReport(new IdentityReport(Set.of(C1), Set.of())));
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, again.reason());
     }
 
@@ -479,7 +524,7 @@ class ProcessEngineTest {
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         engine.onReceive(caused(C2, 4, "B", Map.of(C1, 6L)));
 
-        engine.onFacts(new PositionFacts(Map.of(), Map.of(), Set.of(C1)));
+        engine.onIdentityReport(new IdentityReport(Set.of(C1), Set.of()));
         DeliverableMessage b = engine.nextDeliverable().orElseThrow();
         assertEquals(C2, b.channel());
         engine.markDelivered(C2, 4);
@@ -620,10 +665,10 @@ class ProcessEngineTest {
         generous.flushHolds();
         store.commit();
 
-        // Neither the restore path nor the facts round checks the budget, so both must pass
-        // here and the stop below is attributable to the emission check alone.
+        // Neither the restore path nor the identity report checks the budget, so both must
+        // pass here and the stop below is attributable to the emission check alone.
         ProcessEngine constricted = new ProcessEngine("p", BOTH, store, 64);
-        constricted.onFacts(PositionFacts.EMPTY);
+        constricted.onIdentityReport(IdentityReport.NONE);
         assertEquals(11, constricted.frontierSize(), "staging: the wide frontier was restored intact");
         assertTrue(constricted.frontierBytes() > 64,
                 "staging: the restored frontier already exceeds the shrunken budget");
@@ -712,7 +757,9 @@ class ProcessEngineTest {
         assertEquals(2, restarted.decodedHoldCount(),
                 "offering the heads to the decision decodes exactly the heads");
 
-        restarted.onFacts(new PositionFacts(Map.of(c3, 101L), Map.of(), Set.of()));
+        restarted.onReceive(plain(c3, 100, "settles-c2"));
+        assertEquals(c3, restarted.nextDeliverable().orElseThrow().channel(), "the c3 record delivers first");
+        restarted.markDelivered(c3, 100);
         Optional<DeliverableMessage> next = restarted.nextDeliverable();
         assertTrue(next.isPresent(), "C2's head is released once c3 settles past its cause");
         assertEquals(C2, next.get().channel(), "the head of C2 must be offered next");
@@ -737,10 +784,10 @@ class ProcessEngineTest {
         engine.flushHolds();
         store.commit();
 
-        ProcessEngine restarted = new ProcessEngine("p", BOTH, store);
-        restarted.onFacts(new PositionFacts(Map.of(C1, 4L), Map.of(), Set.of()));
+        ProcessEngine restarted = new ProcessEngine("p", BOTH, store, ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES,
+                Map.of(C1, 4L));
         Optional<DeliverableMessage> next = restarted.nextDeliverable();
-        assertTrue(next.isPresent(), "the cause settled, so the reloaded hold is deliverable");
+        assertTrue(next.isPresent(), "the cause lies below the start position, so the reloaded hold is deliverable");
         DeliverableMessage message = next.get();
         assertArrayEquals(received.key(), message.key(), "key reloaded byte for byte");
         assertArrayEquals(received.value(), message.value(), "value reloaded byte for byte");
@@ -802,7 +849,7 @@ class ProcessEngineTest {
      * The encoded frontier is computed once per change and handed out as a copy: two
      * emissions in one step share the encoding, an emission's bytes are the caller's to
      * alter, and every frontier mutation site — merge on receipt, merge on delivery, prune
-     * on facts — produces a fresh encoding (D102).
+     * on an identity report — produces a fresh encoding (D102).
      */
     @Test
     void theEmissionHeaderIsReusedUntilTheFrontierChangesAndHandedOutAsACopy() throws Exception {
@@ -830,7 +877,7 @@ class ProcessEngineTest {
         assertEquals(Causes.of(Map.of(C1, 4L, foreign, 6L)), CausesCodec.decode(engine.causesHeaderForEmission()),
                 "a delivery past the expressed position re-encodes");
 
-        engine.onFacts(new PositionFacts(Map.of(), Map.of(foreign, 7L), Set.of()));
+        engine.onIdentityReport(new IdentityReport(Set.of(foreign), Set.of()));
         assertEquals(Causes.of(Map.of(C1, 4L)), CausesCodec.decode(engine.causesHeaderForEmission()),
                 "a prune re-encodes without the pruned channel");
         assertEquals(engine.frontierBytes(), engine.causesHeaderForEmission().length,
@@ -840,9 +887,7 @@ class ProcessEngineTest {
     /**
      * Flushing after every receipt stays cheap while the buffer deepens: a flush writes the
      * holds taken in since the previous flush and never scans the buffer (D102). This is
-     * one of the suite's two wall-clock bounds (the other, in
-     * {@code ProbeIdleChannelCostIntegrationTest}, times a real broker's probe), chosen
-     * with a wide margin: 50,000 receipts each
+     * the suite's one wall-clock bound, chosen with a wide margin: 50,000 receipts each
      * followed by a flush complete in well under a second here, where a flush that scanned
      * every hold would spend on the order of twenty seconds in the scan alone.
      */
@@ -900,12 +945,12 @@ class ProcessEngineTest {
     }
 
     /**
-     * A delivered-past entry that facts pruned below its channel's earliest retained position
-     * must not resurface as a join clamp. Were it kept, the channel joining the received set
-     * would have its fed-up-to advanced to the stale past, leaving a coverage record for a
-     * channel this process never read; D74's start-time check then refuses a legitimate
-     * expiry restart on that channel as positions discarded unread. Coverage is the fed-up-to
-     * record alone, and a joined-never-read channel must leave none.
+     * A delivered-past entry pruned with its dead channel must not resurface as a join clamp.
+     * Were it kept, a channel of that identity joining the received set would have its
+     * fed-up-to advanced to the stale past, leaving a coverage record for a channel this
+     * process never read, and the bootstrap would resume the channel from it (D115).
+     * Coverage is the fed-up-to record alone, and a joined-never-read channel must leave
+     * none.
      */
     @Test
     void aPrunedDeliveredPastEntryDoesNotBecomeCoverageWhenItsChannelJoins() {
@@ -913,18 +958,18 @@ class ProcessEngineTest {
         ProcessEngine first = new ProcessEngine("p", Map.of(C1, "c1"), store);
         first.onReceive(caused(C1, 0, "A", Map.of(C2, 5L)));
         first.markDelivered(C1, 0);
-        first.onFacts(new PositionFacts(Map.of(), Map.of(C2, 100L), Set.of()));
+        first.onIdentityReport(new IdentityReport(Set.of(C2), Set.of()));
         first.flushHolds();
         store.commit();
 
         ProcessEngine joined = new ProcessEngine("p", BOTH, store);
         assertEquals(java.util.OptionalLong.empty(), joined.fedUpTo(C2),
-                "a channel whose delivered past aged out must join with no clamp");
+                "a channel whose delivered past was pruned must join with no clamp");
         Map<byte[], byte[]> image = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
         store.scanPrefix(new byte[0], image::put);
         assertEquals(Map.of(C1, 0L), OrderingStateInspector.coveredPositions(image),
-                "the joined channel must leave no fed-up-to record: a start-time coverage check would"
-                        + " otherwise refuse its re-established position as discarded unread (D74)");
+                "the joined channel must leave no fed-up-to record: the bootstrap would otherwise resume"
+                        + " it from coverage this process never had");
     }
 
     /**
@@ -950,7 +995,7 @@ class ProcessEngineTest {
                 "with a 129-partition group, the partition count two varint bytes wide");
 
         for (int remaining = 128; remaining >= 126; remaining--) {
-            engine.onFacts(new PositionFacts(Map.of(), Map.of(), Set.of(new ChannelId(wideTopic, remaining))));
+            engine.onIdentityReport(new IdentityReport(Set.of(new ChannelId(wideTopic, remaining)), Set.of()));
             assertEquals(remaining, engine.frontierSize(),
                     "staging: the pruned partition must actually leave the frontier");
             assertEquals(engine.causesHeaderForEmission().length, engine.frontierBytes(),

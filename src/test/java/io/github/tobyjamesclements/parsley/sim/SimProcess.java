@@ -15,8 +15,8 @@ import io.github.tobyjamesclements.parsley.core.CausesCodec;
 import io.github.tobyjamesclements.parsley.core.ChannelId;
 import io.github.tobyjamesclements.parsley.core.DeliverableMessage;
 import io.github.tobyjamesclements.parsley.core.HeaderKV;
+import io.github.tobyjamesclements.parsley.core.IdentityReport;
 import io.github.tobyjamesclements.parsley.core.ParsleyFailClosedException;
-import io.github.tobyjamesclements.parsley.core.PositionFacts;
 import io.github.tobyjamesclements.parsley.core.ProcessEngine;
 import io.github.tobyjamesclements.parsley.core.ReceivedMessage;
 import io.github.tobyjamesclements.parsley.sim.SimWorld.SimChannel;
@@ -24,9 +24,27 @@ import io.github.tobyjamesclements.parsley.core.EngineTestFactory;
 
 /**
  * A simulated process: its declaration, its engine, and its lifecycle.
+ *
+ * <p>The simulated host honours the host obligations the way the Kafka Streams host does
+ * after D115: it feeds each channel in order from its committed read position, hands the
+ * engine that position at start (Host obligation 2), reports channel identity at start
+ * and never between deliveries, and refuses a fetch below a channel's earliest retained
+ * position the way {@code auto.offset.reset=none} does — as a {@code POSITIONS_DISCARDED_UNREAD}
+ * stop raised by the host, not by the engine (SPEC Safety 8, Assumption 15).
  */
 public final class SimProcess {
-    public enum FeedResult { FED, NOTHING, STALLED }
+    public enum FeedResult { FED, NOTHING }
+
+    /**
+     * A deliberate host fault, the host-side counterpart of {@link EngineTestFactory.SabotageMode}:
+     * the engine no longer checks retention, so the proof that the harness catches a host
+     * sailing past discarded positions has to break the host, not the engine.
+     */
+    public enum HostFault {
+        NONE,
+        /** Reset a read position below the log start to the log start, as {@code auto.offset.reset=earliest} would. */
+        RESET_PAST_LOG_START
+    }
 
     final String name;
     private final SimWorld world;
@@ -49,7 +67,7 @@ public final class SimProcess {
 
     private final Map<ChannelId, Long> highWaterNextRead = new HashMap<>();
 
-    private final java.util.Set<ChannelId> confirmedRecreated = new java.util.TreeSet<>();
+    private HostFault hostFault = HostFault.NONE;
 
     @FunctionalInterface
     public interface SimLogic {
@@ -84,6 +102,16 @@ public final class SimProcess {
         this.sendChannels = List.copyOf(channels);
     }
 
+    /** Breaks the host deliberately, for the sabotage meta-tests. */
+    public void hostFault(HostFault fault) {
+        this.hostFault = fault;
+    }
+
+    /**
+     * Starts an execution: builds the engine over the committed store with the host's
+     * committed read positions as its start positions, then reports channel identity — the
+     * one thing the host tells the engine about the world outside the feed (D115).
+     */
     public void start() {
         if (engine != null) {
             throw new IllegalStateException(name + " already started");
@@ -91,14 +119,35 @@ public final class SimProcess {
         failure = null;
         Map<ChannelId, String> names = new LinkedHashMap<>();
         received.forEach((id, channel) -> names.put(id, channel.name));
+        Map<ChannelId, Long> startPositions = new HashMap<>();
+        received.keySet().forEach(id -> startPositions.put(id, committedNextRead.get(id)));
         try {
-            engine = EngineTestFactory.create(name, names, store, sabotage);
+            engine = EngineTestFactory.create(name, names, store, sabotage, startPositions);
         } catch (ParsleyFailClosedException e) {
             store.rollback();
             throw e;
         }
         oracle.onStart(name);
-        ingestFacts();
+        try {
+            reportIdentity();
+        } catch (ParsleyFailClosedException e) {
+            // A refused initialisation leaves no running process behind it: the partial
+            // report's writes are rolled back with the open step, as the host's failed
+            // task initialisation leaves nothing committed.
+            crash();
+            throw e;
+        }
+    }
+
+    /**
+     * Re-initialises a running process the way the Kafka Streams host re-creates a task
+     * whose source topic went missing: the open step is abandoned, and the next start's
+     * identity report sees the change. A refusal at that start leaves the process failed
+     * closed, as the harness's guard records it.
+     */
+    public void reinitialise() {
+        crash();
+        start();
     }
 
     public void crash() {
@@ -162,8 +211,28 @@ public final class SimProcess {
         oracle.commitStep(name, List.copyOf(stepAppends));
         stepAppends.clear();
         openTxn = null;
+        // SPEC Assumption 2, judged at the moment it is breached rather than at the end of
+        // the run: a step committed while a received channel is a dead incarnation whose
+        // name is bound to a live other id — the same judgement reportIdentity makes — is a
+        // step taken on the wrong log. An honest engine never gets here, since the identity
+        // report at its re-initialisation refuses; so every such commit is a catch, whatever
+        // the process does afterwards, and a fresh incarnation killed later on hides nothing.
+        for (SimChannel channel : received.values()) {
+            if (recreated(channel)) {
+                oracle.flag("Assumption 2: " + name + " committed a step while its received topic ("
+                        + channel.name + ") had been deleted and recreated under the same name, without"
+                        + " failing closed");
+            }
+        }
     }
 
+    /**
+     * Feeds the next message of a channel, or reports that none is fetchable. A read
+     * position below the channel's earliest retained position is the substrate's to refuse
+     * (D9's {@code auto.offset.reset=none}): the host raises {@code POSITIONS_DISCARDED_UNREAD}
+     * for the fetch, exactly as {@code ParsleyRuntime.classifyFailure} names the consumer's
+     * out-of-range stop, and the engine never sees the discarded positions.
+     */
     public FeedResult feedOne(SimChannel channel) {
         ensureTxn();
         ChannelId id = channel.id();
@@ -172,7 +241,15 @@ public final class SimProcess {
         }
         long position = workingNextRead.get(id);
         if (position < channel.logStart) {
-            return FeedResult.STALLED;
+            if (hostFault == HostFault.RESET_PAST_LOG_START) {
+                position = channel.logStart;
+                workingNextRead.put(id, position);
+            } else {
+                throw new ParsleyFailClosedException(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
+                        "process " + name + ": the substrate no longer retains this process's read position "
+                                + position + " on " + channel.name + " (earliest retained " + channel.logStart
+                                + "); positions were discarded before they were read (SPEC Safety 8)");
+            }
         }
         long lso = world.lso(channel);
         while (position < lso && world.slot(channel, position) instanceof SimWorld.DeadSlot) {
@@ -215,14 +292,16 @@ public final class SimProcess {
 
     /**
      * The causes of {@code instance} that are settled by world truth at this moment: on a
-     * dead or recreated channel, truncated below the log start (the same excuses
-     * {@link #send} grants expression), or on a channel this process does not receive and so
-     * will never deliver. Judged at delivery time for the oracle's delivery-legality check.
+     * dead or recreated channel, below the position this process first read the channel
+     * from (SPEC Structural 12, Host obligation 2), or on a channel this process does not
+     * receive and so will never deliver. Judged at delivery time for the oracle's
+     * delivery-legality check. Retention excuses nothing here: a cause retention discarded
+     * before this process read it is one the fetch refuses, never one that settles (D115).
      *
      * <p>A cause this process has received and still holds is never settled, whatever the
      * world says of its channel: the process owes its delivery, and delivering an effect
-     * past it is the inversion D46 and D104 refuse. Without this the check was blind to
-     * exactly the shape those records exist for.
+     * past it is the inversion D46 refuses. Without this the check was blind to exactly the
+     * shape that record exists for.
      */
     private Set<Instance> settledCauses(Instance instance) {
         Set<Instance> settled = new java.util.HashSet<>();
@@ -236,7 +315,7 @@ public final class SimProcess {
                 continue;
             }
             SimWorld.SimChannel causeChannel = world.channel(cause.channel);
-            if (causeChannel != null && (causeChannel.dead || cause.position < causeChannel.logStart)) {
+            if (causeChannel != null && (causeChannel.dead || cause.position < initialNextRead(causeChannel))) {
                 settled.add(cause);
             }
         }
@@ -271,10 +350,13 @@ public final class SimProcess {
         Set<Instance> trueCauses = oracle.causalPastSnapshot(name);
         Map<ChannelId, Long> upperBound = oracle.expressionUpperBound(name);
 
+        // Only a dead channel excuses an unexpressed cause (SPEC Structural 13, 15): nothing
+        // is dropped for retention any more, so a cause below its channel's log start must
+        // still be expressed (D115).
         Set<Instance> excused = new java.util.HashSet<>();
         for (Instance cause : trueCauses) {
             SimChannel causeChannel = world.channel(cause.channel);
-            if (causeChannel != null && (causeChannel.dead || cause.position < causeChannel.logStart)) {
+            if (causeChannel != null && causeChannel.dead) {
                 excused.add(cause);
             }
         }
@@ -303,38 +385,49 @@ public final class SimProcess {
         }
     }
 
-    public void ingestFacts() {
+    /**
+     * The identity report the host gives the engine at start: every dead channel whose name
+     * now resolves to another channel is a recreated one, the rest are deleted. Positions
+     * are never reported (D115).
+     */
+    private void reportIdentity() {
         ensureTxn();
-        Map<ChannelId, Long> committed = new TreeMap<>();
-        Map<ChannelId, Long> logStarts = new TreeMap<>();
         Set<ChannelId> dead = new java.util.TreeSet<>();
         Set<ChannelId> recreated = new java.util.TreeSet<>();
         for (SimChannel channel : world.allChannels()) {
-            if (channel.dead) {
-                SimChannel current = world.currentByName(channel.name);
-                if (current != null && !current.id().equals(channel.id())) {
-                    confirmedRecreated.add(channel.id());
-                }
-
-                (confirmedRecreated.contains(channel.id()) ? recreated : dead).add(channel.id());
-
+            if (!channel.dead) {
                 continue;
             }
-            logStarts.put(channel.id(), channel.logStart);
-            Long next = committedNextRead.get(channel.id());
-            if (received.containsKey(channel.id()) && next != null) {
-                committed.put(channel.id(), next);
-            }
+            (recreated(channel) ? recreated : dead).add(channel.id());
         }
-        engine.onFacts(new PositionFacts(committed, logStarts, dead, recreated));
+        engine.onIdentityReport(new IdentityReport(dead, recreated));
     }
 
+    /**
+     * The simulator's one definition of a recreation: a dead channel whose name is bound
+     * to a live channel with another id. Both the identity report and the commit-time
+     * Assumption 2 judgement read it, so the two cannot disagree.
+     */
+    private boolean recreated(SimChannel channel) {
+        if (!channel.dead) {
+            return false;
+        }
+        SimChannel current = world.currentByName(channel.name);
+        return current != null && !current.id().equals(channel.id());
+    }
+
+    /**
+     * Moves the committed read position back, as an expiry restart re-establishing it from
+     * coverage does. The target is never clamped to the log start: a position the substrate
+     * no longer retains is the fetch's to refuse (SPEC Safety 8), never the host's to skip
+     * past, which is exactly the resume-at-log-start D115 retired.
+     */
     public void rewindCommitted(SimChannel channel, int back) {
         if (engine != null) {
             throw new IllegalStateException(name + " must be stopped to rewind offsets");
         }
         ChannelId id = channel.id();
-        long target = Math.max(channel.logStart, committedNextRead.get(id) - back);
+        long target = Math.max(0, committedNextRead.get(id) - back);
         committedNextRead.put(id, target);
         workingNextRead.put(id, target);
     }

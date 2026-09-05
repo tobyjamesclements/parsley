@@ -1,0 +1,251 @@
+package io.github.tobyjamesclements.parsley.kafka;
+
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.common.KafkaFuture;
+import org.apache.kafka.common.TopicCollection;
+import org.apache.kafka.common.Uuid;
+import org.apache.kafka.common.errors.InvalidTopicException;
+import org.apache.kafka.common.errors.TopicAuthorizationException;
+import org.apache.kafka.common.errors.UnknownTopicIdException;
+import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * Classifies topic identity through the admin client, once per task initialisation.
+ *
+ * <p>Every id a task's state names is described by id. One that still resolves is alive, and
+ * its name is learned. One that does not is not yet dead: a Describe denial masks a live
+ * topic as unknown by id, and a broker's metadata view can lag. So an unknown id is judged
+ * by its last-known name — declared at start, or learned at an earlier initialisation of
+ * this process — and only from three consistent answers half a second apart, the evidence
+ * standard the start path applies to the changelog and the declared topics (D84, D113).
+ * Two answers say the id asked about is dead: the name unknown, and the name resolving to
+ * another id. Three of those in a row confirm it, and the id is reported recreated if any
+ * of the three resolved the name elsewhere — a recreation completing between two answers is
+ * still a recreation — and deleted otherwise. A denial or the name resolving to the very id
+ * asked about (the by-id answer was stale) keeps the id alive. A describe that times out or
+ * fails is no answer at all: the id is reported unanswered, and the asker keeps its question
+ * pending and asks again, exactly as it does when the by-id describe fails. An id whose name
+ * was never learned is never confirmed dead at all (D75); it lingers in the frontier,
+ * costing expression size and never safety.
+ *
+ * <p>Every describe a resolve makes shares one deadline, {@link #TIMEOUT_SECONDS} from the
+ * first, so a call on the stream thread is bounded whatever the number of ids.
+ *
+ * <p>One instance serves every task of a process, so a name learned by one task's
+ * initialisation serves the next; the map is concurrent because tasks initialise on their
+ * own stream threads.
+ */
+class AdminTopicIdentitySource implements TopicIdentitySource {
+    private static final Logger LOG = LoggerFactory.getLogger(AdminTopicIdentitySource.class);
+    private static final long TIMEOUT_SECONDS = 10;
+    /** How many consistent by-name answers confirm a verdict (D113's standard). */
+    static final int CORROBORATING_ANSWERS = 3;
+
+    enum NameVerdict {
+        SAME_ID,
+        RECREATED,
+        NAME_GONE,
+        DENIED,
+        UNAVAILABLE
+    }
+
+    private final Admin admin;
+    private final String applicationId;
+    private final Map<UUID, String> namesById = new ConcurrentHashMap<>();
+    private final Duration corroborationBackoff;
+
+    /**
+     * @param admin                the admin client, shared with the runtime
+     * @param applicationId        the process's application id, for diagnostics
+     * @param declaredNames        the ids resolved at start, mapped to their declared names
+     * @param corroborationBackoff how long to wait between corroborating answers: half a
+     *                             second in production, ~zero in tests
+     */
+    AdminTopicIdentitySource(Admin admin, String applicationId, Map<UUID, String> declaredNames,
+                             Duration corroborationBackoff) {
+        this.admin = admin;
+        this.applicationId = applicationId;
+        this.namesById.putAll(declaredNames);
+        this.corroborationBackoff = corroborationBackoff;
+    }
+
+    @Override
+    public TopicIdentityVerdicts resolve(Set<UUID> topicIds) throws Exception {
+        if (topicIds.isEmpty()) {
+            return TopicIdentityVerdicts.NONE;
+        }
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(TIMEOUT_SECONDS);
+        Set<UUID> alive = describeByIds(topicIds, deadline);
+        Set<UUID> unknown = new HashSet<>(topicIds);
+        unknown.removeAll(alive);
+        if (unknown.isEmpty()) {
+            return TopicIdentityVerdicts.NONE;
+        }
+
+        Map<UUID, String> nameOf = new HashMap<>();
+        for (UUID id : unknown) {
+            String name = namesById.get(id);
+            if (name == null) {
+                // No name to corroborate against: a denial would look exactly like this,
+                // and absence of evidence is never evidence of deletion (D75).
+                LOG.debug("{}: topic id {} unknown by id and never named; keeping its causes", applicationId, id);
+            } else {
+                nameOf.put(id, name);
+            }
+        }
+        if (nameOf.isEmpty()) {
+            return TopicIdentityVerdicts.NONE;
+        }
+
+        // Every id here starts as a dead candidate; any keep-alive answer removes it. Both
+        // NAME_GONE and RECREATED say the id asked about is dead, so a run that mixes them
+        // still confirms death — and one that ever resolved the name elsewhere is a
+        // recreation, whether the new incarnation appeared before the first answer or
+        // between two of them.
+        Set<UUID> dead = new HashSet<>(nameOf.keySet());
+        Set<UUID> resolvedElsewhere = new HashSet<>();
+        Set<UUID> unanswered = new HashSet<>();
+        for (int answer = 0; answer < CORROBORATING_ANSWERS && !dead.isEmpty(); answer++) {
+            if (answer > 0) {
+                Thread.sleep(corroborationBackoff.toMillis());
+            }
+            // Only the ids still under corroboration are asked about again.
+            Set<String> names = new HashSet<>();
+            for (UUID id : dead) {
+                names.add(nameOf.get(id));
+            }
+            Map<String, Object> byName = describeByNames(names, deadline);
+            for (UUID id : Set.copyOf(dead)) {
+                NameVerdict verdict = classifyName(byName, nameOf.get(id), id);
+                switch (verdict) {
+                    case NAME_GONE -> { }
+                    case RECREATED -> resolvedElsewhere.add(id);
+                    case DENIED -> {
+                        dead.remove(id);
+                        LOG.warn("{}: describe denied for topic '{}' ({}); treating as denied, not dead",
+                                applicationId, nameOf.get(id), id);
+                    }
+                    case SAME_ID -> dead.remove(id);
+                    case UNAVAILABLE -> {
+                        // No answer is not an answer: the id is neither convicted nor
+                        // acquitted, and the asker will put the question again.
+                        dead.remove(id);
+                        unanswered.add(id);
+                    }
+                }
+            }
+        }
+        Set<UUID> deleted = new HashSet<>();
+        Set<UUID> recreated = new HashSet<>();
+        for (UUID id : dead) {
+            if (resolvedElsewhere.contains(id)) {
+                recreated.add(id);
+                LOG.warn("{}: topic '{}' was recreated; {} is a dead incarnation", applicationId, nameOf.get(id), id);
+            } else {
+                deleted.add(id);
+                LOG.info("{}: topic '{}' ({}) no longer exists; its causes can no longer matter",
+                        applicationId, nameOf.get(id), id);
+            }
+        }
+        if (!unanswered.isEmpty()) {
+            LOG.warn("{}: topic identity could not be corroborated for {}; asking again", applicationId, unanswered);
+        }
+        return new TopicIdentityVerdicts(deleted, recreated, unanswered);
+    }
+
+    /**
+     * Sends the by-id describe, one future per id: its own seam, so a scripted answer can
+     * fail one future and still run the real tolerate-or-abort classification.
+     */
+    Map<Uuid, KafkaFuture<TopicDescription>> describeByIdFutures(Set<UUID> topicIds) {
+        var uuids = topicIds.stream().map(TopicInfo::toKafkaUuid).toList();
+        return admin.describeTopics(TopicCollection.ofTopicIds(uuids)).topicIdValues();
+    }
+
+    /**
+     * Describes ids, learning the name of each one that resolves.
+     *
+     * @return the ids that resolved
+     * @throws Exception on any failure that is not the substrate's unknown-id answer: a
+     *         timeout or an outage is not evidence about any id, and the whole check is
+     *         skipped for this initialisation rather than concluded from it
+     */
+    Set<UUID> describeByIds(Set<UUID> topicIds, long deadline) throws Exception {
+        Set<UUID> alive = new HashSet<>();
+        for (var entry : describeByIdFutures(topicIds).entrySet()) {
+            UUID id = TopicInfo.toJavaUuid(entry.getKey());
+            try {
+                TopicDescription description = entry.getValue().get(remaining(deadline), TimeUnit.NANOSECONDS);
+                alive.add(id);
+                namesById.put(id, description.name());
+            } catch (ExecutionException e) {
+                // InvalidTopicException is the client's own answer for an id it deems
+                // unrepresentable (the reserved zero id), tolerated like unknown (D83).
+                if (e.getCause() instanceof UnknownTopicIdException
+                        || e.getCause() instanceof UnknownTopicOrPartitionException
+                        || e.getCause() instanceof InvalidTopicException) {
+                    continue;
+                }
+                throw e;
+            }
+        }
+        return alive;
+    }
+
+    /** The by-name describe: per name, the id it resolves to, or the {@link NameVerdict} it failed with. */
+    Map<String, Object> describeByNames(Set<String> names, long deadline) throws InterruptedException {
+        Map<String, Object> outcome = new HashMap<>();
+        if (names.isEmpty()) {
+            return outcome;
+        }
+        Map<String, KafkaFuture<TopicDescription>> futures = admin.describeTopics(names).topicNameValues();
+        for (var entry : futures.entrySet()) {
+            try {
+                TopicDescription description = entry.getValue().get(remaining(deadline), TimeUnit.NANOSECONDS);
+                outcome.put(entry.getKey(), TopicInfo.toJavaUuid(description.topicId()));
+            } catch (ExecutionException e) {
+                if (e.getCause() instanceof UnknownTopicOrPartitionException) {
+                    outcome.put(entry.getKey(), NameVerdict.NAME_GONE);
+                } else if (e.getCause() instanceof TopicAuthorizationException) {
+                    outcome.put(entry.getKey(), NameVerdict.DENIED);
+                } else {
+                    outcome.put(entry.getKey(), NameVerdict.UNAVAILABLE);
+                }
+            } catch (InterruptedException e) {
+                throw e;
+            } catch (Exception e) {
+                outcome.put(entry.getKey(), NameVerdict.UNAVAILABLE);
+            }
+        }
+        return outcome;
+    }
+
+    /** Nanoseconds left before the deadline, never negative: a spent deadline gives a zero wait. */
+    private static long remaining(long deadline) {
+        return Math.max(0, deadline - System.nanoTime());
+    }
+
+    private static NameVerdict classifyName(Map<String, Object> byNameOutcome, String name, UUID id) {
+        Object result = byNameOutcome.get(name);
+        if (result == null) {
+            return NameVerdict.UNAVAILABLE;
+        }
+        if (result instanceof UUID resolved) {
+            return resolved.equals(id) ? NameVerdict.SAME_ID : NameVerdict.RECREATED;
+        }
+        return (NameVerdict) result;
+    }
+}

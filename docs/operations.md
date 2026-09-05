@@ -22,14 +22,20 @@ topic refuses the start.
 
 ## What Parsley asks the cluster
 
-Beyond the Streams application's own consumer and producer, each start and each facts round
-uses the admin client and two plain consumers: describing topics by name and by id, listing
-the earliest offsets under `read_committed`, listing the group's committed offsets, and — at
-start when initial positions are missing — joining the group as a short-lived bootstrap
-member to commit them under the group's generation fence. A facts round also assigns a
-groupless consumer to the partitions a held head waits on and polls a few times, a second at
-most. The ACLs those need
-are Describe on every declared topic and on the group, Read on the group and on the received
+Beyond the Streams application's own consumer and producer, each start uses the admin client
+and up to two plain consumers: describing the declared topics by name, reading the ordering
+changelog for prior state where one exists, listing the group's committed offsets, listing
+the earliest or latest offset under `read_committed` — only for received partitions with
+neither a committed position nor a covered position in the ordering state — and, where
+committed positions are missing, joining the group as a short-lived bootstrap member to
+commit the start positions under the group's generation fence. Each task initialisation
+describes by id, once, the topics the task's state names, and corroborates by name any id
+the broker does not know and whose name it has learned — a deletion or recreation is
+confirmed only by three consistent answers half a second apart; an id whose name was never
+learned is left alive. Nothing is asked of the broker between deliveries, and no consumer
+beyond the Streams application's own is assigned to the partitions a held head waits on:
+receipt of the named record is what settles a cause (D115). The ACLs those need are
+Describe on every declared topic and on the group, Read on the group and on the received
 topics, and whatever Streams itself needs to create and write its changelogs. A Describe
 denial is treated as denial, never as a topic's deletion.
 
@@ -69,17 +75,19 @@ budget plus a few hundred bytes of framing. The default 1 MiB record limit and t
 budget are compatible only for records well under 750 KiB; a held message beyond the limit
 stops the process with `SUBSTRATE_MISCONFIGURED` naming the limit to raise.
 
-**Retention.** Retention must cover hold-back time, not only consumer lag: a message held
-behind a lagging cause and then discarded by retention stops the holder with
-`POSITIONS_DISCARDED_UNREAD`, because its senders may since have pruned it from the causes
-they express ([Failing closed](failing-closed.md)).
+**Retention.** A held message survives retention: it is persisted to the ordering changelog
+and delivers from there, in order, once its causes settle, so retention need not cover
+hold-back time. It must cover the longest stop and the longest lag on any received
+partition: a committed read position below the log start — or, where the committed offset
+has expired, the ordering state's covered position plus one — refuses at the fetch with
+`POSITIONS_DISCARDED_UNREAD` ([Failing closed](failing-closed.md)). Add whatever a reset
+that re-reads from `EARLIEST` should still find.
 
 ## Reading the status
 
 `Parsley.status()` reports each process's state, its refusal reason where it stopped
 deliberately, and per task what is held and which cause each hold waits for, with the
-frontier's size and how long ago broker facts were applied. A held message is not a failure:
-the diagnosis is the named cause. A refusal recurs identically on restart, except
-`COVERED_POSITION_FED` raised because the execution was superseded, which a restart recovers.
-What to do about each shape the status can show — a refusal, a stop without one, a hold that
-does not move — is in [Runbooks](runbooks.md).
+frontier's size. A held message is not a failure: the diagnosis is the named cause. Every
+refusal recurs identically on restart, except `COVERED_POSITION_FED`, which has no known
+trigger and which a restart clears. What to do about each shape the status can show — a
+refusal, a stop without one, a hold that does not move — is in [Runbooks](runbooks.md).

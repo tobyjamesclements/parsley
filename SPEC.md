@@ -89,16 +89,24 @@ The following terms are used throughout this specification and are defined here 
 
 Every criterion in this section holds on the premise that a process is eventually scheduled and continues to make
 progress, that a process which stops is eventually restarted, that the channels in its received-channel set remain
-readable, and
-that the host continues to meet its obligations — in particular that it eventually feeds every message its channels
-hold, and that its read position eventually advances and is reported as Host obligation 2 requires. A message held
-under Safety 7, and every message held behind it under Safety 3, is exempt while its metadata remains undecodable.
-Stated without these premises each criterion is false, and no implementation can be held to it.
+readable, and that the host continues to meet its obligations — in particular that it eventually feeds every message
+its channels hold. A message held under Safety 7, and every message held behind it under Safety 3, is exempt while its
+metadata remains undecodable; so is a message whose metadata names a position that is not the position of a message
+sent to that channel (Assumption 13), and every message held behind it. Stated without these premises each criterion
+is false, and no implementation can be held to it.
 
 1. Every message a process receives MUST eventually be delivered at that process.
 2. Sending MUST NOT block on the deliverability of the message sent. Only delivery waits.
-3. Where a cause names a position that will never yield a message, an implementation MUST still eventually deliver.
-   Detecting this MUST NOT rely on elapsed time.
+3. A cause is satisfied at a process once every position on its channel up to and including the named one has been
+   delivered there or will never yield a message the process receives. A cause names the position of a message that
+   was sent (Structural 12, Assumption 13), so receiving that message is what satisfies it; the positions between
+   messages that yield none — an aborted transaction, a control record — are settled by the receipt of the next
+   message on the channel, since the host feeds each channel in order (Host obligation 1). An implementation MUST
+   NOT rely on anything else, elapsed time in particular, to conclude that a position will never yield a message.
+   The only other ways a position settles are the channel ceasing to exist (Structural 13), the position lying
+   below the process's start position on the channel (Structural 12, Host obligation 2), and the position lying
+   at or below the process's own delivered causal past on a channel that joins its received-channel set
+   (Structural 16), where delivering it would place a cause behind its delivered effect.
 4. Where a cause names a channel outside a process's received-channel set, that process MUST still eventually deliver.
 5. A message received but not yet delivered MUST still be delivered after the receiving process restarts, where its
    channel remains in the received-channel set.
@@ -158,14 +166,15 @@ Stated without these premises each criterion is false, and no implementation can
     channel as already satisfied.
 13. The metadata a message carries MUST NOT grow without bound as an application runs. An implementation MUST have a
     means of discarding causes that can no longer matter, and MUST NOT discard any other cause. A cause can no longer
-    matter exactly when its position is below its channel's earliest retained position, or when its channel no longer
-    exists. Replacing two pairs on one channel by the single pair with the greater position is compression, not
-    discarding.
+    matter exactly when its channel no longer exists. A cause whose position retention has discarded still matters
+    to any process holding a message that names it, and MUST NOT be discarded on that ground: metadata is bounded by
+    the channels a process's causal past reaches, not by time. Replacing two pairs on one channel by the single pair
+    with the greater position is compression, not discarding.
 14. A process MUST be able to send to a channel it also receives from. A message so sent MUST NOT depend on itself or on
     any position at or above its own, however its causes are computed.
-15. A message's metadata MUST express every cause of that message whose position is at or above the cause's channel's
-    earliest retained position — including causes known only from the metadata of messages received and not yet
-    delivered.
+15. A message's metadata MUST express every cause of that message — including causes known only from the metadata of
+    messages received and not yet delivered — other than causes on a channel the implementation has learned no longer
+    exists (Structural 13).
 16. A process's received-channel set MAY change between executions. Causal past a process has already delivered MUST
     NOT be dropped when a channel leaves that set, and MUST NOT be re-entered when a channel joins it. An
     implementation MUST refuse an execution whose declaration removes a channel on which received messages remain
@@ -198,10 +207,12 @@ been breached it MUST fail closed rather than degrade.
 
 1. Within one execution of a process, the host MUST feed it the messages of each channel in increasing position order,
    and MUST NOT withhold a message indefinitely.
-2. The host MUST report a process's read position on a channel. A reported position asserts that every position below
-   it has either been fed to the process as a message or will never arrive as one; the host MUST NOT report a position
-   covering a message it has received but not yet fed. The read position MUST eventually advance past positions that
-   never arrive as messages — including a trailing run with nothing after it — and each advance MUST be reported.
+2. At the start of each execution, the host MUST report a process's start position on each channel: the position it
+   will feed first. Every position below a reported start position was fed to an earlier execution of the process and
+   committed, lies below the position the process was started at, or is already recorded as settled by the process's
+   own committed state (Structural 16); the host MUST NOT report a position covering a message it has received but
+   not yet fed. No report is owed between deliveries: a cause names the position of a message that was sent, and
+   receiving that message is what satisfies it (Liveness 3).
 3. The host MUST commit, atomically, the state a step mutates, the messages it sends, and the read positions it
    consumed.
 4. The host MUST restart a process through its full initialisation, not resume it in place.
@@ -248,17 +259,25 @@ where it deviates, the deviation and its rationale MUST be recorded in `DECISION
     is delivered.
 11. An implementation MAY assume that support for joins is not required.
 12. An implementation MAY assume that support for repartitioning channels is not required.
-13. An implementation MAY assume that a message carrying causal metadata expresses all of its causes truthfully.
+13. An implementation MAY assume that a message carrying causal metadata expresses all of its causes truthfully, and
+    that every position it names is the position of a message sent to that channel — a committed record — never a
+    position no message occupies.
 14. An implementation MAY assume that an application's declaration names topics, and stands for every process the host
     induces from it and for the topic-partitions each induced process receives from and sends to.
 15. An implementation MAY assume that a channel's earliest retained position is its log-start offset, that the
-    substrate reports it and a channel's end position on request, and that querying the substrate for position facts
-    is not exchange between processes under Structural 1.
+    substrate refuses to serve a read position below it rather than serving the next retained message, that it
+    reports a channel's earliest and end positions and a topic's identity on request, and that asking it is not
+    exchange between processes under Structural 1.
 16. An implementation MAY assume that application logic is a pure function of the delivered message and the
     application state passed to it. An effect that bypasses the seam in Structural 3 is invisible to causal order and
     outside every guarantee of this document.
 17. An implementation MAY assume that a channel is deleted only once it carries no undelivered obligations: no
     process retains a received-but-undelivered message from it, and no message yet to be received expresses a cause
-    on it that its receiver has not already satisfied. Where an implementation detects this assumption breached —
-    at minimum, a received-but-undelivered message retained from a channel that no longer exists — Safety 9 states
-    its duty. A breach it cannot detect is outside its guarantees, as with Assumption 13.
+    on it that its receiver has not already satisfied. It MAY further assume that a received topic is not deleted and
+    recreated under its name while a process that receives it runs: an implementation asks the substrate about
+    identity when the process next initialises and refuses on the answer — an initialisation the substrate could
+    not answer asks again until it is answered — and what the process delivered in between is outside its
+    guarantees. Where an
+    implementation detects this assumption breached — at minimum, a received-but-undelivered message retained from
+    a channel that no longer exists — Safety 9 states its duty. A breach it cannot detect is outside its guarantees,
+    as with Assumption 13.
