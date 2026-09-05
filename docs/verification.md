@@ -1,6 +1,6 @@
 # Verification
 
-The suite runs under `./mvnw verify` in roughly five minutes and requires no Docker.
+The suite runs under `./mvnw verify` in roughly eleven minutes and requires no Docker.
 
 ## Layers
 

@@ -55,7 +55,8 @@ public final class Effects {
          *         {@code timestamp} is null, {@code headers} contains a null element, or
          *         the timestamp is negative
          * @throws FailClosedException
-         *         if any header uses {@link CausesCodec#RESERVED_HEADER_PREFIX}
+         *         if any header key begins with {@code "parsley."}, the prefix reserved for
+         *         causal metadata
          */
         public Send {
             if (channel == null) {

@@ -72,12 +72,12 @@ class ApiValidationTest {
     @Test
     void reservedHeadersAreUnconstructible() {
         Channel<String, String> channel = channel("t");
-        io.github.tobyjamesclements.parsley.FailClosedException e =
-                assertThrows(io.github.tobyjamesclements.parsley.FailClosedException.class,
+        FailClosedException e =
+                assertThrows(FailClosedException.class,
                         () -> Effects.builder().send(channel, "k", "v",
                                 List.of(new Header("parsley.causes", new byte[0]))).build(),
                         "application headers may never impersonate causal metadata (SPEC Structural 5)");
-        assertEquals(io.github.tobyjamesclements.parsley.FailClosedException.Reason.RESERVED_HEADER_USED, e.reason(),
+        assertEquals(FailClosedException.Reason.RESERVED_HEADER_USED, e.reason(),
                 "the refusal names its condition (SPEC Operational 6) and fails the step through the seam");
     }
 

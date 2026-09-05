@@ -8,6 +8,7 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -22,11 +23,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Structural 7's decision unit standing on its own. Until the packages were collapsed the
  * boundary was a directory: the protocol lived in a subpackage and a recursive scan fenced
  * it. One package cannot be fenced that way, so the split is declared here instead, and the
- * declaration is checked three ways.
+ * declaration is checked four ways.
  *
- * <p>{@link #everyMainSourceIsClassified()} is the one that keeps the other two honest. A
- * file added to the package belongs to neither list until someone puts it in one, and that
- * test fails until they do, so a new protocol source cannot arrive unfenced.
+ * <p>{@link #everyMainSourceIsClassified()} is the one that keeps the others honest. A file
+ * added to the package belongs to neither list until someone puts it in one, and that test
+ * fails until they do, so a new protocol source cannot arrive unfenced. It scans recursively
+ * and refuses a subpackage, because a subpackage would otherwise sit outside every rule here.
  */
 class ProtocolPurityTest {
 
@@ -79,7 +81,10 @@ class ProtocolPurityTest {
             "TopicIdentitySource",
             "TopicIdentityVerdicts");
 
-    /** Clock, randomness, network, filesystem and substrate references the protocol may not name. */
+    /**
+     * Clock, randomness, network, filesystem and substrate references the protocol may not
+     * name.
+     */
     private static final List<String> HOST_FACILITIES = List.of(
             "org.apache.kafka",
             "java.net.",
@@ -103,40 +108,42 @@ class ProtocolPurityTest {
             "Clock.");
 
     /**
-     * Runtime types whose names are unambiguous enough to scan for in prose. The rest of
-     * {@link #RUNTIME} is left out on purpose: Parsley, Channel, Store, Delivery, State and
-     * Process are ordinary English in a comment, and a protocol file naming one of those in
-     * prose is not the drift this catches. Every entry here is a Kafka Streams host class
-     * whose name appears in a protocol source only if the protocol reaches for the host.
+     * The three runtime names a protocol source may say. Every other entry of
+     * {@link #RUNTIME} is scanned for, and matching is by whole word, so {@code Channel}
+     * does not fire on {@code ChannelId} nor {@code State} on {@code OrderingStateCodec}.
+     *
+     * <p>{@code Parsley} and {@code Delivery} are exempt because they are the product's name
+     * and an ordinary English word, and each appears once in protocol prose.
+     * {@code ProcessStatus} is exempt for a reference rather than a word:
+     * {@link FailClosedException} carries an {@code @see} to
+     * {@link ProcessStatus#refusalReason()}, which is the one hop an application has from
+     * the exception it catches to where the reason surfaces. That link is worth more than
+     * fencing the name.
      */
-    private static final List<String> RUNTIME_TYPES = List.of(
-            "AdminTopicIdentitySource",
-            "GroupMembershipCommitter",
-            "ParsleyConfig",
-            "ProcessNode",
-            "ProcessTopology",
-            "ResolvedTopic",
-            "StreamsOrderingStore",
-            "StreamsRuntime",
-            "TopicIdentitySource",
-            "TopicIdentityVerdicts");
+    private static final Set<String> SAYABLE_RUNTIME_NAMES = Set.of("Parsley", "Delivery", "ProcessStatus");
 
-    /** Every main source is declared protocol or runtime, so a new file cannot arrive unfenced. */
+    /**
+     * Every main source is declared protocol or runtime, and the package stays flat, so a new
+     * file cannot arrive unfenced and a subpackage cannot sidestep the scan.
+     */
     @Test
     void everyMainSourceIsClassified() throws IOException {
         Set<String> declared = new TreeSet<>(PROTOCOL);
         declared.addAll(RUNTIME);
-        assertEquals(new TreeSet<>(declared), new TreeSet<>(mainSourceNames()),
+        assertEquals(declared, new TreeSet<>(mainSourceNames()),
                 "every source in " + MAIN + " must be listed as protocol or runtime in this test."
                         + " A new file is fenced as protocol until it is listed as runtime, and"
                         + " listing it as runtime is the deliberate act that says it may name the"
                         + " host");
     }
 
-    /** No protocol source names a clock, randomness, the network, the filesystem or the substrate. */
+    /**
+     * No protocol source names a clock, randomness, the network, the filesystem or the
+     * substrate.
+     */
     @Test
     void protocolSourcesNameNoHostFacility() throws IOException {
-        for (String name : PROTOCOL) {
+        for (String name : new TreeSet<>(PROTOCOL)) {
             String source = Files.readString(MAIN.resolve(name + ".java"));
             for (String facility : HOST_FACILITIES) {
                 assertTrue(!source.contains(facility),
@@ -153,10 +160,10 @@ class ProtocolPurityTest {
      */
     @Test
     void protocolSourcesNameNoRuntimeType() throws IOException {
-        for (String name : PROTOCOL) {
+        for (String name : new TreeSet<>(PROTOCOL)) {
             String source = Files.readString(MAIN.resolve(name + ".java"));
-            for (String runtimeType : RUNTIME_TYPES) {
-                assertTrue(!source.contains(runtimeType),
+            for (String runtimeType : fencedRuntimeNames()) {
+                assertTrue(!Pattern.compile("\\b" + Pattern.quote(runtimeType) + "\\b").matcher(source).find(),
                         name + ".java must not name " + runtimeType + ": the protocol runs under a"
                                 + " simulator as readily as under Kafka Streams, and the dependency"
                                 + " runs from the runtime to the protocol, never back");
@@ -164,12 +171,38 @@ class ProtocolPurityTest {
         }
     }
 
-    /** The names of every main source, package-info aside, which declares no type. */
+    /**
+     * Every exempt name is a real runtime type, so a rename cannot leave the exemption
+     * covering nothing while the rule it removes stays removed.
+     */
+    @Test
+    void everyExemptNameIsARuntimeType() {
+        assertTrue(RUNTIME.containsAll(SAYABLE_RUNTIME_NAMES),
+                "every exempt name must be a listed runtime type; a stale name after a rename"
+                        + " would exempt nothing and quietly widen the fence instead: "
+                        + new TreeSet<>(SAYABLE_RUNTIME_NAMES));
+    }
+
+    /** The runtime names the protocol may not say, in a stable order. */
+    private static Set<String> fencedRuntimeNames() {
+        Set<String> fenced = new TreeSet<>(RUNTIME);
+        fenced.removeAll(SAYABLE_RUNTIME_NAMES);
+        return fenced;
+    }
+
+    /**
+     * The names of every main source, package-info aside, which declares no type. Recursive,
+     * so a subpackage is found rather than skipped, and refused: every rule here reads
+     * {@code MAIN.resolve(name + ".java")}, which would miss it.
+     */
     private static List<String> mainSourceNames() throws IOException {
         assertTrue(Files.isDirectory(MAIN), MAIN + " must be present for this scan");
-        try (Stream<Path> files = Files.list(MAIN)) {
-            return files.map(path -> path.getFileName().toString())
-                    .filter(file -> file.endsWith(".java"))
+        try (Stream<Path> files = Files.walk(MAIN)) {
+            return files.filter(path -> path.getFileName().toString().endsWith(".java"))
+                    .peek(path -> assertEquals(MAIN, path.getParent(),
+                            path + " sits in a subpackage, which no rule in this test reaches."
+                                    + " Fold it into " + MAIN + ", or teach the fence to descend"))
+                    .map(path -> path.getFileName().toString())
                     .filter(file -> !file.equals("package-info.java"))
                     .map(file -> file.substring(0, file.length() - ".java".length()))
                     .collect(Collectors.toList());

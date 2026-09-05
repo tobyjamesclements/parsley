@@ -8,7 +8,7 @@ topic-partition and orders nothing between partitions. Parsley supplies the miss
 cross-channel guarantee: **if message A is a cause of message B, every process that delivers
 both delivers A first**, across restarts and for the whole lifetime of a process.
 
-Single Maven module, Java 21, Kafka 4.3.1, packages under
+Single Maven module, Java 21, Kafka 4.3.1, one package,
 `io.github.tobyjamesclements.parsley`. `kafka-streams`, `kafka-clients` and `slf4j-api` are
 its only declared dependencies; everything else on the classpath arrives with Kafka. This
 tree is `io.github.tobyjamesclements:parsley:0.3.0-SNAPSHOT`, and the current release is
@@ -79,9 +79,11 @@ each violation class.
 
 - `./mvnw verify` is the full gate: **the whole suite, green, roughly eleven minutes** (the
   surefire summary prints the count; it was 716 at D113, 698 at D115 after the facts round's
-  suites went with the round, and 660 once the packages collapsed into one). It must be
-  green at every commit, and it grows. It shrinks only when a mechanism is deleted with its
-  pins, and the record that deletes it says so.
+  suites went with the round, 651 once the session package and its suites went, and 670
+  after the packages collapsed into one, which added the fence's checks and the two suites
+  that exercise the public surface from outside it). It must be green at every commit, and
+  it grows. It shrinks only when a mechanism is deleted with its pins, and the record that
+  deletes it says so.
 - Three layers. Unit tests over the pure protocol. A **simulation harness** driving real engines
   under a simulated host that honours the spec's Host obligations, over randomised topologies,
   interleavings, gaps from aborted transactions, crashes, restarts and offset rewinds,

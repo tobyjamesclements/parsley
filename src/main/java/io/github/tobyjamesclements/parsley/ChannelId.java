@@ -15,7 +15,6 @@ import java.util.UUID;
  *
  * @param topicId   the topic's identity as assigned by the broker
  * @param partition the partition within that topic
- * @see CausesCodec
  */
 public record ChannelId(UUID topicId, int partition) implements Comparable<ChannelId> {
 

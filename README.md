@@ -61,7 +61,7 @@ To package without running the tests:
 ./mvnw test
 ```
 
-The whole suite, roughly five minutes; the surefire summary prints the count. Integration
+The whole suite, roughly eleven minutes; the surefire summary prints the count. Integration
 tests start an embedded KRaft broker in the same JVM, so nothing external needs to be
 running.
 

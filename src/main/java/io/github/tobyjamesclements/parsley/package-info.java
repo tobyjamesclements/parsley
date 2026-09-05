@@ -5,7 +5,8 @@
  * topics, {@link io.github.tobyjamesclements.parsley.Store} typed stores, and one
  * {@link io.github.tobyjamesclements.parsley.Process} per process. Logic is a
  * {@link io.github.tobyjamesclements.parsley.Handler}, which receives a
- * {@link io.github.tobyjamesclements.parsley.Delivery} and returns
+ * {@link io.github.tobyjamesclements.parsley.Delivery} and a
+ * {@link io.github.tobyjamesclements.parsley.State}, and returns
  * {@link io.github.tobyjamesclements.parsley.Effects}.
  *
  * <p>A handler is given no producer, no timer and no clock. Everything it changes travels

@@ -20,8 +20,8 @@ import io.github.tobyjamesclements.parsley.Store;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -29,10 +29,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * package the library lives in.
  *
  * <p>Every type here is reached through a public import, so this file stops compiling if a
- * member of the seam loses {@code public}. Nothing else covers that: the rest of the suite
- * sits in the library's package, where package-private is indistinguishable from public, and
- * there is no module declaration and no javadoc gate to catch it. The seam is
- * {@link Delivery} in, {@link State} beside it, {@link Effects} out.
+ * member of the seam loses {@code public}. Nothing inside the library's package covers that,
+ * where package-private is indistinguishable from public, and there is no module declaration
+ * and no javadoc gate to catch it either. {@link ApiValidationTest} pins the factories and
+ * their refusals, and {@link PublicSurfaceTest} the rest of the public members. The seam
+ * this file covers is {@link Delivery} in, {@link State} beside it, {@link Effects} out.
  */
 class HandlerSeamTest {
 
@@ -43,7 +44,7 @@ class HandlerSeamTest {
     private static final Store<String, String> INVENTORY =
             Store.of("inventory", Serdes.String(), Serdes.String());
 
-    /** A handler reads state, writes state and sends, and every effect arrives in declaration order. */
+    /** A handler reads state, and returns the state write and the send it declared. */
     @Test
     void aHandlerReadsStateAndReturnsItsEffects() {
         Handler<String, String> shipper = (delivery, state) -> {
@@ -80,7 +81,10 @@ class HandlerSeamTest {
         assertTrue(effects.sends().isEmpty(), "none sends nothing");
     }
 
-    /** A key absent from the store reads as null, which is the handler's signal to initialise it. */
+    /**
+     * A key absent from the store reads as null, which is the handler's signal to
+     * initialise it.
+     */
     @Test
     void anAbsentKeyReadsAsNull() {
         Handler<String, String> reader = (delivery, state) ->
@@ -91,7 +95,10 @@ class HandlerSeamTest {
         assertEquals("null", effects.writes().get(0).value(), "the absent key read as null");
     }
 
-    /** Reserved transport headers never reach application logic, whatever arrived on the wire. */
+    /**
+     * Reserved transport headers never reach application logic, whatever arrived on the
+     * wire.
+     */
     @Test
     void reservedHeadersAreInvisibleToTheHandler() {
         Delivery<String, String> delivery = Delivery.of(ORDERS, 0, 12L, 1_000L, "sku-1", "2 units",
@@ -112,7 +119,10 @@ class HandlerSeamTest {
         assertEquals(1_000L, delivery.timestamp(), "and the record timestamp");
     }
 
-    /** A running process reports no refusal, and a refused one reports the reason an operator acts on. */
+    /**
+     * A running process reports no refusal, and a refused one reports the reason an
+     * operator acts on.
+     */
     @Test
     void statusDistinguishesARefusalFromAHealthyProcess() {
         ProcessStatus running = new ProcessStatus(
@@ -152,12 +162,11 @@ class HandlerSeamTest {
     @Test
     void putRefusesANullValue() {
         Effects.Builder builder = Effects.builder();
-        try {
-            builder.put(INVENTORY, "sku-1", null);
-            assertNull("unreachable", "put must refuse a null value");
-        } catch (IllegalArgumentException expected) {
-            assertTrue(expected.getMessage().contains("delete"),
-                    "the refusal names delete as the way to remove a key");
-        }
+
+        IllegalArgumentException refusal = assertThrows(IllegalArgumentException.class,
+                () -> builder.put(INVENTORY, "sku-1", null), "put must refuse a null value");
+
+        assertTrue(refusal.getMessage().contains("delete"),
+                "the refusal names delete as the way to remove a key");
     }
 }
