@@ -307,6 +307,77 @@ class BootstrapIntegrationTest {
     }
 
     /**
+     * A received partition an earlier execution never read from — bootstrapped at 0, so it
+     * covered nothing — resumes at 0 after its offset expires, never at the substrate's
+     * earliest (D115, corrected by the D115 review): the earliest position may have moved
+     * past records the process never read, and taking it would treat them as fed. Here
+     * retention has passed 0, so the resumed fetch refuses with POSITIONS_DISCARDED_UNREAD
+     * rather than silently absorbing the discarded records, and the bootstrap's commit is
+     * 0 under its stamp.
+     */
+    @Test
+    void aNeverFedReceivedPartitionResumesAtZeroAndRefusesWhereRetentionPassedIt() throws Exception {
+        createTopics(new NewTopic("nf-a", 1, (short) 1), new NewTopic("nf-b", 1, (short) 1));
+        Channel<String, String> a = Channel.of("nf-a", Serdes.String(), Serdes.String());
+        Channel<String, String> b = Channel.of("nf-b", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition p = ProcessDefinition.named("nf")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .receives(b, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("nf"), p)) {
+            produce("nf-a", null, "k", "a0");
+            await("the message on nf-a to deliver", () -> delivered.contains("a0"), Duration.ofSeconds(120));
+            awaitCommitted("nf-nf", "nf-a", 1);
+        }
+
+        await("the group's offsets to be deletable", () -> {
+            try {
+                admin.deleteConsumerGroupOffsets("nf-nf",
+                        Set.of(new TopicPartition("nf-a", 0), new TopicPartition("nf-b", 0)))
+                        .all().get(10, TimeUnit.SECONDS);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }, Duration.ofSeconds(60));
+        for (int i = 0; i < 4; i++) {
+            produce("nf-b", null, "k", "b" + i);
+        }
+        admin.deleteRecords(Map.of(new TopicPartition("nf-b", 0),
+                        org.apache.kafka.clients.admin.RecordsToDelete.beforeOffset(2)))
+                .all().get(30, TimeUnit.SECONDS);
+
+        Parsley parsley = Parsley.start(config("nf"), p);
+        try {
+            await("the fetch at the never-fed partition's resumed position to refuse", () -> {
+                var status = parsley.status().get("nf");
+                return status != null && status.refusalReason().isPresent();
+            }, Duration.ofSeconds(120));
+            assertEquals(ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
+                    parsley.status().get("nf").refusalReason().orElseThrow(),
+                    "records the process never read were discarded: the fetch at 0 refuses");
+            assertEquals(List.of("a0"), List.copyOf(delivered),
+                    "nothing from nf-b delivers: b2 and b3 lie past positions never read");
+            var resumed = admin.listConsumerGroupOffsets("nf-nf").partitionsToOffsetAndMetadata()
+                    .get(30, TimeUnit.SECONDS).get(new TopicPartition("nf-b", 0));
+            assertEquals(0L, resumed.offset(),
+                    "the bootstrap resumed the never-fed partition at 0, not at the substrate's earliest of 2");
+            assertEquals(ParsleyRuntime.BOOTSTRAP_OFFSET_STAMP, resumed.metadata(),
+                    "the position was committed by the bootstrap, under its stamp");
+        } finally {
+            parsley.close();
+        }
+    }
+
+    /**
      * An expired committed position within retention resumes at the covered position plus
      * one (D115): the bootstrap's own commit, read before Kafka Streams has anything to
      * commit over it, is exactly coverage plus one under its stamp — the substrate's
@@ -360,7 +431,7 @@ class BootstrapIntegrationTest {
                     () -> delivered.contains("m2"), Duration.ofSeconds(60));
             assertEquals(List.of("m0", "m1", "m2"), List.copyOf(delivered),
                     "m0 once, m1 and m2 once each, and the declared LATEST never consulted");
-            assertTrue(parsley.healthy());
+            assertTrue(parsley.healthy(), "a resume within retention is not a refusal");
             awaitCommitted("exr-exr", "exr-in", 3);
         }
     }

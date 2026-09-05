@@ -204,8 +204,11 @@ the old count is now split across two shards ([Runtime](runtime.md#keys-partitio
 
 **Shape.** No `refusalReason`. The `ERROR` line says that a received topic was missing when
 the host rebalanced — deleted, or deleted and recreated under its name, while the process
-ran — and names the remedy; `failureDetail` carries the host's own message, "One or more
-source topics were missing during rebalance", beneath the wrapping.
+ran — and names the remedy; `failureDetail` carries the host's own `MissingSourceTopicException`
+beneath the wrapping, "One or more source topics were missing during rebalance" or "Missing
+source topics: [...]. Timeout exceeded after ...ms.". A recreation the host meets can also
+stop the process as [`POSITIONS_DISCARDED_UNREAD`](#positions_discarded_unread): the first
+fetch at the old position finds the new log shorter than it.
 
 **What happened.** A rebalance found a source topic gone. A received topic is assumed not to
 be deleted and recreated under its name while a process that receives it runs, and not to be
@@ -668,21 +671,29 @@ under the Kafka Streams defaults. Or the metadata is stale or forged: a token mi
 another cluster, a hand-stamped header. Read the held record's header and find its producer.
 
 **Required at an offset no committed record occupies.** The group's offset on the partition
-stands past the required position with no lag, and settled still trails it. The cause names
-a position no `read_committed` reader is ever served: a transaction marker, an aborted
-batch's offset, the log-end offset at the moment of stamping. That is an out-of-contract
-cause ([wire format](wire-format.md#grammar), constraint 8): no receipt settles it, elapsed
-time never does, and the hold stays, visibly, until a later record on the channel arrives. A
-Parsley process never stamps one. Read the held record's header and find the producer of
-the stamp — a gateway minting a token from a producer's log-end offset is the natural
-mistake — and fix it; the next record on the channel releases the hold.
+stands past the required position with no lag, and settled still trails it. Two shapes
+share it. The cause names a position no `read_committed` reader is ever served: a
+transaction marker, an aborted batch's offset, the log-end offset at the moment of stamping.
+That is an out-of-contract cause ([wire format](wire-format.md#grammar), constraint 8): no
+receipt settles it, elapsed time never does, and the hold stays, visibly, until a later
+record on the channel arrives. A Parsley process never stamps one. Read the held record's
+header and find the producer of the stamp — a gateway minting a token from a producer's
+log-end offset is the natural mistake — and fix it; the next record on the channel releases
+the hold. Or the channel is a `cleanup.policy=compact` topic and the cause names a record the
+cleaner has since removed, together with the tombstone that superseded it, with nothing
+retained after it: an in-contract cause whose record this process started past. The hold
+lasts until anything follows on that channel. Produce a record on it, and keep received
+topics under time or size retention rather than compaction where holds must not wait on
+that.
 
 **The blocker's channel's topic no longer exists.** `kafka-topics --describe` does not find
 the topic, or finds it under another id. A cause on a deleted channel is settled by the
 deletion, and a task learns of a deletion from the identity check at its next
 initialisation, never while it runs. On Kafka Streams the deletion of a received topic
 reaches the process within a minute or two — the commit times out and the host re-creates
-the task, or a rebalance stops the thread
+the task, or a rebalance stops the thread; a topic recreated under its name is stopped at
+once where the host meets it, and not at all until the next task re-creation where it does
+not (SPEC Assumption 17)
 ([runbook](#a-received-topic-went-missing-during-a-rebalance)) — and the check at that
 initialisation settles the channel to its end, sending the hold on at the next punctuation,
 provided the task holds nothing from that channel itself; a topic recreated under its name
@@ -702,13 +713,17 @@ output topic.
 
 Every task initialisation asks the cluster about every topic its state names — the received
 topics and every topic in the frontier — and settles or prunes the channels whose topics are
-confirmed gone. Two log lines say the asking failed. "topic identity could not be checked;
-continuing on the identities resolved at start, and asking again at the next status
-punctuation", with the cause, means the check could not be made: the admin client could not
-reach the cluster, or a describe failed in a way that is not the broker's unknown-topic
-answer. The question stays pending, and each status punctuation asks it again until it is
-answered — the line repeats once per interval while it does — and the answer is then applied
-as the initialisation's would have been. "describe denied for topic '<name>' (<id>);
+confirmed gone. Three log lines say the asking failed. "topic identity could not be checked
+(...); continuing on the identities resolved at start, and asking again from the status
+punctuation" names a describe by id that failed in a way that is not the broker's
+unknown-topic answer — the admin client could not reach the cluster, or timed out — and
+"topic identity could not be corroborated for [...]; asking again" names a corroborating
+describe by name that timed out or failed. Either means the check could not be made for the
+ids named. The question stays pending and is
+asked again from the status punctuation until it is answered — backing off from one status
+interval to a minute, since each attempt can hold the stream thread for the describe's
+ten-second deadline, so the line repeats at that cadence — and the answer is then applied as
+the initialisation's would have been. "describe denied for topic '<name>' (<id>);
 treating as denied, not dead" means the application's principal lacks Describe on that
 topic, which the check declines to read as deletion; that answer counts as an answer, so it
 is not asked again until the task next initialises. Neither is evidence: no channel is

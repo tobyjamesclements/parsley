@@ -75,10 +75,16 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
     private Cancellable statusPunctuator;
     /**
      * True from an initialisation until its identity question has been answered. A source
-     * that could not answer at initialisation is asked again at each status punctuation,
-     * so the check is event-driven and eventual, never periodic (D115).
+     * that could not answer at initialisation is asked again from the status punctuation,
+     * so the check is event-driven and eventual, never periodic (D115) — and, since each
+     * attempt can block the stream thread for the describe's timeout, not before
+     * {@link #identityRetryNotBefore}, which backs off exponentially from one status
+     * interval to {@link #IDENTITY_RETRY_CAP} while the substrate keeps not answering.
      */
     private boolean identityCheckPending;
+    private long identityRetryNotBefore;
+    private Duration identityRetryDelay;
+    static final Duration IDENTITY_RETRY_CAP = Duration.ofMinutes(1);
 
     private ProcessorContext<byte[], byte[]> context;
     private ProcessEngine engine;
@@ -186,11 +192,14 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
         stateReader = new StoreStateReader();
         swallowedSeamViolation = null;
 
-        identityCheckPending = true;
+        identityRetryDelay = statusInterval;
+        identityRetryNotBefore = Long.MIN_VALUE;
         checkIdentity();
 
         statusPunctuator = context.schedule(statusInterval, PunctuationType.WALL_CLOCK_TIME, timestamp -> {
-            if (identityCheckPending) {
+            if (identityCheckPending && timestamp >= identityRetryNotBefore) {
+                identityRetryNotBefore = timestamp + identityRetryDelay.toMillis();
+                identityRetryDelay = min(identityRetryDelay.multipliedBy(2), IDENTITY_RETRY_CAP);
                 checkIdentity();
             }
             drain();
@@ -210,12 +219,12 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
      * kept: absence of an answer is never a verdict).
      */
     private void checkIdentity() {
+        // Every channel this task's state names, defined once: the received channels and
+        // the restored frontier.
+        Set<ChannelId> known = new HashSet<>(engine.frontierSnapshot().byChannel().keySet());
+        known.addAll(engine.receivedChannelSet());
         Set<UUID> topicIds = new HashSet<>();
-        for (ChannelId channel : engine.receivedChannelSet()) {
-            topicIds.add(channel.topicId());
-        }
-        Set<ChannelId> frontierChannels = engine.frontierSnapshot().byChannel().keySet();
-        for (ChannelId channel : frontierChannels) {
+        for (ChannelId channel : known) {
             topicIds.add(channel.topicId());
         }
         TopicIdentityVerdicts verdicts;
@@ -223,20 +232,24 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             verdicts = identitySource.resolve(topicIds);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            identityCheckPending = true;
             return;
         } catch (Exception e) {
-            LOG.warn("{}: topic identity could not be checked; continuing on the identities resolved at"
-                    + " start, and asking again at the next status punctuation", definition.name(), e);
+            identityCheckPending = true;
+            LOG.warn("{}: topic identity could not be checked ({}); continuing on the identities resolved"
+                    + " at start, and asking again from the status punctuation", definition.name(), e.toString());
+            LOG.debug("{}: identity check failure", definition.name(), e);
             return;
         }
-        identityCheckPending = false;
+        identityCheckPending = !verdicts.answered();
+        if (!identityCheckPending) {
+            identityRetryDelay = statusInterval;
+        }
         if (verdicts.deleted().isEmpty() && verdicts.recreated().isEmpty()) {
             return;
         }
         Set<ChannelId> dead = new HashSet<>();
         Set<ChannelId> recreated = new HashSet<>();
-        Set<ChannelId> known = new HashSet<>(frontierChannels);
-        known.addAll(engine.receivedChannelSet());
         for (ChannelId channel : known) {
             if (verdicts.recreated().contains(channel.topicId())) {
                 recreated.add(channel);
@@ -245,6 +258,10 @@ final class ParsleyProcessor implements Processor<byte[], byte[], byte[], byte[]
             }
         }
         engine.onIdentityReport(new IdentityReport(dead, recreated));
+    }
+
+    private static Duration min(Duration a, Duration b) {
+        return a.compareTo(b) <= 0 ? a : b;
     }
 
     /**

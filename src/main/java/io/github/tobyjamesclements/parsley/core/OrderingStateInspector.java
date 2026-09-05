@@ -69,6 +69,14 @@ public final class OrderingStateInspector {
      * @return per channel, the highest position covered as fed-or-never-arriving
      * @throws ParsleyFailClosedException if a coverage entry is corrupt
      */
+    /**
+     * Whether a covered position is the engine's fed-to-end sentinel: the value a channel
+     * settled on its topic's confirmed deletion carries, which no offset can follow.
+     */
+    public static boolean isFedToEnd(long coveredUpTo) {
+        return coveredUpTo == ProcessEngine.FED_TO_END_OF_CHANNEL;
+    }
+
     public static Map<ChannelId, Long> coveredPositions(Map<byte[], byte[]> latestPerKey) {
         Map<ChannelId, Long> covered = new HashMap<>();
         latestPerKey.forEach((key, value) -> {

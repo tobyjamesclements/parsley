@@ -170,7 +170,7 @@ public final class Scenario {
 
         Set<String> waived = new HashSet<>();
         for (SimProcess p : processes) {
-            if (p.failedClosed() || wedged(p)) {
+            if (p.failedClosed()) {
                 waived.add(p.name);
             }
         }
@@ -182,19 +182,6 @@ public final class Scenario {
                 violations.add("Liveness: " + p.name + " still holds " + p.engine().heldCountTotal()
                         + " messages at quiescence");
             }
-        }
-
-        for (SimProcess p : processes) {
-            if (p.failedClosed() || !p.isRunning() || !wedged(p)) {
-                continue;
-            }
-            oracle.undeliveredOwedByChannel(p.name).forEach((channelId, owed) -> {
-                int heldCount = p.engine().heldCount(channelId);
-                if (owed.size() > heldCount) {
-                    violations.add("Liveness: " + p.name + " (wedged) owes " + owed.size()
-                            + " undelivered message(s) on " + channelId + " but holds only " + heldCount);
-                }
-            });
         }
 
         for (SimProcess p : processes) {
@@ -239,28 +226,10 @@ public final class Scenario {
             }
         }
 
-        for (SimProcess p : processes) {
-            if (p.failedClosed()) {
-                continue;
-            }
-            for (SimChannel channel : iterate(p.receivedChannels())) {
-                SimChannel current = world.currentByName(channel.name);
-                if (channel.dead && current != null && !current.id().equals(channel.id())) {
-                    violations.add("Assumption 2: " + p.name + " still runs while its received topic ("
-                            + channel.name + ") was deleted and recreated under the same name, without failing closed");
-                }
-            }
-        }
+        // SPEC Assumption 2 is judged at each commit (SimProcess.commitStep), and quiesce
+        // commits a step for every running process before this point, so nothing is left
+        // to judge here.
         return new Result(List.copyOf(violations), oracle, null, List.copyOf(journal));
-    }
-
-    private static boolean wedged(SimProcess p) {
-        for (SimChannel channel : iterate(p.receivedChannels())) {
-            if (!channel.dead && p.workingNextRead(channel) < channel.logStart) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static boolean guard(SimProcess p, Runnable op, List<String> journal, RefusalLedger ledger) {

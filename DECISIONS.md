@@ -5016,9 +5016,15 @@ over two minutes after the deletion.
 
 3. *Retention is the fetch's to refuse.* The bootstrap commits, for a received partition with
    prior state and no committed offset, the ordering state's covered position plus one
-   (`ParsleyRuntime.resumePosition`: empty for absent coverage and for the `Long.MAX_VALUE`
-   sentinel a deleted channel carries, D74's arithmetic guard kept), and lets the first fetch
-   decide: `auto.offset.reset=none` (D9's surviving leg) refuses a position below the log
+   (`ParsleyRuntime.resumePosition`; the `Long.MAX_VALUE` sentinel a deleted channel carries
+   falls back to the substrate, D74's arithmetic guard kept), and lets the first fetch decide.
+   A partition the ordering state names as received but never covered — started at 0 and
+   never fed, or covered to -1 by a pre-D115 execution — resumes at 0, the one position it
+   can show it read from; only a topic the state never named (a channel joining the received
+   set) takes the substrate's earliest. The review found the first cut taking the substrate's
+   earliest for the never-fed case too, which treated records discarded unread as fed — the
+   very shape D74 refused — and `BootstrapIntegrationTest#aNeverFedReceivedPartitionResumesAtZeroAndRefusesWhereRetentionPassedIt`
+   now pins the refusal on a real broker. The fetch's decision: `auto.offset.reset=none` (D9's surviving leg) refuses a position below the log
    start with `OffsetOutOfRangeException`, which `classifyFailure` already named
    `POSITIONS_DISCARDED_UNREAD` (D81, D109). D74's start-time comparison against a listOffsets
    answer is gone; the rejected alternative D74 recorded — let the consumer refuse — is taken,
@@ -5042,20 +5048,37 @@ over two minutes after the deletion.
    name elsewhere (a recreation completing between two answers is still one — the review
    caught the first cut requiring three answers of one kind, which reported that shape alive)
    and deleted otherwise; a denial, an unavailable answer or a same-id answer keeps the id
-   alive (denial ≠ death, D44's principle kept without its clock). A describe failure that is
-   not an unknown-topic answer is not evidence: the processor warns and continues on the
-   identities resolved at start, every cause and hold intact, and the question stays pending —
-   each status punctuation asks it again until it is answered, and the answer is applied as
-   the initialisation's would have been. The check is therefore event-driven and eventual,
-   never periodic. No verdict window, debounce, rescission or eviction exists any more.
+   alive (denial ≠ death, D44's principle kept without its clock). A describe that fails or
+   times out — by id, or by name mid-corroboration — is no answer at all: the id is reported
+   unanswered, the processor warns and continues on the identities resolved at start, every
+   cause and hold intact, and the question stays pending, asked again from the status
+   punctuation until it is answered and the answer applied as the initialisation's would have
+   been (the review found the first cut counting a timed-out by-name answer as "alive", which
+   cleared the question for the life of the task; `AdminTopicIdentitySourceTest#anUnavailableAnswerLeavesTheIdUnansweredRatherThanAlive`
+   and `ProcessorRevivalTest#aPartlyUnansweredIdentityCheckAppliesWhatWasAnsweredAndAsksAgainForTheRest`
+   pin the correction). Each attempt can block the stream thread for the describe's timeout,
+   so every describe a resolve makes shares one ten-second deadline and the pending retry
+   backs off exponentially from one status interval to a minute, never once per second. The
+   check is therefore event-driven and eventual, never periodic. No verdict window, debounce,
+   rescission or eviction exists any more. The three-answer, half-second evidence standard is
+   one spelling, `ParsleyRuntime.CORROBORATING_ANSWERS` and `CORROBORATION_BACKOFF`, shared
+   with the declared-topic and changelog describes at start.
 
 5. *Recreation while running is assumed away, and Streams' own stop is named.* Assumption 17
    now also lets an implementation assume a received topic is not deleted and recreated under
    its name while a process receiving it runs, with the recreation detected at the process's
-   next initialisation and what it delivered in between outside the guarantee. On Streams the
-   window is the one measured above: the deleted partition's commit fails within a minute or
-   two and the re-created task's `init` refuses; where the rebalance sees the topic missing
-   first, the thread stops with `MissingSourceTopicException`, which `classifyFailure` names
+   next initialisation and what it delivered in between outside the guarantee. On Streams a
+   *deletion* is bounded as measured above — the deleted partition's commit fails within a
+   minute or two and the re-created task's `init` refuses — and a *recreation* the host meets
+   is stopped at once, by the rebalance that finds the topic missing or by the first fetch at
+   the old position on the still-short new log (`IdentityIntegrationTest#aReceivedTopicRecreatedWhileTheProcessPollsStopsTheProcess`).
+   A recreation that lands entirely between two polls, with the new log already past the old
+   position by the time the consumer looks again, is stopped by nothing: the commit succeeds
+   by name, no rebalance follows, and the new incarnation's records are fed under the old
+   channel id until the task is next initialised — the shape ASSESSMENT.md 1.1 observed on
+   3.9.1 and the review reproduced on 4.3.1 behind a stalled handler. That window is
+   unbounded, and it is exactly what the extended assumption signs away. Where the rebalance
+   sees the topic missing, the thread stops with `MissingSourceTopicException`, which `classifyFailure` names
    `SOURCE_TOPIC_MISSING` — a transient with no `refusalReason`, whose log line says to restart:
    a topic still missing refuses the start at resolution, one recreated under its name refuses
    `CHANNEL_IDENTITY_CHANGED` from the stored binding (D33), one that merely lagged in a broker's
@@ -5078,7 +5101,7 @@ over two minutes after the deletion.
    `ProbeIdleChannelCostIntegrationTest`, `SupersessionTest`, the probe-hint pins in
    `TopologyWiringTest` and the facts-round pins in `ProcessorRevivalTest`, the engine's
    facts and truncation pins, and the aborted-run end-to-end case that waited on the round.
-   Added: `AdminTopicIdentitySourceTest` (seven pins over the corroboration rules through the
+   Added: `AdminTopicIdentitySourceTest` (nine pins over the corroboration rules through the
    describe seams), `ProcessEngineTest#holdsUntilTheCauseItNamesIsDelivered`,
    `#aStartPositionCoversEverythingBelowItWithinTheSessionFloor`,
    `#recreatedReceivedChannelReportFailsClosed`,
@@ -5096,7 +5119,7 @@ over two minutes after the deletion.
    and `#heldMessageDiscardedByRetentionStillDeliversInOrderFromTheChangelog`,
    `IdentityIntegrationTest#aReceivedTopicDeletedWhileHeldFromStopsTheProcessBeforeDeliveringPastTheHold`
    (accepting either the engine's refusal or Streams' missing-source-topic stop, since which
-   arrives first is Streams' timing) and `#identitySourceClassifiesDeletedRecreatedAndNamelessTopicsAgainstARealBroker`,
+   arrives first is Streams' timing) and `#identitySourceClassifiesDeletedRecreatedNamelessAndDeniedTopicsAgainstARealBroker`,
    and in the simulator `TargetedScenarioTest#causeOnPositionThatNeverYieldsIsHeldAndVisibleUntilALaterMessageSettlesIt`,
    `#retentionDiscardingAHeldMessageStillDeliversItInOrderFromTheHoldBackBuffer`,
    `#recreatedReceivedTopicFailsClosedAtTheNextInitialisation` and
@@ -5142,8 +5165,13 @@ over two minutes after the deletion.
   check would re-create the identity windows this record removes; and a recreation that
   Streams' rebalance sees stops the thread with a named transient. The residual is the
   window between a recreation and the next initialisation, during which records of the new
-  incarnation could be fed under the old identity if Streams neither times out the commit
-  nor rebalances — which the measurement did not observe.
+  incarnation are fed under the old identity when Streams neither times out the commit nor
+  rebalances — which ASSESSMENT.md 1.1 observed on 3.9.1 and the review reproduced on 4.3.1
+  (a recreation completed while the handler stalled, the new log already past the old
+  position when the consumer next looked). The old round caught that shape within about
+  three seconds; under this record it is caught at the next task initialisation and not
+  before. A periodic by-id describe of the received topics remains the option to take if
+  that window proves too wide in practice.
 - *Keep pruning by log start at initialisation only.* Rejected: any pruning by retention
   reopens D104's inversion for a holder, and a frontier entry for a retained-away record
   costs nine bytes until the channel dies; growth is bounded by topology churn, which the
@@ -5169,9 +5197,12 @@ over two minutes after the deletion.
   the runbook says how to read it, and the writer is out of contract — but the stall is
   real, and where the round would have released it in a second nothing now does.
 - A recreation of a received topic while a task runs is detected only at the task's next
-  initialisation (Assumption 17 as extended). On Streams that is within a minute or two, or
-  immediately at a rebalance; on a host that neither re-creates the task nor rebalances, what
-  was delivered in between is outside the guarantee.
+  initialisation (Assumption 17 as extended). On Streams a recreation the host meets stops
+  the process at once, and a deletion is stopped within a minute or two; a recreation the
+  host does not meet — completed between two polls with the new log already past the old
+  position — is not stopped by anything until a later task re-creation, and what was
+  delivered in between is outside the guarantee. The previous round bounded that window to
+  about three seconds; this record leaves it unbounded, deliberately.
 - Learned names for non-declared frontier topics live in a runtime's `AdminTopicIdentitySource`
   and are lost at restart (D75's observation, still true): a frontier topic deleted while the
   process is stopped, or one whose name this runtime never learned, is never confirmed dead
@@ -5181,6 +5212,13 @@ over two minutes after the deletion.
   refuse rather than refusing before start: the process starts, and stops on its first fetch,
   where D74 refused from the bootstrap. The refusal reaches `status()` with its reason
   (D109) either way; an operator sees it a few seconds later than before.
+- The identity check runs on the stream thread inside task initialisation, bounded by one
+  ten-second deadline per task; a thread initialising many tasks against a hung admin path
+  spends that per task before polling again, which with enough tasks reaches
+  `max.poll.interval.ms`. The deleted seed round waited at most five seconds off-thread. The
+  pending retry's backoff keeps the cost after initialisation to one bounded describe per
+  step; the initialisation-time cost stands, and is the price of asking the question where
+  the answer is applied.
 - That the runtime hands the topology the admin-backed identity source, rather than one
   that answers nothing, has no broker-level pin: a test of the prune on a real broker needs a
   name learned in the same runtime that then deletes the topic and re-initialises the task,

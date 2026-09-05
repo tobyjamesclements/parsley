@@ -76,9 +76,14 @@ class RecordFailureDiagnosticsTest {
                         new MissingSourceTopicException("One or more source topics were missing during rebalance"))),
                 "a MissingSourceTopicException buried under Streams wrappers must be named");
         assertEquals(ParsleyRuntime.FailureDiagnosis.SOURCE_TOPIC_MISSING,
+                ParsleyRuntime.classifyFailure(streamsWrapped(new MissingSourceTopicException(
+                        "Missing source topics: [in]. Timeout exceeded after 60000ms."))),
+                "the stream thread's own timeout spelling of the same condition is the same type");
+        assertEquals(ParsleyRuntime.FailureDiagnosis.UNRECOGNISED,
                 ParsleyRuntime.classifyFailure(
                         new StreamsException("One or more source topics were missing during rebalance")),
-                "the message alone names the condition where the type is lost in a wrapper");
+                "the diagnosis is by type: the substrate always raises the typed exception and wrappers keep it,"
+                        + " so message text alone names nothing");
     }
 
     /**

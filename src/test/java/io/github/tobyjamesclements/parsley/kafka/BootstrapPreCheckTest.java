@@ -187,21 +187,29 @@ class BootstrapPreCheckTest {
     /**
      * The position an expired committed offset resumes at is the covered position plus one
      * (D115): the next position the previous execution would have read, whether retention
-     * still holds it being the substrate's to decide at the first fetch. Nothing covered,
-     * and the fed-to-end sentinel a channel settled on its topic's deletion carries, both
-     * fall back to the substrate's earliest or latest position; an off-by-one here would
-     * either re-feed a delivered position (dropped as a replay, so a silent cost) or skip
-     * one unread (a Safety 8 breach the fetch could not see).
+     * still holds it being the substrate's to decide at the first fetch. A partition the
+     * ordering state names as received but never covered — started at 0 and never fed, or
+     * covered to -1 by a pre-D115 execution — resumes at 0, the one position it can show it
+     * read from: the substrate's earliest may have moved past positions it never read, and
+     * taking it would treat them as fed (the shape the review found). Only a topic the state
+     * never named, and the fed-to-end sentinel a channel settled on its topic's deletion
+     * carries, fall back to the substrate's earliest or latest position. An off-by-one here
+     * would either re-feed a delivered position (dropped as a replay, so a silent cost) or
+     * skip one unread (a Safety 8 breach the fetch could not see).
      */
     @Test
     void anExpiredOffsetResumesAtTheCoveredPositionPlusOneOrFallsBackToTheSubstrate() {
-        assertEquals(java.util.OptionalLong.of(42), ParsleyRuntime.resumePosition(41L),
+        assertEquals(java.util.OptionalLong.of(42), ParsleyRuntime.resumePosition(41L, true),
                 "covered up to 41: 42 is the next unread position");
-        assertEquals(java.util.OptionalLong.of(1), ParsleyRuntime.resumePosition(0L),
+        assertEquals(java.util.OptionalLong.of(1), ParsleyRuntime.resumePosition(0L, true),
                 "covered up to 0: resume at 1");
-        assertEquals(java.util.OptionalLong.empty(), ParsleyRuntime.resumePosition(null),
-                "nothing covered: the substrate's earliest or latest position is taken instead");
-        assertEquals(java.util.OptionalLong.empty(), ParsleyRuntime.resumePosition(Long.MAX_VALUE),
+        assertEquals(java.util.OptionalLong.of(0), ParsleyRuntime.resumePosition(-1L, true),
+                "a pre-D115 execution recorded coverage of -1 for a channel started at 0: resume at 0");
+        assertEquals(java.util.OptionalLong.of(0), ParsleyRuntime.resumePosition(null, true),
+                "received before but never covered: the previous execution read from 0, so resume there");
+        assertEquals(java.util.OptionalLong.empty(), ParsleyRuntime.resumePosition(null, false),
+                "a topic the state never named: the substrate's earliest or latest position is taken instead");
+        assertEquals(java.util.OptionalLong.empty(), ParsleyRuntime.resumePosition(Long.MAX_VALUE, true),
                 "the fed-to-end sentinel is not a position an offset can follow");
     }
 }

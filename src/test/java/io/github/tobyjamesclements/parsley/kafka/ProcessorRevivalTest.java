@@ -66,27 +66,11 @@ class ProcessorRevivalTest {
     private static final ChannelId IN2 = new ChannelId(IN2_ID, 0);
     private static final ChannelId FOREIGN = new ChannelId(FOREIGN_ID, 0);
 
-    /** Answers scripted verdicts, or fails, and records what each initialisation asked. */
-    static final class ScriptedIdentity implements TopicIdentitySource {
-        volatile TopicIdentityVerdicts verdicts = TopicIdentityVerdicts.NONE;
-        volatile Exception failure;
-        final List<Set<UUID>> asked = new java.util.concurrent.CopyOnWriteArrayList<>();
-
-        @Override
-        public TopicIdentityVerdicts resolve(Set<UUID> topicIds) throws Exception {
-            asked.add(Set.copyOf(topicIds));
-            if (failure != null) {
-                throw failure;
-            }
-            return verdicts;
-        }
-    }
-
     @TempDir
     Path stateDir;
 
     private final List<String> delivered = new ArrayList<>();
-    private ScriptedIdentity identity;
+    private ScriptedTopicIdentity identity;
     private ProcessDiagnostics diagnostics;
     private KeyValueStore<Bytes, byte[]> orderingStore;
     private ParsleyProcessor processor;
@@ -94,7 +78,7 @@ class ProcessorRevivalTest {
 
     @BeforeEach
     void setUp() {
-        identity = new ScriptedIdentity();
+        identity = new ScriptedTopicIdentity();
         diagnostics = new ProcessDiagnostics();
         processor = newProcessor(Map.of());
         context = newContext();
@@ -126,11 +110,11 @@ class ProcessorRevivalTest {
         MockProcessorContext<byte[], byte[]> original = context;
         MockProcessorContext<byte[], byte[]> revived = revive(closedBeforeReinit);
 
-        assertEquals(1, original.scheduledPunctuators().size());
+        assertEquals(1, original.scheduledPunctuators().size(), "one punctuator per incarnation");
         assertTrue(original.scheduledPunctuators().get(0).cancelled(),
                 "the punctuator scheduled before revival must be cancelled");
-        assertEquals(1, revived.scheduledPunctuators().size());
-        assertFalse(revived.scheduledPunctuators().get(0).cancelled());
+        assertEquals(1, revived.scheduledPunctuators().size(), "the revival schedules exactly one punctuator");
+        assertFalse(revived.scheduledPunctuators().get(0).cancelled(), "the revived incarnation's punctuator runs");
     }
 
     /**
@@ -209,7 +193,8 @@ class ProcessorRevivalTest {
         identity.verdicts = new TopicIdentityVerdicts(Set.of(IN1_ID), Set.of());
         ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class, () -> revive(true),
                 "a deleted topic with a held message from it must refuse");
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
+        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason(),
+                "the refusal names the deleted channel's held messages, not a feed-order or identity reason");
         assertEquals(List.of(), delivered, "nothing may be delivered past the held message");
     }
 
@@ -224,17 +209,19 @@ class ProcessorRevivalTest {
         identity.verdicts = new TopicIdentityVerdicts(Set.of(), Set.of(IN1_ID));
         ParsleyFailClosedException e = assertThrows(ParsleyFailClosedException.class, () -> revive(true),
                 "a recreated received topic must refuse the initialisation that learns of it");
-        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
+        assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason(),
+                "a recreated received topic is an identity change, not a deletion");
     }
 
     /**
      * An identity source that cannot answer — a broker outage at initialisation — is not
      * evidence about any topic: the revival proceeds on the identities resolved at start,
      * the hold stays, and the frontier keeps every cause (D44's rule, D115). The question
-     * stays pending: each status punctuation asks again until it is answered, and the
-     * answer is then applied exactly as an initialisation's would be — here a deleted
-     * frontier topic is pruned, and a deleted received topic with nothing held from it is
-     * settled so the hold waiting on it goes.
+     * stays pending: the status punctuation asks again until it is answered — backing off,
+     * since each attempt can block the stream thread for the describe's timeout, from one
+     * status interval to a minute — and the answer is then applied exactly as an
+     * initialisation's would be: here a deleted frontier topic is pruned, and a deleted
+     * received topic with nothing held from it is settled so the hold waiting on it goes.
      */
     @Test
     void anUnansweredIdentityCheckKeepsEveryCauseAndEveryHoldAndIsAskedAgainUntilAnswered() {
@@ -247,23 +234,59 @@ class ProcessorRevivalTest {
         MockProcessorContext<byte[], byte[]> revived = assertDoesNotThrow(() -> revive(true),
                 "an unanswered identity check must not fail the task");
         int askedAtRevival = identity.asked.size();
-        punctuate(revived);
+        long clock = 1_000_000L;
+        punctuate(revived, clock);
         assertEquals(List.of("A"), delivered, "the hold stays: absence of an answer settles nothing");
         assertEquals(frontierBefore, diagnostics.snapshot().get(0).frontierChannels(),
                 "the frontier keeps every cause: absence of an answer prunes nothing");
         assertEquals(askedAtRevival + 1, identity.asked.size(), "the punctuation asked again while unanswered");
 
+        // The status interval here is 100 ms: the second attempt waits one interval, the
+        // third two, and a punctuation inside the wait does not ask.
+        punctuate(revived, clock + 50);
+        assertEquals(askedAtRevival + 1, identity.asked.size(), "inside the backoff, nothing asks");
+        punctuate(revived, clock + 100);
+        assertEquals(askedAtRevival + 2, identity.asked.size(), "one interval on, asked again");
+        punctuate(revived, clock + 250);
+        assertEquals(askedAtRevival + 2, identity.asked.size(), "the wait doubled: still inside it");
+
         identity.failure = null;
         identity.verdicts = new TopicIdentityVerdicts(Set.of(FOREIGN_ID, IN1_ID), Set.of());
-        punctuate(revived);
-        assertEquals(askedAtRevival + 2, identity.asked.size(), "asked once more, and answered");
+        punctuate(revived, clock + 300);
+        assertEquals(askedAtRevival + 3, identity.asked.size(), "asked once more, and answered");
         assertEquals(1, diagnostics.snapshot().get(0).frontierChannels(),
                 "the answer prunes both dead channels as an initialisation's would, and only the released"
                         + " effect's own channel enters the frontier");
         assertEquals(List.of("A", "B"), delivered,
                 "the answer settles the deleted received topic with nothing held from it, and the hold goes");
-        punctuate(revived);
-        assertEquals(askedAtRevival + 2, identity.asked.size(), "answered, nothing asks again");
+        punctuate(revived, clock + 100_000);
+        assertEquals(askedAtRevival + 3, identity.asked.size(), "answered, nothing asks again");
+    }
+
+    /**
+     * A source that answers about some ids and reports the rest unanswered — a by-name
+     * describe that timed out mid-corroboration — has the answered verdicts applied and the
+     * question kept pending for the rest: a timed-out corroboration is no answer, exactly
+     * as a failed by-id describe is none (D115), so the next punctuation asks again.
+     */
+    @Test
+    void aPartlyUnansweredIdentityCheckAppliesWhatWasAnsweredAndAsksAgainForTheRest() {
+        feed("in1", 0L, "A", Map.of(FOREIGN, 7L));
+        punctuate(context);
+        assertEquals(2, diagnostics.snapshot().get(0).frontierChannels(), "staging: in1 and the foreign channel");
+
+        identity.verdicts = new TopicIdentityVerdicts(Set.of(FOREIGN_ID), Set.of(), Set.of(IN2_ID));
+        MockProcessorContext<byte[], byte[]> revived = revive(true);
+        int askedAtRevival = identity.asked.size();
+        assertEquals(1, diagnostics.snapshot().get(0).frontierChannels(),
+                "the answered verdict is applied: the deleted frontier topic is pruned");
+
+        identity.verdicts = TopicIdentityVerdicts.NONE;
+        punctuate(revived, 5_000_000L);
+        assertEquals(askedAtRevival + 1, identity.asked.size(),
+                "an unanswered id keeps the question pending, so the punctuation asks again");
+        punctuate(revived, 9_000_000L);
+        assertEquals(askedAtRevival + 1, identity.asked.size(), "answered in full, nothing asks again");
     }
 
     /**
@@ -325,8 +348,12 @@ class ProcessorRevivalTest {
     }
 
     private static void punctuate(MockProcessorContext<byte[], byte[]> ctx) {
+        punctuate(ctx, 0L);
+    }
+
+    private static void punctuate(MockProcessorContext<byte[], byte[]> ctx, long wallClock) {
         List<MockProcessorContext.CapturedPunctuator> punctuators = ctx.scheduledPunctuators();
-        punctuators.get(punctuators.size() - 1).getPunctuator().punctuate(0L);
+        punctuators.get(punctuators.size() - 1).getPunctuator().punctuate(wallClock);
     }
 
     private static ProcessDefinition twoInputRecorder(List<String> delivered) {

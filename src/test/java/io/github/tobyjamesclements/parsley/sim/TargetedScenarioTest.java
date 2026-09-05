@@ -479,7 +479,8 @@ class TargetedScenarioTest {
     void deletingAChannelWithUndeliveredHeldMessagesFailsClosed() {
         Rig rig = deadChannelWithHeldMessages(SabotageMode.NONE);
         ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise());
+                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise(),
+                        "the identity report at re-initialisation must refuse");
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
         assertEquals(List.of(), rig.uidsDelivered("p"), "nothing may deliver past the held message");
     }
@@ -516,7 +517,8 @@ class TargetedScenarioTest {
         q.commitStep();
 
         ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise());
+                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise(),
+                        "the identity report at re-initialisation must refuse");
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, e.reason());
         assertEquals(List.of("X0"), rig.uidsDelivered("p"));
         rig.oracle.finalChecks();
@@ -637,7 +639,8 @@ class TargetedScenarioTest {
     void recreatedReceivedTopicFailsClosedAtTheNextInitialisation() {
         Rig rig = recreatedTopic(SabotageMode.NONE);
         ParsleyFailClosedException e =
-                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise());
+                assertThrows(ParsleyFailClosedException.class, () -> rig.proc("p").reinitialise(),
+                        "the identity report at re-initialisation must refuse");
         assertEquals(ParsleyFailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
         assertEquals(List.of("m0"), rig.uidsDelivered("p"), "delivery stops at the recreation, nothing is lost");
     }

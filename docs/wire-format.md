@@ -47,7 +47,9 @@ are each undecodable. The last of these matters even though it looks like more p
 32-bit reader that shifts the surplus away would decode `85 80 80 80 10` to the same value
 as `05`, two spellings for one value that the padding rule alone cannot see.
 
-Every constraint below is mandatory. Violating any one makes the value undecodable.
+Every constraint below is mandatory. Constraints 1–7 are decidable from the bytes, and
+violating any one of them makes the value undecodable. Constraint 8 is not: it binds the
+writer, and its breach shows as a hold in the receiver's status, not as a refusal.
 
 1. The version byte is `0x01`. Any other value is undecodable, and readers must not guess
    forward compatibility.

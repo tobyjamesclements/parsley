@@ -51,8 +51,8 @@ class ProcessEngineTest {
         assertTrue(effectWhileCauseHeld instanceof Deliverability.Held,
                 "received but undelivered, the cause still holds the effect: " + effectWhileCauseHeld);
         Deliverability.Blocker blocker = ((Deliverability.Held) effectWhileCauseHeld).blockers().get(0);
-        assertEquals(C1, blocker.channel());
-        assertEquals(3L, blocker.requiredPosition());
+        assertEquals(C1, blocker.channel(), "the blocker names the cause's channel");
+        assertEquals(3L, blocker.requiredPosition(), "the blocker names the cause's position");
         assertEquals(java.util.OptionalLong.of(2), blocker.settledPosition(),
                 "the settled view stops below the held head, so c1@3 is not yet settled");
         DeliverableMessage a = engine.nextDeliverable().orElseThrow();

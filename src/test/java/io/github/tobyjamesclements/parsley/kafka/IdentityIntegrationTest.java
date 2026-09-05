@@ -205,19 +205,33 @@ class IdentityIntegrationTest {
      * The identity classification a task's initialisation acts on, over a real broker
      * (D115): a live topic is neither deleted nor recreated; a deleted one is deleted only
      * once its name is gone across three consistent answers; a topic recreated under its
-     * name makes the id it had a dead incarnation; and an id whose name the source never
+     * name makes the id it had a dead incarnation; an id whose name the source never
      * learned is never confirmed dead at all (D75), since a Describe denial masks a live
-     * topic as unknown by id exactly the same way.
+     * topic as unknown by id exactly the same way; and a Describe denial on a topic whose
+     * name is known is answered by name as denied — alive, and the question answered — never
+     * as death (D44). A denied received topic cannot meet a task initialisation on this
+     * host, since the start's own resolution refuses under the denial first; the source's
+     * verdict is what an initialisation would act on where it could.
      */
     @Test
-    void identitySourceClassifiesDeletedRecreatedAndNamelessTopicsAgainstARealBroker() throws Exception {
-        createTopics("id-x", "id-y");
+    void identitySourceClassifiesDeletedRecreatedNamelessAndDeniedTopicsAgainstARealBroker() throws Exception {
+        createTopics("id-x", "id-y", "id-d");
         UUID xId = topicId("id-x");
         UUID yId = topicId("id-y");
+        UUID dId = topicId("id-d");
         AdminTopicIdentitySource source = new AdminTopicIdentitySource(admin, "id-group",
-                Map.of(xId, "id-x"), Duration.ofMillis(50));
+                Map.of(xId, "id-x", dId, "id-d"), Duration.ofMillis(50));
 
-        assertEquals(TopicIdentityVerdicts.NONE, source.resolve(Set.of(xId, yId)), "live topics: nothing gone");
+        assertEquals(TopicIdentityVerdicts.NONE, source.resolve(Set.of(xId, yId, dId)), "live topics: nothing gone");
+
+        try {
+            denyDescribe("id-d");
+            assertEquals(TopicIdentityVerdicts.NONE, source.resolve(Set.of(dId)),
+                    "the broker masks the denial as unknown by id; the by-name answer says denied, which keeps"
+                            + " the id alive and counts as an answer");
+        } finally {
+            dropAcls("id-d");
+        }
 
         admin.deleteTopics(List.of("id-x", "id-y")).all().get(30, TimeUnit.SECONDS);
         await("the deletions to propagate", () -> {
@@ -249,6 +263,62 @@ class IdentityIntegrationTest {
                 Duration.ofMillis(50));
         assertEquals(TopicIdentityVerdicts.NONE, nameless.resolve(Set.of(yId)),
                 "an id whose name was never learned is never confirmed dead");
+    }
+
+    /**
+     * A received topic deleted and recreated under its name while the process polls stops
+     * the process before it adopts the new incarnation: the rebalance that meets the topic
+     * missing stops the thread with the host's own transient, or the first fetch at the old
+     * position on the still-short new log refuses under {@code auto.offset.reset=none} —
+     * whichever the host's timing produces. What this does not pin, and nothing can, is a
+     * recreation that lands entirely between two polls with the new log already past the
+     * old position: that is SPEC Assumption 17's territory, observed in ASSESSMENT.md 1.1
+     * and again under review, and detected only at the task's next initialisation (D115).
+     */
+    @Test
+    void aReceivedTopicRecreatedWhileTheProcessPollsStopsTheProcess() throws Exception {
+        createTopics("rr-in");
+        Channel<String, String> in = Channel.of("rr-in", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        ProcessDefinition p = ProcessDefinition.named("rr")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("rr"), p)) {
+            for (int i = 0; i < 5; i++) {
+                produce("rr-in", "k", "m" + i);
+            }
+            await("all five to deliver", () -> delivered.size() == 5, Duration.ofSeconds(60));
+            awaitCommitted("rr-rr", "rr-in", 5);
+
+            admin.deleteTopics(List.of("rr-in")).all().get(30, TimeUnit.SECONDS);
+            Thread.sleep(200);
+            createTopics("rr-in");
+            for (int i = 0; i < 8; i++) {
+                produce("rr-in", "k", "v" + i);
+            }
+
+            await("the process to stop rather than adopt the new incarnation",
+                    () -> !parsley.healthy(), Duration.ofSeconds(60));
+            assertEquals(5, delivered.stream().filter(v -> v.startsWith("m")).count(),
+                    "the old incarnation's deliveries stand");
+            assertTrue(delivered.stream().noneMatch(v -> v.startsWith("v")),
+                    "nothing of the new incarnation is delivered under the old identity");
+            await("the stop to be recorded in the status surface",
+                    () -> parsley.status().get("rr").failureDetail().isPresent(), Duration.ofSeconds(30));
+            io.github.tobyjamesclements.parsley.api.ProcessStatus status = parsley.status().get("rr");
+            boolean hostStop = status.refusalReason().isEmpty()
+                    && status.failureDetail().orElseThrow().contains("source topics");
+            boolean fetchRefused = status.refusalReason()
+                    .map(reason -> reason == ParsleyFailClosedException.Reason.POSITIONS_DISCARDED_UNREAD)
+                    .orElse(false);
+            assertTrue(hostStop || fetchRefused,
+                    "the stop must be the host's missing-source-topic transient or the fetch's refusal at the old"
+                            + " position, got: " + status);
+        }
     }
 
     /** Deliberate refusal is readable in the status surface. */
@@ -328,58 +398,6 @@ class IdentityIntegrationTest {
             }
         } finally {
             dropAcls("acl-x");
-        }
-    }
-
-    /**
-     * A Describe denial on a received topic neither releases nor refuses a message held
-     * for a cause on it: nothing settles a received channel but receiving the record its
-     * cause names (D115), so the process holds and waits, healthy, until the record arrives.
-     */
-    @Test
-    void deniedDescribeOnAReceivedTopicDoesNotReleaseHeldMessages() throws Exception {
-        createTopics("aclr-in", "aclr-x");
-        UUID xId = topicId("aclr-x");
-        ChannelId xChannel = new ChannelId(xId, 0);
-        Channel<String, String> in = Channel.of("aclr-in", Serdes.String(), Serdes.String());
-        Channel<String, String> x = Channel.of("aclr-x", Serdes.String(), Serdes.String());
-        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
-        ProcessDefinition p = ProcessDefinition.named("aclr")
-                .receives(in, (d, s) -> {
-                    delivered.add(d.value());
-                    return Effects.none();
-                })
-                .receives(x, (d, s) -> {
-                    delivered.add(d.value());
-                    return Effects.none();
-                })
-                .build();
-
-        try (Parsley parsley = Parsley.start(config("aclr"), p)) {
-            produce("aclr-x", "k", "x0");
-            await("x0 to deliver", () -> delivered.contains("x0"), Duration.ofSeconds(60));
-
-            allow("aclr-x", AclOperation.READ);
-            allow("aclr-x", AclOperation.WRITE);
-            denyDescribe("aclr-x");
-            produce("aclr-in", "k", "R", causesHeader(Map.of(xChannel, 3L)));
-
-            Thread.sleep(4_000);
-            assertFalse(delivered.contains("R"),
-                    "a denial-masked describe must not settle positions that may still arrive");
-            assertTrue(parsley.healthy(), "the process holds and waits; denial is not its failure");
-
-            dropAcls("aclr-x");
-            produce("aclr-x", "k", "x1");
-            produce("aclr-x", "k", "x2");
-            produce("aclr-x", "k", "x3");
-            await("R to deliver once its cause's positions really arrived",
-                    () -> delivered.contains("R"), Duration.ofSeconds(60));
-            List<String> order = List.copyOf(delivered);
-            assertTrue(order.indexOf("x3") < order.indexOf("R"),
-                    "the cause's positions deliver before the effect");
-        } finally {
-            dropAcls("aclr-x");
         }
     }
 

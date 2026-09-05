@@ -62,7 +62,7 @@ class AdminTopicIdentitySourceTest {
         }
 
         @Override
-        Map<String, Object> describeByNames(Set<String> names) {
+        Map<String, Object> describeByNames(Set<String> names, long deadline) {
             namesAsked.add(Set.copyOf(names));
             Map<String, Object> scripted = byNameAnswers.poll();
             return scripted == null ? Map.of() : scripted;
@@ -86,7 +86,8 @@ class AdminTopicIdentitySourceTest {
         Scripted source = new Scripted(Map.of(DECLARED_ID, "orders"));
         source.byId.put(DECLARED_ID, "orders");
         source.byId.put(UPSTREAM_ID, "upstream");
-        assertEquals(TopicIdentityVerdicts.NONE, source.resolve(Set.of(DECLARED_ID, UPSTREAM_ID)));
+        assertEquals(TopicIdentityVerdicts.NONE, source.resolve(Set.of(DECLARED_ID, UPSTREAM_ID)),
+                "ids that describe are alive");
         assertEquals(List.of(), source.namesAsked, "a live id needs no corroboration");
     }
 
@@ -122,25 +123,45 @@ class AdminTopicIdentitySourceTest {
     void aNamelessUnknownIdIsNeverConfirmedDead() throws Exception {
         Scripted source = new Scripted(Map.of(DECLARED_ID, "orders"));
         source.byId.put(DECLARED_ID, "orders");
-        assertEquals(TopicIdentityVerdicts.NONE, source.resolve(Set.of(DECLARED_ID, NAMELESS_ID)));
+        assertEquals(TopicIdentityVerdicts.NONE, source.resolve(Set.of(DECLARED_ID, NAMELESS_ID)),
+                "a nameless unknown id is never confirmed dead");
         assertEquals(List.of(), source.namesAsked, "nothing to corroborate against, nothing asked");
     }
 
     /**
-     * A denied, an unavailable, or a stale by-id answer keeps the id alive: the name
-     * resolving to the very id asked about proves the by-id answer stale, and absence of
-     * evidence never confirms death (D44).
+     * A denied or a stale by-id answer keeps the id alive: the name resolving to the very id
+     * asked about proves the by-id answer stale, and absence of evidence never confirms
+     * death (D44). Both are answers, so nothing is left to ask again.
      */
     @Test
-    void deniedUnavailableAndSameIdAnswersKeepTheIdAlive() throws Exception {
-        for (Object answer : List.of(NameVerdictOf.DENIED, NameVerdictOf.UNAVAILABLE, DECLARED_ID)) {
+    void deniedAndSameIdAnswersKeepTheIdAliveAndCountAsAnswered() throws Exception {
+        for (Object answer : List.of(NameVerdictOf.DENIED, DECLARED_ID)) {
             Scripted source = new Scripted(Map.of(DECLARED_ID, "orders"));
             for (int i = 0; i < AdminTopicIdentitySource.CORROBORATING_ANSWERS; i++) {
                 source.byNameAnswers.add(Map.of("orders", answer));
             }
             assertEquals(TopicIdentityVerdicts.NONE, source.resolve(Set.of(DECLARED_ID)),
-                    "answer " + answer + " is not evidence of deletion or recreation");
+                    answer + " keeps the id alive and answers the question");
         }
+    }
+
+    /**
+     * A by-name describe that times out or fails is no answer: the id is neither convicted
+     * nor acquitted but reported unanswered, so the asker keeps its question pending and
+     * asks again — exactly as it does when the by-id describe fails (D115). Reading a
+     * timeout as "alive" would let one slow corroboration silence a recreation for the
+     * life of the task.
+     */
+    @Test
+    void anUnavailableAnswerLeavesTheIdUnansweredRatherThanAlive() throws Exception {
+        Scripted source = new Scripted(Map.of(DECLARED_ID, "orders"));
+        source.byNameAnswers.add(nameGone("orders"));
+        source.byNameAnswers.add(Map.of("orders", NameVerdictOf.UNAVAILABLE));
+        TopicIdentityVerdicts verdicts = source.resolve(Set.of(DECLARED_ID));
+        assertEquals(Set.of(), verdicts.deleted(), "no verdict either way");
+        assertEquals(Set.of(), verdicts.recreated(), "no verdict either way");
+        assertEquals(Set.of(DECLARED_ID), verdicts.unanswered(), "the timed-out corroboration leaves the id unanswered");
+        assertEquals(2, source.namesAsked.size(), "the corroboration stops at the answer it could not get");
     }
 
     /**
@@ -180,7 +201,8 @@ class AdminTopicIdentitySourceTest {
         source.byNameAnswers.add(nameGone("orders"));
         source.byNameAnswers.add(Map.of("orders", DECLARED_ID));
         source.byNameAnswers.add(nameGone("orders"));
-        assertEquals(TopicIdentityVerdicts.NONE, source.resolve(Set.of(DECLARED_ID)));
+        assertEquals(TopicIdentityVerdicts.NONE, source.resolve(Set.of(DECLARED_ID)),
+                "one contrary answer among the corroborating ones keeps the id alive");
         assertEquals(2, source.namesAsked.size(), "the contrary second answer ends the corroboration early");
     }
 
@@ -211,7 +233,8 @@ class AdminTopicIdentitySourceTest {
             source.byNameAnswers.add(answers);
         }
         TopicIdentityVerdicts verdicts = source.resolve(Set.of(DECLARED_ID, UPSTREAM_ID));
-        assertEquals(Set.of(DECLARED_ID, UPSTREAM_ID), verdicts.deleted());
-        assertEquals(Set.of(), verdicts.recreated());
+        assertEquals(Set.of(DECLARED_ID, UPSTREAM_ID), verdicts.deleted(),
+                "both unknown-topic spellings by id are corroborated by name and confirmed deleted");
+        assertEquals(Set.of(), verdicts.recreated(), "a name that is gone is a deletion, not a recreation");
     }
 }

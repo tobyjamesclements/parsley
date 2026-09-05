@@ -128,7 +128,15 @@ public final class SimProcess {
             throw e;
         }
         oracle.onStart(name);
-        reportIdentity();
+        try {
+            reportIdentity();
+        } catch (ParsleyFailClosedException e) {
+            // A refused initialisation leaves no running process behind it: the partial
+            // report's writes are rolled back with the open step, as the host's failed
+            // task initialisation leaves nothing committed.
+            crash();
+            throw e;
+        }
     }
 
     /**
@@ -210,11 +218,7 @@ public final class SimProcess {
         // report at its re-initialisation refuses; so every such commit is a catch, whatever
         // the process does afterwards, and a fresh incarnation killed later on hides nothing.
         for (SimChannel channel : received.values()) {
-            if (!channel.dead) {
-                continue;
-            }
-            SimChannel current = world.currentByName(channel.name);
-            if (current != null && !current.id().equals(channel.id())) {
+            if (recreated(channel)) {
                 oracle.flag("Assumption 2: " + name + " committed a step while its received topic ("
                         + channel.name + ") had been deleted and recreated under the same name, without"
                         + " failing closed");
@@ -394,10 +398,22 @@ public final class SimProcess {
             if (!channel.dead) {
                 continue;
             }
-            SimChannel current = world.currentByName(channel.name);
-            (current != null && !current.id().equals(channel.id()) ? recreated : dead).add(channel.id());
+            (recreated(channel) ? recreated : dead).add(channel.id());
         }
         engine.onIdentityReport(new IdentityReport(dead, recreated));
+    }
+
+    /**
+     * The simulator's one definition of a recreation: a dead channel whose name is bound
+     * to a live channel with another id. Both the identity report and the commit-time
+     * Assumption 2 judgement read it, so the two cannot disagree.
+     */
+    private boolean recreated(SimChannel channel) {
+        if (!channel.dead) {
+            return false;
+        }
+        SimChannel current = world.currentByName(channel.name);
+        return current != null && !current.id().equals(channel.id());
     }
 
     /**

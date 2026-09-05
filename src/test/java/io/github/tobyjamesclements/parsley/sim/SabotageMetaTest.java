@@ -188,7 +188,8 @@ class SabotageMetaTest {
     void deliveringPastDeadChannelHoldsIsCaught() {
         Rig rig = TargetedScenarioTest.deadChannelWithHeldMessages(SabotageMode.DELIVER_PAST_DEAD_HOLDS);
 
-        assertDoesNotThrow(() -> rig.proc("p").reinitialise());
+        assertDoesNotThrow(() -> rig.proc("p").reinitialise(),
+                "the sabotage must disarm the refusal, or the oracle assertion below tests nothing");
     }
 
     /** Delivering past dead channel holds inverts causal order and the oracle sees it. */

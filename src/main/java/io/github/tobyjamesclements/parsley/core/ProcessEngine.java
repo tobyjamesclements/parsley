@@ -46,7 +46,7 @@ public final class ProcessEngine {
         DUPLICATE_DROPPED
     }
 
-    private static final long FED_TO_END_OF_CHANNEL = Long.MAX_VALUE;
+    static final long FED_TO_END_OF_CHANNEL = Long.MAX_VALUE;
 
     /** Metadata budget applied where a configuration names none. */
     public static final int DEFAULT_METADATA_BUDGET_BYTES = 256 * 1024;
@@ -181,10 +181,6 @@ public final class ProcessEngine {
     public ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,
                          int metadataBudgetBytes, Map<ChannelId, Long> startPositions) {
         this(processName, receivedChannels, store, metadataBudgetBytes, Sabotage.NONE, startPositions);
-    }
-
-    ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store, Sabotage sabotage) {
-        this(processName, receivedChannels, store, DEFAULT_METADATA_BUDGET_BYTES, sabotage, Map.of());
     }
 
     ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,

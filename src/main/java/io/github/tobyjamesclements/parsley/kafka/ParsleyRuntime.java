@@ -57,6 +57,14 @@ public final class ParsleyRuntime implements AutoCloseable {
      * a future Streams version ever commits empty metadata.
      */
     static final String BOOTSTRAP_OFFSET_STAMP = "parsley.bootstrap";
+    /**
+     * The evidence standard for concluding a topic gone (D84, D113): this many consistent
+     * unknown-topic answers, each {@link #CORROBORATION_BACKOFF} after the last. One
+     * spelling for the declared topics, the ordering changelog and the identity check at
+     * task initialisation.
+     */
+    static final int CORROBORATING_ANSWERS = 3;
+    static final java.time.Duration CORROBORATION_BACKOFF = java.time.Duration.ofMillis(500);
 
     private final Admin admin;
     // Populated by start() and read by status()/healthy()/close() from monitoring threads,
@@ -134,7 +142,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                 // received topic from a denied describe (D75); names of upstream topics are
                 // learned as tasks initialise (D115).
                 AdminTopicIdentitySource identitySource = new AdminTopicIdentitySource(admin, applicationId,
-                        namesById, java.time.Duration.ofMillis(500));
+                        namesById, CORROBORATION_BACKOFF);
                 ProcessDiagnostics diagnostics = new ProcessDiagnostics();
                 runtime.diagnosticsByProcess.put(definition.name(), diagnostics);
                 KafkaStreams kafkaStreams = new KafkaStreams(
@@ -341,8 +349,7 @@ public final class ParsleyRuntime implements AutoCloseable {
             if (cause instanceof org.apache.kafka.common.errors.RecordTooLargeException) {
                 return FailureDiagnosis.RECORD_TOO_LARGE;
             }
-            if (cause instanceof org.apache.kafka.streams.errors.MissingSourceTopicException
-                    || String.valueOf(cause.getMessage()).contains("source topics were missing")) {
+            if (cause instanceof org.apache.kafka.streams.errors.MissingSourceTopicException) {
                 return FailureDiagnosis.SOURCE_TOPIC_MISSING;
             }
             if (String.valueOf(cause.getMessage()).contains("invalid partitions")) {
@@ -547,7 +554,7 @@ public final class ParsleyRuntime implements AutoCloseable {
     private Map<String, TopicInfo> resolveTopics(Set<String> names) {
         return resolveTopicsCorroborated(
                 () -> admin.describeTopics(names).allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS),
-                java.time.Duration.ofMillis(500));
+                CORROBORATION_BACKOFF);
     }
 
     /** The describe of every declared topic, behind a seam so tests can script the answers. */
@@ -574,7 +581,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                 throw e;
             } catch (Exception e) {
                 boolean unknown = e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
-                if (!unknown || attempt == 2) {
+                if (!unknown || attempt == CORROBORATING_ANSWERS - 1) {
                     throw new IllegalStateException("declared topics could not be resolved; refusing to start", e);
                 }
                 try {
@@ -604,7 +611,7 @@ public final class ParsleyRuntime implements AutoCloseable {
         String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
         return describeChangelogCorroborated(applicationId, () -> admin.describeTopics(List.of(changelog))
                 .allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS).get(changelog),
-                java.time.Duration.ofMillis(500));
+                CORROBORATION_BACKOFF);
     }
 
     /** One describe of the ordering changelog, as the substrate answers it — the seam the
@@ -635,7 +642,7 @@ public final class ParsleyRuntime implements AutoCloseable {
                     throw new IllegalStateException(
                             applicationId + ": could not determine prior state; refusing to start", e);
                 }
-                if (attempt == 2) {
+                if (attempt == CORROBORATING_ANSWERS - 1) {
                     return java.util.Optional.empty();
                 }
                 try {
@@ -904,14 +911,18 @@ public final class ParsleyRuntime implements AutoCloseable {
      * <p>With prior state, a partition whose committed position is missing — expired during
      * a long stop — resumes at the ordering state's covered position plus one (D115): every
      * position at or below the covered one was fed or will never arrive, so that is exactly
-     * where the previous execution would have read next. Whether retention still holds it
-     * is the substrate's to decide at the first fetch: under {@code auto.offset.reset=none}
-     * a position below the log start refuses the fetch, and {@link #classifyFailure} names
-     * it {@code POSITIONS_DISCARDED_UNREAD} (SPEC Safety 8, D9/D81/D109). A channel with no
-     * coverage — a genuinely first start, a channel joining the received set, or a bootstrap
-     * that crashed before Streams ever ran — takes the substrate's earliest or latest
-     * position instead, a one-off query: the declared initial position on a first start,
-     * earliest wherever prior state exists (D36).
+     * where the previous execution would have read next. A received partition the ordering
+     * state names but never covered — received by an earlier execution that started it at
+     * 0 and was never fed from it — resumes at 0, the only position it can show it read
+     * from; the substrate's earliest, which may have moved past positions it never read, is
+     * not a position it covered. Whether retention still holds the resumed position is the
+     * substrate's to decide at the first fetch: under {@code auto.offset.reset=none} a
+     * position below the log start refuses the fetch, and {@link #classifyFailure} names it
+     * {@code POSITIONS_DISCARDED_UNREAD} (SPEC Safety 8, D9/D81/D109). A channel the state
+     * has never named — a genuinely first start, a channel joining the received set, or a
+     * bootstrap that crashed before Streams ever ran — takes the substrate's earliest or
+     * latest position instead, a one-off query: the declared initial position on a first
+     * start, earliest wherever prior state exists (D36).
      *
      * @return per received partition, the position the host feeds first
      */
@@ -943,15 +954,18 @@ public final class ParsleyRuntime implements AutoCloseable {
             refuseLostOrderingState(applicationId, orderingView, committed, recheck);
             Map<io.github.tobyjamesclements.parsley.core.ChannelId, Long> covered =
                     io.github.tobyjamesclements.parsley.core.OrderingStateInspector.coveredPositions(orderingView.latest());
+            java.util.Set<String> receivedBefore =
+                    io.github.tobyjamesclements.parsley.core.OrderingStateInspector.nameBindings(orderingView.latest())
+                            .keySet();
             Map<TopicPartition, OffsetAndMetadata> toCommit = new HashMap<>();
             Map<TopicPartition, OffsetSpec> wanted = new HashMap<>();
             for (TopicPartition tp : received) {
                 if (committed.get(tp) != null) {
                     continue;
                 }
-                java.util.OptionalLong resume = resumePosition(covered.get(
-                        new io.github.tobyjamesclements.parsley.core.ChannelId(
-                                topics.get(tp.topic()).topicId(), tp.partition())));
+                Long coveredUpTo = covered.get(new io.github.tobyjamesclements.parsley.core.ChannelId(
+                        topics.get(tp.topic()).topicId(), tp.partition()));
+                java.util.OptionalLong resume = resumePosition(coveredUpTo, receivedBefore.contains(tp.topic()));
                 if (resume.isPresent()) {
                     toCommit.put(tp, new OffsetAndMetadata(resume.getAsLong(), BOOTSTRAP_OFFSET_STAMP));
                     continue;
@@ -988,19 +1002,26 @@ public final class ParsleyRuntime implements AutoCloseable {
     /**
      * The position a partition with an expired committed offset resumes at, from the
      * ordering state's coverage of it: the covered position plus one, the next position the
-     * previous execution would have read. Empty where nothing is covered — the substrate's
-     * earliest or latest position is taken instead — and where the coverage is the engine's
-     * fed-to-end sentinel, {@code Long.MAX_VALUE}, which a channel settled on its topic's
-     * deletion carries and which no offset can follow.
+     * previous execution would have read. A partition the state names as received but never
+     * covered — started at 0 and never fed, or a pre-D115 execution that recorded coverage
+     * of -1 for it — resumes at 0, the one position it can show it read from. Empty where
+     * the state never named the topic (the substrate's earliest or latest position is taken
+     * instead) and where the coverage is the engine's fed-to-end sentinel, which a channel
+     * settled on its topic's deletion carries and which no offset can follow.
      *
-     * @param coveredUpTo the channel's covered position from the ordering state, or null
+     * @param coveredUpTo    the channel's covered position from the ordering state, or null
+     * @param receivedBefore whether the ordering state binds the channel's topic name, which
+     *                       every execution that received the topic writes
      * @return the position to commit, or empty to query the substrate
      */
-    static java.util.OptionalLong resumePosition(Long coveredUpTo) {
-        if (coveredUpTo == null || coveredUpTo == Long.MAX_VALUE || coveredUpTo < 0) {
+    static java.util.OptionalLong resumePosition(Long coveredUpTo, boolean receivedBefore) {
+        if (coveredUpTo == null) {
+            return receivedBefore ? java.util.OptionalLong.of(0) : java.util.OptionalLong.empty();
+        }
+        if (io.github.tobyjamesclements.parsley.core.OrderingStateInspector.isFedToEnd(coveredUpTo)) {
             return java.util.OptionalLong.empty();
         }
-        return java.util.OptionalLong.of(coveredUpTo + 1);
+        return java.util.OptionalLong.of(Math.max(coveredUpTo, -1) + 1);
     }
 
     /** The received partitions' start positions: the committed ones, overlaid by this bootstrap's commits. */

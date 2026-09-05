@@ -77,10 +77,12 @@ confirms recreation; a denial, an unavailable answer, or the name resolving to t
 asked about keeps it alive. A denial is denial, never death. An id whose name was never
 learned is never confirmed dead: it lingers in the frontier, costing expression size and
 never safety. A describe failure that is not the substrate's unknown-topic answer — a timeout,
-an outage — is not evidence about any id: the initialisation proceeds with a warning, every
-cause and every hold stays, and the question stays pending — each status punctuation asks it
-again until it is answered, and the answer is applied as the initialisation's would have
-been. The check is event-driven and eventual, never periodic.
+an outage, whether by id or by name mid-corroboration — is not evidence about any id: the
+initialisation proceeds with a warning, every cause and every hold stays, and the question
+stays pending — the status punctuation asks it again until it is answered, backing off from
+one status interval to a minute since each attempt can hold the stream thread for the
+describes' shared ten-second deadline, and the answer is applied as the initialisation's
+would have been. The check is event-driven and eventual, never periodic.
 
 The engine takes the verdicts through `ProcessEngine.onIdentityReport`. A received channel
 whose topic was recreated under its name refuses `CHANNEL_IDENTITY_CHANGED`: records fed
@@ -99,7 +101,10 @@ Kafka Streams 4.3, deleting a received topic does not stop the process at once: 
 transactional commit times out, the host re-creates the task, and its initialisation runs the
 identity check, which refuses. A rebalance that finds a source topic missing instead stops the
 stream thread with the host's `MissingSourceTopicException`, which the runtime names
-`SOURCE_TOPIC_MISSING` — a transient, with no `refusalReason`. Its log line says to restart;
+`SOURCE_TOPIC_MISSING` — a transient, with no `refusalReason` — and a recreation the first
+fetch meets refuses under `auto.offset.reset=none`. A recreation that lands entirely between
+two polls, the new log already past the old position, is met by neither: it is detected at
+the next task initialisation and not before, which is what the assumption signs away. Its log line says to restart;
 the start then refuses `CHANNEL_IDENTITY_CHANGED` for a recreated topic, refuses a
 still-missing one at resolution, and resumes where a broker's metadata merely lagged.
 

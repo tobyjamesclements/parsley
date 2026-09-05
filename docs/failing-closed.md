@@ -27,7 +27,7 @@ This table says when each reason is raised. What an operator does about it is in
 | Reason | Condition |
 |---|---|
 | `UNDECODABLE_METADATA` | Metadata present and not decodable |
-| `POSITIONS_DISCARDED_UNREAD` | Retention discarded positions this process has not read: the consumer's fetch under `auto.offset.reset=none` refused a committed read position below the log-start offset, and the runtime classified the stop. That fetch is the one site — while running, when retention passes a lagging read position; on the first fetch after a start that committed, over an expired offset, the ordering state's covered position plus one, or the substrate's earliest position where the state covers nothing; or after a stop long enough for retention to pass the committed position. There is no engine check and no held-message shape: a held message retention discards is in the ordering changelog and delivers from there once its causes settle. Retention must cover the longest stop and lag, not hold-back time |
+| `POSITIONS_DISCARDED_UNREAD` | Retention discarded positions this process has not read: the consumer's fetch under `auto.offset.reset=none` refused a committed read position below the log-start offset, and the runtime classified the stop. That fetch is the one site — while running, when retention passes a lagging read position; on the first fetch after a start that committed, over an expired offset, the ordering state's covered position plus one — 0 for a partition the state names but never covered, and the substrate's earliest only for a topic the state never named; or after a stop long enough for retention to pass the committed position. There is no engine check and no held-message shape: a held message retention discards is in the ordering changelog and delivers from there once its causes settle. Retention must cover the longest stop and lag, not hold-back time |
 | `OUT_OF_ORDER_FEED` | The host fed a channel out of position order within one execution, or fed a channel recorded as no longer existing |
 | `COVERED_POSITION_FED` | The host fed a channel at a position this execution's own coverage already records as fed or never arriving, above the session floor — the host's feed and the engine's record contradict each other. An invariant guard with no known trigger: above the session floor, coverage is raised only by this execution's own receipts, which the in-execution order check guards, and by the initialisation's identity report settling a deleted channel to its end, which the dead-channel check guards; a feed inside either is refused first as `OUT_OF_ORDER_FEED`. A restart resumes from the committed record, and the refusal then does not recur |
 | `ORDERING_STATE_LOST` | Committed read positions the bootstrap did not write (a previous Kafka Streams execution's stamp, or bare external commits) exist while the ordering-changelog partition behind them holds no records — the topic absent, or its records purged, in whole or for that one partition. If a prior execution ran, the state of its most recent committed step has been lost and resuming would silently under-express every cause delivered before the loss |
@@ -56,8 +56,9 @@ read position below the log start refuses the fetch rather than silently jumping
 runtime names the stop `POSITIONS_DISCARDED_UNREAD`. A start with prior state and an expired
 committed offset compares nothing against the log start itself: it commits the ordering
 state's covered position plus one — where the previous execution would have read next — for
-every partition the state covers, and the substrate's earliest position for one it does not,
-and the first fetch decides whether retention still holds it. Nothing else looks. The engine
+every partition the state covers, 0 for one it names but never covered, and the substrate's
+earliest position only for a topic it never named, and the first fetch decides whether
+retention still holds it. Nothing else looks. The engine
 keeps no check against a log start, and a held message retention discards is not a stop: it
 is in the ordering changelog and delivers from there once its causes settle.
 
