@@ -35,10 +35,9 @@
  * an application or an operator handles rather than declares:
  * {@link io.github.tobyjamesclements.parsley.Header} on a delivered or sent message,
  * {@link io.github.tobyjamesclements.parsley.FailClosedException} and its reason when a
- * process refuses, and
- * {@link io.github.tobyjamesclements.parsley.OrderingStateInspector} with
- * {@link io.github.tobyjamesclements.parsley.Channel} to read what a stopped process was
- * holding. Everything else is package-private.
+ * process refuses, and {@link io.github.tobyjamesclements.parsley.Channel}, the partition
+ * by identity that a {@link io.github.tobyjamesclements.parsley.Delivery} names as where it
+ * arrived. Everything else is package-private.
  *
  * <p>Package-private types divide into two groups that must not be confused. The protocol
  * is host-free: the causal frontier, its wire codec, the hold-back buffer, the pure

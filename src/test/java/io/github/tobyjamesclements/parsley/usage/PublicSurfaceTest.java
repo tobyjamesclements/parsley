@@ -13,7 +13,6 @@ import java.util.function.Function;
 import io.github.tobyjamesclements.parsley.Topic;
 import io.github.tobyjamesclements.parsley.Channel;
 import io.github.tobyjamesclements.parsley.FailClosedException;
-import io.github.tobyjamesclements.parsley.OrderingStateInspector;
 import io.github.tobyjamesclements.parsley.Parsley;
 import io.github.tobyjamesclements.parsley.ParsleyConfig;
 import io.github.tobyjamesclements.parsley.Process;
@@ -127,21 +126,6 @@ class PublicSurfaceTest {
         assertEquals(channel, Channel.readFrom(buffer.flip()), "writeTo and readFrom agree");
 
         assertTrue(channel.compareTo(new Channel(topic, 4)) < 0, "a lower partition sorts first");
-    }
-
-    /** The inspector answers over ordering state, and reads nothing from an empty changelog. */
-    @Test
-    void theInspectorReadsOrderingStateWithoutAnEngine() {
-        Map<byte[], byte[]> empty = Map.of();
-
-        assertEquals(Set.of(), OrderingStateInspector.heldChannels(empty), "nothing is held in empty state");
-        assertEquals(Map.of(), OrderingStateInspector.coveredPositions(empty), "nothing is covered");
-        assertEquals(Map.of(), OrderingStateInspector.nameBindings(empty), "no name is bound");
-        assertEquals(List.of(), OrderingStateInspector.identityChangedTopics(empty, Map.of("orders", UUID.randomUUID())),
-                "an unbound name cannot have changed identity");
-        assertTrue(!OrderingStateInspector.isHeldKey(new byte[0]), "an empty key is not a held message's");
-        assertTrue(OrderingStateInspector.isFedToEnd(Long.MAX_VALUE), "the sentinel reads as fed to the end");
-        assertTrue(!OrderingStateInspector.isFedToEnd(7L), "an ordinary position does not");
     }
 
     /** A refusal names its reason, and is found inside a chain the host wrapped it in. */

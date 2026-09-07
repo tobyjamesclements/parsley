@@ -50,7 +50,6 @@ class ProtocolPurityTest {
             "Header",
             "IdentityReport",
             "OrderingStateCodec",
-            "OrderingStateInspector",
             "OrderingStore",
             "ProcessEngine",
             "ReceivedMessage",

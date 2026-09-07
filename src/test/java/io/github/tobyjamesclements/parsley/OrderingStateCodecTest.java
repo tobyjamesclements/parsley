@@ -11,11 +11,11 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
- * Establishes that ordering state can be read without an engine.
+ * Establishes that an image of ordering state can be read back through the codec without an engine.
  *
  * <p>These are the questions a startup check asks of state left by a previous run.
  */
-class OrderingStateInspectorTest {
+class OrderingStateCodecTest {
     /** Finds live held entries, ignoring tombstones and other key classes. */
     @Test
     void findsLiveHeldEntriesAndIgnoresTombstonesAndOtherTags() {
@@ -27,7 +27,7 @@ class OrderingStateInspectorTest {
         latest.put(OrderingStateCodec.channelKey(OrderingStateCodec.TAG_FED_UP_TO, tombstoned), OrderingStateCodec.encodeLong(5));
         latest.put(OrderingStateCodec.versionKey(), new byte[] {1});
 
-        assertEquals(Set.of(held), OrderingStateInspector.heldChannels(latest));
+        assertEquals(Set.of(held), OrderingStateCodec.heldChannels(latest));
     }
 
     /** Reads name bindings across tasks by topic id. */
@@ -40,7 +40,7 @@ class OrderingStateInspectorTest {
         latest.put(OrderingStateCodec.channelNameKey("tombstoned"), null);
         latest.put(OrderingStateCodec.versionKey(), new byte[] {1});
 
-        assertEquals(Map.of("orders", topicId), OrderingStateInspector.nameBindings(latest));
+        assertEquals(Map.of("orders", topicId), OrderingStateCodec.nameBindings(latest));
     }
 
     /** Reads covered positions from fed-up-to entries, ignoring tombstones and other tags. */
@@ -55,7 +55,7 @@ class OrderingStateInspectorTest {
         latest.put(OrderingStateCodec.heldKey(covered, 7), new byte[] {1});
         latest.put(OrderingStateCodec.versionKey(), new byte[] {1});
 
-        assertEquals(Map.of(covered, 41L), OrderingStateInspector.coveredPositions(latest),
+        assertEquals(Map.of(covered, 41L), OrderingStateCodec.coveredPositions(latest),
                 "coverage is the fed-up-to record alone: a delivered-past entry without one marks a"
                         + " channel that was never read here, whose fresh baseline is legitimate");
     }
@@ -71,12 +71,12 @@ class OrderingStateInspectorTest {
         latest.put(OrderingStateCodec.channelNameKey("stable"), new Channel(stableId, 0).toBytes());
         latest.put(OrderingStateCodec.heldKey(new Channel(oldId, 0), 5), new byte[] {1});
 
-        assertEquals(java.util.List.of("recreated"), OrderingStateInspector.identityChangedTopics(
+        assertEquals(java.util.List.of("recreated"), OrderingStateCodec.identityChangedTopics(
                 latest, Map.of("recreated", newId, "stable", stableId)));
-        assertEquals(java.util.List.of(), OrderingStateInspector.identityChangedTopics(
+        assertEquals(java.util.List.of(), OrderingStateCodec.identityChangedTopics(
                 latest, Map.of("recreated", oldId, "stable", stableId)),
                 "an unchanged identity is not flagged");
-        assertEquals(java.util.List.of(), OrderingStateInspector.identityChangedTopics(
+        assertEquals(java.util.List.of(), OrderingStateCodec.identityChangedTopics(
                 latest, Map.of("fresh", newId)),
                 "a name never bound has no identity to have changed");
     }

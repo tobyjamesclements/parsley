@@ -966,7 +966,7 @@ class ProcessEngineTest {
                 "a channel whose delivered past was pruned must join with no clamp");
         Map<byte[], byte[]> image = new java.util.TreeMap<>(java.util.Arrays::compareUnsigned);
         store.scanPrefix(new byte[0], image::put);
-        assertEquals(Map.of(C1, 0L), OrderingStateInspector.coveredPositions(image),
+        assertEquals(Map.of(C1, 0L), OrderingStateCodec.coveredPositions(image),
                 "the joined channel must leave no fed-up-to record: the bootstrap would otherwise resume"
                         + " it from coverage this process never had");
     }

@@ -230,7 +230,7 @@ class ChangelogReadStallTest {
         assertEquals(0, view.latest().get(heldKey).length,
                 "a held message's body is replaced by an empty presence marker");
         assertEquals(Set.of(channel),
-                OrderingStateInspector.heldChannels(view.latest()),
+                OrderingStateCodec.heldChannels(view.latest()),
                 "the marker still counts as a held message for the stranded-hold scan");
         assertNull(view.latest().get(otherHeldKey), "a tombstone clears a held entry as before");
         assertArrayEquals(bytes("covered"), view.latest().get(bytes("task0")), "other tags keep their values");

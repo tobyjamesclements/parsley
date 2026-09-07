@@ -608,14 +608,6 @@ identity. A topic id never returns once deleted, so the verdict was wrong; the c
 gave it is the suspect, and the refusal is durable. Reset, keep the logs from the
 initialisation that gave the verdict, and report it.
 
-### Reading a stopped process's state
-
-No runbook above can ask the stopped process what it holds. What can be read is its
-ordering changelog: `OrderingStateInspector` answers, from the
-changelog's latest value per key, which channels hold messages, how far each channel was
-covered, and which topic identity each name was bound to. Reading the changelog into that
-map is the operator's work; nothing in the library does it for a stopped process.
-
 ## A message is held and not moving
 
 A held message is not a failure. It is waiting for a cause, and the diagnosis is which
@@ -631,11 +623,11 @@ partitions advance, and an expected output does not appear. A `lifecycle` of `RE
 persists is the host, not a hold: a member that cannot join, or a task restoring a large
 changelog, which for a deep hold-back backlog takes time.
 
-Read the ordering changelog, `<app-id>-__parsley.ordering-changelog`, partition `p` for task
-`p`, to its end and keep the latest value per key. `OrderingStateInspector.heldChannels`
-names the channels with held messages, and a held key carries its message's position after
-the channel ([State](state.md#ordering-state)); the lowest position per channel is the head,
-the one the decision reads.
+The ordering changelog, `<app-id>-__parsley.ordering-changelog`, partition `p` for task
+`p`, holds one entry per held message, keyed by channel and position
+([State](state.md#ordering-state)). Read it to its end, keep the latest value per key, and
+the live held keys name the channels with held messages; the lowest position per channel
+is the head, the one the decision reads.
 
 ### Read the head's causes
 
@@ -748,8 +740,8 @@ keeps up stays ahead of it. To see how close it is:
 
 1. `kafka-consumer-groups --describe --group <app-id>` gives the group's committed offset on
    the partition. After a stop long enough for the group's offsets to expire, the read
-   position is the ordering state's covered position plus one, which `OrderingStateInspector`
-   reads from the changelog.
+   position is the ordering state's covered position plus one, from the changelog's
+   fed-up-to entry for the channel ([State](state.md#ordering-state)).
 2. `kafka-get-offsets --topic <topic> --partitions <p> --time earliest` gives the log
    start. The distance between the two, in positions, is the headroom.
 3. `kafka-console-consumer --topic <topic> --partition <p> --offset <committed>

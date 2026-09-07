@@ -755,7 +755,7 @@ final class StreamsRuntime implements AutoCloseable {
                     // put the whole hold-back backlog on the heap at every start.
                     byte[] value = record.value();
                     latest.put(record.key(), value != null
-                            && OrderingStateInspector.isHeldKey(record.key())
+                            && OrderingStateCodec.isHeldKey(record.key())
                             ? HELD_PRESENCE : value);
                     partitionsWithRecords.add(record.partition());
                 });
@@ -861,7 +861,7 @@ final class StreamsRuntime implements AutoCloseable {
         }
         Map<String, UUID> resolvedIds = new HashMap<>();
         ProcessTopology.inputTopics(definition).forEach(topic -> resolvedIds.put(topic, topics.get(topic).topicId()));
-        List<String> identityChanged = OrderingStateInspector
+        List<String> identityChanged = OrderingStateCodec
                 .identityChangedTopics(orderingState, resolvedIds);
         if (!identityChanged.isEmpty()) {
             throw new FailClosedException(
@@ -878,7 +878,7 @@ final class StreamsRuntime implements AutoCloseable {
             }
         }
         java.util.Set<Channel> stranded =
-                new java.util.TreeSet<>(OrderingStateInspector
+                new java.util.TreeSet<>(OrderingStateCodec
                         .heldChannels(orderingState));
         stranded.removeAll(declared);
         if (!stranded.isEmpty()) {
@@ -940,9 +940,9 @@ final class StreamsRuntime implements AutoCloseable {
             // resolves, so what it returns is authoritative.
             refuseLostOrderingState(applicationId, orderingView, committed, recheck);
             Map<Channel, Long> covered =
-                    OrderingStateInspector.coveredPositions(orderingView.latest());
+                    OrderingStateCodec.coveredPositions(orderingView.latest());
             java.util.Set<String> receivedBefore =
-                    OrderingStateInspector.nameBindings(orderingView.latest())
+                    OrderingStateCodec.nameBindings(orderingView.latest())
                             .keySet();
             Map<TopicPartition, OffsetAndMetadata> toCommit = new HashMap<>();
             Map<TopicPartition, OffsetSpec> wanted = new HashMap<>();
@@ -1005,7 +1005,7 @@ final class StreamsRuntime implements AutoCloseable {
         if (coveredUpTo == null) {
             return receivedBefore ? java.util.OptionalLong.of(0) : java.util.OptionalLong.empty();
         }
-        if (OrderingStateInspector.isFedToEnd(coveredUpTo)) {
+        if (OrderingStateCodec.isFedToEnd(coveredUpTo)) {
             return java.util.OptionalLong.empty();
         }
         return java.util.OptionalLong.of(Math.max(coveredUpTo, -1) + 1);

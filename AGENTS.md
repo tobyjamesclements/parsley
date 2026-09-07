@@ -48,11 +48,11 @@ the only host the spec allows (SPEC Substrate 1 and 2), so the declaration surfa
 written in Kafka's own terms — topics, Serdes, Streams properties — by design, and there is
 no seam for a second runtime.
 
-Fourteen types are public. Ten are the declaration surface: `Parsley`, `ParsleyConfig`,
+Thirteen types are public. Ten are the declaration surface: `Parsley`, `ParsleyConfig`,
 `Process`, `Topic`, `Store`, `Handler`, `Delivery`, `Effects`, `State` and
-`ProcessStatus`. Four more an application or an operator handles rather than declares:
-`Header`, `FailClosedException`, and `OrderingStateInspector` with `Channel`, which two
-of its signatures expose.
+`ProcessStatus`. Three more an application handles rather than declares: `Header`,
+`FailClosedException`, and `Channel`, the topic-partition by identity that a `Delivery`
+names as where it arrived.
 
 The rest is package-private, and divides in two:
 
@@ -125,11 +125,11 @@ try (Parsley parsley = Parsley.start(config, shipper)) {
 `Parsley.start` returns once each process has been started, not once it is running; the
 wait is what keeps the application up, and `status()` afterwards says what stopped and why.
 
-`docs/` carries the fuller version. `ProcessStatus` and `OrderingStateInspector` are the
-diagnosis surface when a process has stopped or is holding, and `docs/runbooks.md` says what
-an operator does with that diagnosis, one runbook per refusal reason. A reason added to
-`FailClosedException.Reason` needs a runbook there and a trigger row in
-`docs/failing-closed.md`; `RunbookCoverageTest` fails until it has both.
+`docs/` carries the fuller version. `ProcessStatus` is the diagnosis surface when a process
+has stopped, and `docs/runbooks.md` says what an operator does with that diagnosis, one
+runbook per refusal reason. A reason added to `FailClosedException.Reason` needs a runbook
+there and a trigger row in `docs/failing-closed.md`; `RunbookCoverageTest` fails until it
+has both.
 
 ## Conventions if you modify the code
 
