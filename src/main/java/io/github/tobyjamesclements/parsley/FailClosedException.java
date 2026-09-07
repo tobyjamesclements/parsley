@@ -45,8 +45,8 @@ public final class FailClosedException extends RuntimeException {
         TASK_WIDTH_CHANGED,
         /** Stored ordering state carries a format version this build cannot read. */
         UNKNOWN_ORDERING_STATE_FORMAT,
-        /** A handler sent on a channel its process never declared. */
-        SEND_TO_UNDECLARED_CHANNEL,
+        /** A handler sent on a topic its process never declared. */
+        SEND_TO_UNDECLARED_TOPIC,
         /** Application logic read or wrote a store its process never declared. */
         STATE_ACCESS_TO_UNDECLARED_STORE,
         /** An application header used the prefix reserved for causal metadata. */

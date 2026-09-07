@@ -438,11 +438,11 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
         Topic<?, ?> declared = definition.output(topic);
         if (declared == null) {
             throw new FailClosedException(
-                    FailClosedException.Reason.SEND_TO_UNDECLARED_CHANNEL,
-                    definition.name() + " sent to undeclared channel " + topic);
+                    FailClosedException.Reason.SEND_TO_UNDECLARED_TOPIC,
+                    definition.name() + " sent to undeclared topic " + topic);
         }
         RecordHeaders headers = toKafkaHeaders(send.headers());
-        // The declared channel's serdes produce the bytes, the way the store seam writes
+        // The declared topic's serdes produce the bytes, the way the store seam writes
         // with its declared store: name resolution decides the codec, so a second Topic
         // instance for a declared topic has no serdes to smuggle past sends(...).
         byte[] keyBytes = send.key() == null

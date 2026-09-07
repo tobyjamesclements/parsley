@@ -341,8 +341,8 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, FailClosedException.Reason.SEND_TO_UNDECLARED_CHANNEL),
-                () -> "expected SEND_TO_UNDECLARED_CHANNEL in " + thrown);
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.SEND_TO_UNDECLARED_TOPIC),
+                () -> "expected SEND_TO_UNDECLARED_TOPIC in " + thrown);
     }
 
     /** A look-alike send serializes with the declared channel's serdes. */
@@ -894,8 +894,8 @@ class TopologyWiringTest {
 
         Throwable thrown = assertThrows(Throwable.class, () ->
                 input("in1").pipeInput(new TestRecord<>("k".getBytes(), "v".getBytes())));
-        assertTrue(causeChainContains(thrown, FailClosedException.Reason.SEND_TO_UNDECLARED_CHANNEL),
-                () -> "expected SEND_TO_UNDECLARED_CHANNEL in " + thrown);
+        assertTrue(causeChainContains(thrown, FailClosedException.Reason.SEND_TO_UNDECLARED_TOPIC),
+                () -> "expected SEND_TO_UNDECLARED_TOPIC in " + thrown);
         try (var all = driver.<org.apache.kafka.common.utils.Bytes, byte[]>getKeyValueStore("app-store").all()) {
             assertFalse(all.hasNext(),
                     "every effect target is validated before any write is applied, so a refused"

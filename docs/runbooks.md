@@ -102,7 +102,7 @@ The reasons, and what each asks for:
 |---|---|---|---|
 | `COVERED_POSITION_FED` | Once; a recurrence is reported, not restarted | No | [Restart resolves it](#covered_position_fed) |
 | `HANDLER_RETURNED_NULL_EFFECTS` | After the code fix | No | [The application](#handler_returned_null_effects) |
-| `SEND_TO_UNDECLARED_CHANNEL` | After the declaration fix | No | [The application](#send_to_undeclared_channel) |
+| `SEND_TO_UNDECLARED_TOPIC` | After the declaration fix | No | [The application](#send_to_undeclared_topic) |
 | `STATE_ACCESS_TO_UNDECLARED_STORE` | After the declaration fix | No | [The application](#state_access_to_undeclared_store) |
 | `RESERVED_HEADER_USED` | After the code fix | No | [The application](#reserved_header_used) |
 | `APPLICATION_PAYLOAD_UNSERIALIZABLE` | After the code fix | No | [The application](#application_payload_unserializable) |
@@ -248,15 +248,15 @@ changes nothing`
 
 **Do.** Return `Effects.none()` from the branch that returned `null`. Deploy and restart.
 
-#### SEND_TO_UNDECLARED_CHANNEL
+#### SEND_TO_UNDECLARED_TOPIC
 
-**Shape.** `<process> sent to undeclared channel <topic>`
+**Shape.** `<process> sent to undeclared topic <topic>`
 
 **What happened.** The handler sent to a topic outside the process's declared send set.
 Membership is by topic name.
 
-**Do.** Either the handler is wrong, or the declaration is: add the channel with
-`.sends(channel)` if the send is intended. The topic must exist before the start. A send
+**Do.** Either the handler is wrong, or the declaration is: add the topic with
+`.sends(topic)` if the send is intended. The topic must exist before the start. A send
 set can change freely between executions; it touches no ordering state. Deploy and restart.
 
 #### STATE_ACCESS_TO_UNDECLARED_STORE
