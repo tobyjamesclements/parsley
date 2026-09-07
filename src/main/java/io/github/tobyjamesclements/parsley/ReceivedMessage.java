@@ -14,7 +14,7 @@ import java.util.List;
  * @see DeliverableMessage
  */
 record ReceivedMessage(
-        ChannelId channel,
+        Channel channel,
         long position,
         long timestamp,
         byte[] key,

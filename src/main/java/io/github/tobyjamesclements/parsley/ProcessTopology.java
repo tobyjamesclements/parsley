@@ -71,7 +71,7 @@ final class ProcessTopology {
      * @return the received topic names, in declaration order
      */
     static List<String> inputTopics(Process process) {
-        return process.inputs().stream().map(input -> input.channel().topic()).toList();
+        return process.inputs().stream().map(input -> input.topic().name()).toList();
     }
 
     /**
@@ -81,7 +81,7 @@ final class ProcessTopology {
      * @return the send topic names, in declaration order
      */
     static List<String> outputTopics(Process process) {
-        return process.outputs().stream().map(Channel::topic).toList();
+        return process.outputs().stream().map(Topic::name).toList();
     }
 
     /**

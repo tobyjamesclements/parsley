@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * codec's message and this class pins the backstop itself.
  */
 class PositionRefusalTest {
-    private static final ChannelId CH = new ChannelId(new UUID(1, 2), 0);
+    private static final Channel CH = new Channel(new UUID(1, 2), 0);
 
     /**
      * A negative feed position must be refused when the {@code ReceivedMessage} is built,
@@ -66,7 +66,7 @@ class PositionRefusalTest {
      */
     @Test
     void nullCausePositionIsRefusedNamingItsChannel() {
-        Map<ChannelId, Long> withNull = new HashMap<>();
+        Map<Channel, Long> withNull = new HashMap<>();
         withNull.put(CH, null);
         IllegalArgumentException thrown = assertThrows(IllegalArgumentException.class,
                 () -> Causes.of(withNull),

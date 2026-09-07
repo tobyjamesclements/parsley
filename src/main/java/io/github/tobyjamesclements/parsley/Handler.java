@@ -1,7 +1,7 @@
 package io.github.tobyjamesclements.parsley;
 
 /**
- * Application logic for one channel of one process.
+ * Application logic for one received topic of one process.
  *
  * <p>A handler receives the delivered message and a read view of application state, and
  * returns everything it wishes to change. It is given no producer, no timer and no clock, so
@@ -13,7 +13,7 @@ package io.github.tobyjamesclements.parsley;
  * <p>A handler that throws fails its step: the process stops, and on restart it is fed the
  * same message and fails again. Parsley never skips a message. To continue past an
  * application failure, catch it and return effects that record it deterministically — for
- * example a send to a declared dead-letter channel.
+ * example a send to a declared dead-letter topic.
  *
  * @param <K> delivered key type
  * @param <V> delivered value type

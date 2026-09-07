@@ -20,8 +20,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * document drifting together.
  */
 class CausesCodecTest {
-    private static final ChannelId CH_A = new ChannelId(new UUID(1, 1), 0);
-    private static final ChannelId CH_B = new ChannelId(new UUID(1, 2), 3);
+    private static final Channel CH_A = new Channel(new UUID(1, 1), 0);
+    private static final Channel CH_B = new Channel(new UUID(1, 2), 3);
 
     private static ByteBuffer header(int capacity) {
         ByteBuffer buffer = ByteBuffer.allocate(capacity);
@@ -48,7 +48,7 @@ class CausesCodecTest {
     /** Round trips multiple channels, including two partitions sharing one topic group. */
     @Test
     void roundTripsMultipleChannels() throws Exception {
-        Causes causes = Causes.of(Map.of(CH_A, 41L, CH_B, 7L, new ChannelId(new UUID(1, 1), 6), 3L));
+        Causes causes = Causes.of(Map.of(CH_A, 41L, CH_B, 7L, new Channel(new UUID(1, 1), 6), 3L));
         byte[] encoded = CausesCodec.encode(causes);
         assertEquals(causes, CausesCodec.decode(encoded));
         assertArrayEquals(encoded, CausesCodec.encode(CausesCodec.decode(encoded)), "encoding must be canonical");
@@ -65,9 +65,9 @@ class CausesCodecTest {
         UUID low = new UUID(0x0102030405060708L, 0x090A0B0C0D0E0F10L);
         UUID highBit = new UUID(0xF102030405060708L, 0x090A0B0C0D0E0F10L);
         Causes causes = Causes.of(Map.of(
-                new ChannelId(low, 2), 41L,
-                new ChannelId(low, 5), 7L,
-                new ChannelId(highBit, 0), 9L));
+                new Channel(low, 2), 41L,
+                new Channel(low, 5), 7L,
+                new Channel(highBit, 0), 9L));
 
         ByteBuffer golden = ByteBuffer.allocate(1 + 1 + 16 + 1 + 2 * 9 + 16 + 1 + 9);
         golden.put((byte) 1).put((byte) 2);
@@ -88,7 +88,7 @@ class CausesCodecTest {
      */
     @Test
     void varintSpellsMultiByteValuesLowBitsFirst() throws Exception {
-        Causes causes = Causes.of(Map.of(new ChannelId(new UUID(1, 1), 300), 7L));
+        Causes causes = Causes.of(Map.of(new Channel(new UUID(1, 1), 300), 7L));
         ByteBuffer expected = header(1 + 1 + 16 + 1 + 2 + 8);
         expected.put((byte) 1);
         expected.putLong(1).putLong(1).put((byte) 1);
@@ -100,8 +100,8 @@ class CausesCodecTest {
     /** Channel order is the unsigned order of the encoding. */
     @Test
     void channelOrderIsTheUnsignedOrderOfTheEncoding() {
-        ChannelId highBit = new ChannelId(new UUID(0x8000000000000000L, 0), 0);
-        ChannelId low = new ChannelId(new UUID(1, 0), 0);
+        Channel highBit = new Channel(new UUID(0x8000000000000000L, 0), 0);
+        Channel low = new Channel(new UUID(1, 0), 0);
 
         org.junit.jupiter.api.Assertions.assertTrue(low.compareTo(highBit) < 0);
         org.junit.jupiter.api.Assertions.assertTrue(
@@ -317,7 +317,7 @@ class CausesCodecTest {
                 () -> CausesCodec.decode(partitionsOverstated));
 
         byte[] twoPartitions = CausesCodec.encode(
-                Causes.of(Map.of(CH_A, 1L, new ChannelId(CH_A.topicId(), 6), 2L)));
+                Causes.of(Map.of(CH_A, 1L, new Channel(CH_A.topicId(), 6), 2L)));
         byte[] partitionsUnderstated = twoPartitions.clone();
         partitionsUnderstated[18] = 1;
         assertThrows(CausesCodec.UndecodableMetadataException.class,

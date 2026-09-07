@@ -7,8 +7,10 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import io.github.tobyjamesclements.parsley.Channel;
+import io.github.tobyjamesclements.parsley.Topic;
 import io.github.tobyjamesclements.parsley.Delivery;
 import io.github.tobyjamesclements.parsley.Effects;
 import io.github.tobyjamesclements.parsley.FailClosedException;
@@ -37,10 +39,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class HandlerSeamTest {
 
-    private static final Channel<String, String> ORDERS =
-            Channel.of("orders", Serdes.String(), Serdes.String());
-    private static final Channel<String, String> SHIPMENTS =
-            Channel.of("shipments", Serdes.String(), Serdes.String());
+    private static final Topic<String, String> ORDERS =
+            Topic.of("orders", Serdes.String(), Serdes.String());
+    private static final Channel ORDERS_0 = new Channel(new UUID(7, 7), 0);
+    private static final Topic<String, String> SHIPMENTS =
+            Topic.of("shipments", Serdes.String(), Serdes.String());
     private static final Store<String, String> INVENTORY =
             Store.of("inventory", Serdes.String(), Serdes.String());
 
@@ -65,7 +68,7 @@ class HandlerSeamTest {
 
         assertEquals(1, effects.sends().size(), "the handler declared one send");
         Effects.Send<?, ?> send = effects.sends().get(0);
-        assertSame(SHIPMENTS, send.channel(), "the send names the declared channel instance");
+        assertSame(SHIPMENTS, send.topic(), "the send names the declared channel instance");
         assertEquals("ship 2 units", send.value(), "the send carries what the handler computed");
         assertTrue(send.timestamp().isEmpty(), "a send with no timestamp of its own inherits the delivery's");
     }
@@ -101,7 +104,7 @@ class HandlerSeamTest {
      */
     @Test
     void reservedHeadersAreInvisibleToTheHandler() {
-        Delivery<String, String> delivery = Delivery.of(ORDERS, 0, 12L, 1_000L, "sku-1", "2 units",
+        Delivery<String, String> delivery = Delivery.of(ORDERS, ORDERS_0, 12L, 1_000L, "sku-1", "2 units",
                 List.of(new Header("parsley.causes", new byte[]{1}), new Header("trace-id", new byte[]{2})));
 
         assertEquals(1, delivery.headers().size(), "only the application's own header survives");
@@ -113,8 +116,9 @@ class HandlerSeamTest {
     void aDeliveryCarriesItsCoordinates() {
         Delivery<String, String> delivery = delivery("sku-1", "2 units");
 
-        assertSame(ORDERS, delivery.channel(), "the delivery names the channel it arrived on");
-        assertEquals(0, delivery.partition(), "the partition it arrived on");
+        assertSame(ORDERS, delivery.topic(), "the delivery names the declared topic it arrived on");
+        assertEquals(ORDERS_0, delivery.channel(), "and the channel, which is one partition of it by identity");
+        assertEquals(0, delivery.partition(), "the partition is the channel's");
         assertEquals(12L, delivery.position(), "the offset within that partition");
         assertEquals(1_000L, delivery.timestamp(), "and the record timestamp");
     }
@@ -141,7 +145,7 @@ class HandlerSeamTest {
 
     /** A delivery of the fixture record, with no headers. */
     private static Delivery<String, String> delivery(String key, String value) {
-        return Delivery.of(ORDERS, 0, 12L, 1_000L, key, value, List.of());
+        return Delivery.of(ORDERS, ORDERS_0, 12L, 1_000L, key, value, List.of());
     }
 
     /** A read view over one store holding one entry, standing in for the runtime's own. */

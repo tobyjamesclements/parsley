@@ -10,8 +10,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
 
+import io.github.tobyjamesclements.parsley.Topic;
 import io.github.tobyjamesclements.parsley.Channel;
-import io.github.tobyjamesclements.parsley.ChannelId;
 import io.github.tobyjamesclements.parsley.FailClosedException;
 import io.github.tobyjamesclements.parsley.OrderingStateInspector;
 import io.github.tobyjamesclements.parsley.Parsley;
@@ -41,23 +41,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class PublicSurfaceTest {
 
-    private static final Channel<String, String> ORDERS =
-            Channel.of("orders", Serdes.String(), Serdes.String());
+    private static final Topic<String, String> ORDERS =
+            Topic.of("orders", Serdes.String(), Serdes.String());
     private static final Store<String, String> INVENTORY =
             Store.of("inventory", Serdes.String(), Serdes.String());
 
     /** A channel reports the topic, serdes and starting position it was declared with. */
     @Test
     void aChannelReportsItsDeclaration() {
-        assertEquals("orders", ORDERS.topic(), "the topic is the one declared");
+        assertEquals("orders", ORDERS.name(), "the topic is the one declared");
         assertNotNull(ORDERS.keySerde(), "the key serde is the one declared");
         assertNotNull(ORDERS.valueSerde(), "the value serde is the one declared");
-        assertEquals(Channel.InitialPosition.EARLIEST, ORDERS.initialPosition(),
+        assertEquals(Topic.InitialPosition.EARLIEST, ORDERS.initialPosition(),
                 "a channel starts at the earliest retained message unless told otherwise");
 
-        Channel<String, String> latest = ORDERS.startingAt(Channel.InitialPosition.LATEST);
-        assertEquals(Channel.InitialPosition.LATEST, latest.initialPosition(), "startingAt sets the position");
-        assertEquals(Channel.InitialPosition.EARLIEST, ORDERS.initialPosition(),
+        Topic<String, String> latest = ORDERS.startingAt(Topic.InitialPosition.LATEST);
+        assertEquals(Topic.InitialPosition.LATEST, latest.initialPosition(), "startingAt sets the position");
+        assertEquals(Topic.InitialPosition.EARLIEST, ORDERS.initialPosition(),
                 "and leaves the channel it was called on unchanged");
     }
 
@@ -72,7 +72,7 @@ class PublicSurfaceTest {
     /** A process reports the channels and stores it declared, and looks each up by name. */
     @Test
     void aProcessReportsWhatItDeclared() {
-        Channel<String, String> shipments = Channel.of("shipments", Serdes.String(), Serdes.String());
+        Topic<String, String> shipments = Topic.of("shipments", Serdes.String(), Serdes.String());
         Process shipper = Process.named("shipper")
                 .receives(ORDERS, (delivery, state) -> null)
                 .sends(shipments)
@@ -81,7 +81,7 @@ class PublicSurfaceTest {
 
         assertEquals("shipper", shipper.name(), "the process name is the one declared");
         assertEquals(1, shipper.inputs().size(), "one received channel was declared");
-        assertSame(ORDERS, shipper.input("orders").channel(), "and is found by its topic");
+        assertSame(ORDERS, shipper.input("orders").topic(), "and is found by its topic");
         assertEquals(1, shipper.outputs().size(), "one send channel was declared");
         assertSame(shipments, shipper.output("shipments"), "and is found by its topic");
         assertEquals(1, shipper.stores().size(), "one store was declared");
@@ -113,20 +113,20 @@ class PublicSurfaceTest {
     @Test
     void aChannelIdentityRoundTripsAndOrders() {
         UUID topic = new UUID(1L, 2L);
-        ChannelId channel = new ChannelId(topic, 3);
+        Channel channel = new Channel(topic, 3);
 
         assertEquals(topic, channel.topicId(), "the topic identity is the one given");
         assertEquals(3, channel.partition(), "the partition is the one given");
 
         byte[] encoded = channel.toBytes();
-        assertEquals(ChannelId.ENCODED_LENGTH, encoded.length, "an encoded channel is a fixed width");
-        assertEquals(channel, ChannelId.readFrom(ByteBuffer.wrap(encoded)), "and decodes back to itself");
+        assertEquals(Channel.ENCODED_LENGTH, encoded.length, "an encoded channel is a fixed width");
+        assertEquals(channel, Channel.readFrom(ByteBuffer.wrap(encoded)), "and decodes back to itself");
 
-        ByteBuffer buffer = ByteBuffer.allocate(ChannelId.ENCODED_LENGTH);
+        ByteBuffer buffer = ByteBuffer.allocate(Channel.ENCODED_LENGTH);
         channel.writeTo(buffer);
-        assertEquals(channel, ChannelId.readFrom(buffer.flip()), "writeTo and readFrom agree");
+        assertEquals(channel, Channel.readFrom(buffer.flip()), "writeTo and readFrom agree");
 
-        assertTrue(channel.compareTo(new ChannelId(topic, 4)) < 0, "a lower partition sorts first");
+        assertTrue(channel.compareTo(new Channel(topic, 4)) < 0, "a lower partition sorts first");
     }
 
     /** The inspector answers over ordering state, and reads nothing from an empty changelog. */

@@ -19,7 +19,7 @@ import java.util.Set;
  * @param deadChannels      channels whose topic no longer exists
  * @param recreatedChannels channels whose topic exists under a new identity
  */
-record IdentityReport(Set<ChannelId> deadChannels, Set<ChannelId> recreatedChannels) {
+record IdentityReport(Set<Channel> deadChannels, Set<Channel> recreatedChannels) {
 
     /** Nothing gone and nothing recreated: every channel still is what it was. */
     public static final IdentityReport NONE = new IdentityReport(Set.of(), Set.of());

@@ -18,12 +18,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * alone.
  */
 class DeliverabilityTest {
-    private static final ChannelId RECEIVED_A = new ChannelId(new UUID(0, 1), 0);
-    private static final ChannelId RECEIVED_B = new ChannelId(new UUID(0, 2), 0);
-    private static final ChannelId ELSEWHERE = new ChannelId(new UUID(0, 3), 0);
-    private static final Set<ChannelId> RECEIVED = Set.of(RECEIVED_A, RECEIVED_B);
+    private static final Channel RECEIVED_A = new Channel(new UUID(0, 1), 0);
+    private static final Channel RECEIVED_B = new Channel(new UUID(0, 2), 0);
+    private static final Channel ELSEWHERE = new Channel(new UUID(0, 3), 0);
+    private static final Set<Channel> RECEIVED = Set.of(RECEIVED_A, RECEIVED_B);
 
-    private static Deliverability.SettledView settled(Map<ChannelId, Long> settled) {
+    private static Deliverability.SettledView settled(Map<Channel, Long> settled) {
         return channel -> settled.containsKey(channel)
                 ? OptionalLong.of(settled.get(channel))
                 : OptionalLong.empty();

@@ -55,9 +55,9 @@ class ProcessorRevivalTest {
     private static final Map<String, ResolvedTopic> TOPICS = Map.of(
             "in1", new ResolvedTopic(IN1_ID, 1),
             "in2", new ResolvedTopic(IN2_ID, 1));
-    private static final ChannelId IN1 = new ChannelId(IN1_ID, 0);
-    private static final ChannelId IN2 = new ChannelId(IN2_ID, 0);
-    private static final ChannelId FOREIGN = new ChannelId(FOREIGN_ID, 0);
+    private static final Channel IN1 = new Channel(IN1_ID, 0);
+    private static final Channel IN2 = new Channel(IN2_ID, 0);
+    private static final Channel FOREIGN = new Channel(FOREIGN_ID, 0);
 
     @TempDir
     Path stateDir;
@@ -321,7 +321,7 @@ class ProcessorRevivalTest {
         feed("in2", 0L, "B", Map.of(IN1, 5L));
     }
 
-    private void feed(String topic, long offset, String value, Map<ChannelId, Long> causes) {
+    private void feed(String topic, long offset, String value, Map<Channel, Long> causes) {
         RecordHeaders headers = new RecordHeaders();
         headers.add(new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(causes))));
         context.setRecordMetadata(topic, 0, offset);
@@ -365,8 +365,8 @@ class ProcessorRevivalTest {
     }
 
     private static Process twoInputRecorder(List<String> delivered) {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in2 = Topic.of("in2", Serdes.String(), Serdes.String());
         return Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     delivered.add(delivery.value());

@@ -6,10 +6,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * One process: the channels it receives, the channels it sends on, and the stores it owns.
+ * One process: the topics it receives, the topics it sends on, and the stores it owns.
  *
  * <p>A process is the unit {@link Parsley#start} runs. Each one becomes its own Kafka
- * Streams application. Declaring a channel as sent is what permits a {@link Handler}
+ * Streams application. Declaring a topic as sent is what permits a {@link Handler}
  * to send on it.
  *
  * @see Builder
@@ -18,25 +18,25 @@ import java.util.Map;
 public final class Process {
 
     /**
-     * A received channel and the logic that handles it.
+     * A received topic and the logic that handles it.
      *
-     * @param channel the channel received
+     * @param topic the topic received
      * @param handler the logic invoked for each delivery
      * @param <K>     key type
      * @param <V>     value type
      */
-    public record Input<K, V>(Channel<K, V> channel, Handler<K, V> handler) {
+    public record Input<K, V>(Topic<K, V> topic, Handler<K, V> handler) {
         /**
-         * @throws IllegalArgumentException if {@code channel} or {@code handler} is null;
+         * @throws IllegalArgumentException if {@code topic} or {@code handler} is null;
          *         a null handler would otherwise surface as an NPE on the stream thread at
          *         first delivery
          */
         public Input {
-            if (channel == null) {
-                throw new IllegalArgumentException("received channel must be non-null");
+            if (topic == null) {
+                throw new IllegalArgumentException("received topic must be non-null");
             }
             if (handler == null) {
-                throw new IllegalArgumentException(channel.topic()
+                throw new IllegalArgumentException(topic.name()
                         + ": handler must be non-null; it is invoked at first delivery on the stream thread");
             }
         }
@@ -44,7 +44,7 @@ public final class Process {
 
     private final String name;
     private final Map<String, Input<?, ?>> inputsByTopic;
-    private final Map<String, Channel<?, ?>> outputsByTopic;
+    private final Map<String, Topic<?, ?>> outputsByTopic;
     private final Map<String, Store<?, ?>> storesByName;
 
     // Declaration order is part of the contract: the topology's sources, state stores and
@@ -52,7 +52,7 @@ public final class Process {
     // iteration order per JVM, which would make the generated topology nondeterministic
     // across restarts.
     private Process(String name, Map<String, Input<?, ?>> inputsByTopic,
-                    Map<String, Channel<?, ?>> outputsByTopic, Map<String, Store<?, ?>> storesByName) {
+                    Map<String, Topic<?, ?>> outputsByTopic, Map<String, Store<?, ?>> storesByName) {
         this.name = name;
         this.inputsByTopic = Collections.unmodifiableMap(new LinkedHashMap<>(inputsByTopic));
         this.outputsByTopic = Collections.unmodifiableMap(new LinkedHashMap<>(outputsByTopic));
@@ -94,41 +94,41 @@ public final class Process {
     }
 
     /**
-     * Returns the channels this process receives, each with its handler, in declaration
+     * Returns the topics this process receives, each with its handler, in declaration
      * order.
      *
-     * @return the received channels and their handlers, in declaration order
+     * @return the received topics and their handlers, in declaration order
      */
     public List<Input<?, ?>> inputs() {
         return List.copyOf(inputsByTopic.values());
     }
 
     /**
-     * Looks up a received channel.
+     * Looks up a received topic.
      *
      * @param topic a topic name
-     * @return the channel and handler for {@code topic}, or {@code null} if not received
+     * @return the topic and handler for {@code topic}, or {@code null} if not received
      */
     public Input<?, ?> input(String topic) {
         return inputsByTopic.get(topic);
     }
 
     /**
-     * Returns the channels this process may send on, in declaration order.
+     * Returns the topics this process may send on, in declaration order.
      *
-     * @return the channels this process may send on, in declaration order
+     * @return the topics this process may send on, in declaration order
      */
-    public List<Channel<?, ?>> outputs() {
+    public List<Topic<?, ?>> outputs() {
         return List.copyOf(outputsByTopic.values());
     }
 
     /**
-     * Looks up a channel this process may send on.
+     * Looks up a topic this process may send on.
      *
      * @param topic a topic name
-     * @return the channel declared for sending on {@code topic}, or {@code null}
+     * @return the topic declared for sending on {@code topic}, or {@code null}
      */
-    public Channel<?, ?> output(String topic) {
+    public Topic<?, ?> output(String topic) {
         return outputsByTopic.get(topic);
     }
 
@@ -151,11 +151,11 @@ public final class Process {
         return storesByName.get(name);
     }
 
-    /** Accumulates the channels and stores of one process. */
+    /** Accumulates the topics and stores of one process. */
     public static final class Builder {
         private final String name;
         private final Map<String, Input<?, ?>> inputs = new LinkedHashMap<>();
-        private final Map<String, Channel<?, ?>> outputs = new LinkedHashMap<>();
+        private final Map<String, Topic<?, ?>> outputs = new LinkedHashMap<>();
         private final Map<String, Store<?, ?>> stores = new LinkedHashMap<>();
 
         private Builder(String name) {
@@ -163,52 +163,52 @@ public final class Process {
         }
 
         /**
-         * Receives a channel, handling each delivery with {@code handler}.
+         * Receives a topic, handling each delivery with {@code handler}.
          *
-         * @param channel the channel to receive
+         * @param topic the topic to receive
          * @param handler the logic for each delivery
          * @param <K>     key type
          * @param <V>     value type
          * @return this builder
-         * @throws IllegalArgumentException if {@code channel} or {@code handler} is null,
-         *                                  or this channel's topic is already received
+         * @throws IllegalArgumentException if {@code topic} or {@code handler} is null,
+         *                                  or a topic of that name is already received
          */
-        public <K, V> Builder receives(Channel<K, V> channel, Handler<K, V> handler) {
-            Input<K, V> input = new Input<>(channel, handler);
-            if (inputs.putIfAbsent(input.channel().topic(), input) != null) {
-                throw new IllegalArgumentException(name + " already receives " + channel.topic());
+        public <K, V> Builder receives(Topic<K, V> topic, Handler<K, V> handler) {
+            Input<K, V> input = new Input<>(topic, handler);
+            if (inputs.putIfAbsent(input.topic().name(), input) != null) {
+                throw new IllegalArgumentException(name + " already receives " + topic.name());
             }
             return this;
         }
 
         /**
-         * Declares the channels this process may send on. Repeats of the same channel are
-         * ignored; the same topic through a different {@code Channel} instance is refused,
+         * Declares the topics this process may send on. Repeats of the same topic are
+         * ignored; the same topic through a different {@code Topic} instance is refused,
          * because two instances for one topic leave it ambiguous which declared serdes the
          * sends on that topic carry.
          *
          * <p>The whole argument list is validated before any of it is committed, so a
          * refused call leaves the builder exactly as it was.
          *
-         * @param channels the channels to declare
+         * @param topics the topics to declare
          * @return this builder
-         * @throws IllegalArgumentException if {@code channels} or an element is null, or a
+         * @throws IllegalArgumentException if {@code topics} or an element is null, or a
          *                                  topic is declared through two different
-         *                                  {@code Channel} instances
+         *                                  {@code Topic} instances
          */
-        public Builder sends(Channel<?, ?>... channels) {
-            if (channels == null) {
-                throw new IllegalArgumentException(name + ": sends requires a non-null channel array");
+        public Builder sends(Topic<?, ?>... topics) {
+            if (topics == null) {
+                throw new IllegalArgumentException(name + ": sends requires a non-null topic array");
             }
-            Map<String, Channel<?, ?>> accepted = new LinkedHashMap<>(outputs);
-            for (Channel<?, ?> channel : channels) {
-                if (channel == null) {
-                    throw new IllegalArgumentException(name + ": sent channels must be non-null");
+            Map<String, Topic<?, ?>> accepted = new LinkedHashMap<>(outputs);
+            for (Topic<?, ?> topic : topics) {
+                if (topic == null) {
+                    throw new IllegalArgumentException(name + ": sent topics must be non-null");
                 }
-                Channel<?, ?> existing = accepted.putIfAbsent(channel.topic(), channel);
-                if (existing != null && existing != channel) {
+                Topic<?, ?> existing = accepted.putIfAbsent(topic.name(), topic);
+                if (existing != null && existing != topic) {
                     throw new IllegalArgumentException(name + " already declares sending on "
-                            + channel.topic() + " through a different Channel instance; sends"
+                            + topic.name() + " through a different Topic instance; sends"
                             + " on a topic serialize with its declared serdes, so declare each"
                             + " send topic once");
                 }
@@ -252,11 +252,11 @@ public final class Process {
          * Builds the process.
          *
          * @return the process
-         * @throws IllegalArgumentException if no channel is received
+         * @throws IllegalArgumentException if no topic is received
          */
         public Process build() {
             if (inputs.isEmpty()) {
-                throw new IllegalArgumentException("process " + name + " must receive from at least one channel");
+                throw new IllegalArgumentException("process " + name + " must receive from at least one topic");
             }
             return new Process(name, inputs, outputs, stores);
         }

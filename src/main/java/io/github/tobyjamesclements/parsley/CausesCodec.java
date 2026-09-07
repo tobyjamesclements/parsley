@@ -68,11 +68,11 @@ final class CausesCodec {
      * {@link Causes}: the engine keeps its frontier as this map and asks for the width on
      * every merge (D98), so the value object's copy would be paid per record for nothing.
      */
-    static int encodedSize(SortedMap<ChannelId, Long> byChannel) {
+    static int encodedSize(SortedMap<Channel, Long> byChannel) {
         int size = 1 + unsignedVarintSize(topicCount(byChannel));
         UUID currentTopic = null;
         int partitions = 0;
-        for (ChannelId channel : byChannel.keySet()) {
+        for (Channel channel : byChannel.keySet()) {
             if (!channel.topicId().equals(currentTopic)) {
                 if (currentTopic != null) {
                     size += unsignedVarintSize(partitions);
@@ -93,7 +93,7 @@ final class CausesCodec {
     /**
      * Encodes a frontier.
      *
-     * <p>Channels are written in {@link ChannelId} order — topics ascending unsigned, each
+     * <p>Channels are written in {@link Channel} order — topics ascending unsigned, each
      * once, partitions ascending within their group — so the same frontier always yields
      * the same bytes.
      *
@@ -105,15 +105,15 @@ final class CausesCodec {
     }
 
     /**
-     * Encodes a frontier held as a map in {@link ChannelId} order — the engine's own
+     * Encodes a frontier held as a map in {@link Channel} order — the engine's own
      * frontier, without copying it into a {@link Causes} first (D102). The map must be
      * sorted by the channel's natural order, which is the order every group and pair is
      * written in.
      *
-     * @param byChannel per channel, the highest causal position, in {@link ChannelId} order
+     * @param byChannel per channel, the highest causal position, in {@link Channel} order
      * @return the header value
      */
-    static byte[] encode(SortedMap<ChannelId, Long> byChannel) {
+    static byte[] encode(SortedMap<Channel, Long> byChannel) {
         ByteBuffer buffer = ByteBuffer.allocate(encodedSize(byChannel));
         buffer.put(FORMAT_VERSION);
         writeUnsignedVarint(buffer, topicCount(byChannel));
@@ -122,7 +122,7 @@ final class CausesCodec {
         int[] groupSizes = new int[topicCount(byChannel)];
         int group = -1;
         UUID currentTopic = null;
-        for (ChannelId channel : byChannel.keySet()) {
+        for (Channel channel : byChannel.keySet()) {
             if (!channel.topicId().equals(currentTopic)) {
                 currentTopic = channel.topicId();
                 group++;
@@ -131,8 +131,8 @@ final class CausesCodec {
         }
         group = -1;
         currentTopic = null;
-        for (Map.Entry<ChannelId, Long> entry : byChannel.entrySet()) {
-            ChannelId channel = entry.getKey();
+        for (Map.Entry<Channel, Long> entry : byChannel.entrySet()) {
+            Channel channel = entry.getKey();
             if (!channel.topicId().equals(currentTopic)) {
                 currentTopic = channel.topicId();
                 group++;
@@ -147,10 +147,10 @@ final class CausesCodec {
     }
 
     /** The one spelling of "entries with equal topic id form one group": distinct topics, in order. */
-    private static int topicCount(SortedMap<ChannelId, Long> byChannel) {
+    private static int topicCount(SortedMap<Channel, Long> byChannel) {
         int topics = 0;
         UUID currentTopic = null;
-        for (ChannelId channel : byChannel.keySet()) {
+        for (Channel channel : byChannel.keySet()) {
             if (!channel.topicId().equals(currentTopic)) {
                 currentTopic = channel.topicId();
                 topics++;
@@ -212,7 +212,7 @@ final class CausesCodec {
 
     private static Causes decodeBody(ByteBuffer buffer) throws UndecodableMetadataException {
         int topicCount = readUnsignedVarint(buffer, "topic count");
-        TreeMap<ChannelId, Long> byChannel = new TreeMap<>();
+        TreeMap<Channel, Long> byChannel = new TreeMap<>();
         UUID previousTopic = null;
         for (int group = 0; group < topicCount; group++) {
             UUID topicId = new UUID(buffer.getLong(), buffer.getLong());
@@ -220,11 +220,11 @@ final class CausesCodec {
             // channel, so no genuine cause can carry it — and once merged it would sit in
             // the frontier as an id no broker query can ever answer for. Refused here so it
             // can never enter a frontier at all (wire-format.md constraint 5, D83).
-            if (ChannelId.isZeroTopicId(topicId)) {
+            if (Channel.isZeroTopicId(topicId)) {
                 throw new UndecodableMetadataException("zero topic id at group " + group
                         + "; the substrate never assigns it to a channel");
             }
-            if (previousTopic != null && ChannelId.compareTopicIds(topicId, previousTopic) <= 0) {
+            if (previousTopic != null && Channel.compareTopicIds(topicId, previousTopic) <= 0) {
                 throw new UndecodableMetadataException("topics not strictly ascending at " + topicId);
             }
             previousTopic = topicId;
@@ -240,7 +240,7 @@ final class CausesCodec {
                             "partitions not strictly ascending at " + topicId + "-" + partition);
                 }
                 previousPartition = partition;
-                ChannelId channel = new ChannelId(topicId, partition);
+                Channel channel = new Channel(topicId, partition);
                 long position = buffer.getLong();
                 if (position < 0) {
                     throw new UndecodableMetadataException("negative position " + position + " on " + channel);

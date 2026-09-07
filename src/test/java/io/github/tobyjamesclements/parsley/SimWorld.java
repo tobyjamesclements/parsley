@@ -13,20 +13,20 @@ import java.util.UUID;
  */
 public final class SimWorld {
     public static final class SimChannel {
-        final ChannelId id;
+        final Channel id;
         final String name;
         final String topicName;
         final List<Slot> slots = new ArrayList<>();
         long logStart;
         boolean dead;
 
-        SimChannel(ChannelId id, String name, String topicName) {
+        SimChannel(Channel id, String name, String topicName) {
             this.id = id;
             this.name = name;
             this.topicName = topicName;
         }
 
-        public ChannelId id() {
+        public Channel id() {
             return id;
         }
     }
@@ -43,7 +43,7 @@ public final class SimWorld {
     record DeadSlot() implements Slot {
     }
 
-    private final Map<ChannelId, SimChannel> channels = new LinkedHashMap<>();
+    private final Map<Channel, SimChannel> channels = new LinkedHashMap<>();
 
     private final Map<String, SimChannel> currentByName = new LinkedHashMap<>();
     private final Random rng;
@@ -60,7 +60,7 @@ public final class SimWorld {
         UUID topicId = new UUID(rng.nextLong(), rng.nextLong() & Long.MAX_VALUE);
         List<SimChannel> created = new ArrayList<>();
         for (int partition = 0; partition < partitions; partition++) {
-            ChannelId id = new ChannelId(topicId, partition);
+            Channel id = new Channel(topicId, partition);
             SimChannel channel = new SimChannel(id, partitions == 1 ? name : name + "#" + partition, name);
             channels.put(id, channel);
             currentByName.put(channel.name, channel);
@@ -85,7 +85,7 @@ public final class SimWorld {
         return current == null || current.dead ? null : current;
     }
 
-    public SimChannel channel(ChannelId id) {
+    public SimChannel channel(Channel id) {
         return channels.get(id);
     }
 
@@ -164,6 +164,6 @@ public final class SimWorld {
 
     @FunctionalInterface
     public interface InstanceFactory {
-        Instance at(ChannelId channel, long position);
+        Instance at(Channel channel, long position);
     }
 }

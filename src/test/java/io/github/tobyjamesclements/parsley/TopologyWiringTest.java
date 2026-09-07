@@ -48,8 +48,8 @@ class TopologyWiringTest {
             "in1", new ResolvedTopic(IN1_ID, 1),
             "in2", new ResolvedTopic(IN2_ID, 1),
             "out", new ResolvedTopic(OUT_ID, 1));
-    private static final ChannelId IN1 = new ChannelId(IN1_ID, 0);
-    private static final ChannelId IN2 = new ChannelId(IN2_ID, 0);
+    private static final Channel IN1 = new Channel(IN1_ID, 0);
+    private static final Channel IN2 = new Channel(IN2_ID, 0);
 
     @TempDir
     Path stateDir;
@@ -86,8 +86,8 @@ class TopologyWiringTest {
      */
     @Test
     void anSendInheritsTheDeliveredTimestampUnlessGivenItsOwn() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> out = Topic.of("out", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.builder()
                         .send(out, "inherited", delivery.value())
@@ -121,8 +121,8 @@ class TopologyWiringTest {
      */
     @Test
     void aFirstInitialisationAsksAboutTheReceivedTopicsAndNoPunctuationAsksAgain() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in2 = Topic.of("in2", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.none())
                 .receives(in2, (delivery, state) -> Effects.none())
@@ -135,7 +135,7 @@ class TopologyWiringTest {
         UUID foreignId = new UUID(100, 7);
         var headers = new RecordHeaders();
         headers.add(new RecordHeader(CausesCodec.HEADER_KEY,
-                CausesCodec.encode(Causes.of(Map.of(new ChannelId(foreignId, 0), 5L)))));
+                CausesCodec.encode(Causes.of(Map.of(new Channel(foreignId, 0), 5L)))));
         input("in2").pipeInput(new TestRecord<>("k".getBytes(), "b".getBytes(), headers));
         driver.advanceWallClockTime(Duration.ofMillis(500));
         assertEquals(1, identity.asked.size(), "punctuations never ask: nothing is polled between deliveries");
@@ -166,8 +166,8 @@ class TopologyWiringTest {
     /** Forwarding received headers on a send works. */
     @Test
     void forwardingReceivedHeadersOnASendWorks() throws Exception {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> out = Topic.of("out", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(out, delivery.key(), delivery.value(), delivery.headers()).build())
@@ -199,7 +199,7 @@ class TopologyWiringTest {
                         (topic, data) -> {
                             throw new RuntimeException("schema mismatch");
                         });
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), poison);
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), poison);
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.none())
                 .build();
@@ -225,8 +225,8 @@ class TopologyWiringTest {
                 return serialize(topic, data);
             }
         };
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> out = Channel.of("out", Serdes.String(),
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> out = Topic.of("out", Serdes.String(),
                 Serdes.serdeFrom(smuggler, new org.apache.kafka.common.serialization.StringDeserializer()));
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
@@ -244,8 +244,8 @@ class TopologyWiringTest {
     /** Key value bytes pass through untouched and causes ride a header. */
     @Test
     void keyValueBytesPassThroughUntouchedAndCausesRideAHeader() throws Exception {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> out = Topic.of("out", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(out, delivery.key(), delivery.value() + "!").build())
@@ -331,8 +331,8 @@ class TopologyWiringTest {
     /** Send to undeclared channel fails the step. */
     @Test
     void emissionToUndeclaredChannelFailsTheStep() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> undeclared = Channel.of("out", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> undeclared = Topic.of("out", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(undeclared, "k", "v").build())
@@ -355,10 +355,10 @@ class TopologyWiringTest {
                         .getBytes(java.nio.charset.StandardCharsets.UTF_8);
             }
         };
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> declared = Channel.of("out", Serdes.String(),
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> declared = Topic.of("out", Serdes.String(),
                 Serdes.serdeFrom(shouting, new org.apache.kafka.common.serialization.StringDeserializer()));
-        Channel<String, String> lookAlike = Channel.of("out", Serdes.String(), Serdes.String());
+        Topic<String, String> lookAlike = Topic.of("out", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(lookAlike, "k", "v").build())
@@ -371,16 +371,16 @@ class TopologyWiringTest {
                 driver.createOutputTopic("out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
         assertArrayEquals("V".getBytes(), outTopic.readRecord().value(),
                 "the send seam resolves the declared channel by name and its serdes produce the"
-                        + " bytes, so a second Channel instance for a declared topic has no serdes"
+                        + " bytes, so a second Topic instance for a declared topic has no serdes"
                         + " to smuggle past sends(...)");
     }
 
     /** A send through a factory-built equal channel instance is sent, not refused. */
     @Test
     void emissionThroughAFactoryBuiltChannelInstanceIsSent() {
-        java.util.function.Supplier<Channel<String, String>> outChannel =
-                () -> Channel.of("out", Serdes.String(), Serdes.String());
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        java.util.function.Supplier<Topic<String, String>> outChannel =
+                () -> Topic.of("out", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) ->
                         Effects.builder().send(outChannel.get(), delivery.key(), delivery.value()).build())
@@ -392,7 +392,7 @@ class TopologyWiringTest {
         TestOutputTopic<byte[], byte[]> outTopic =
                 driver.createOutputTopic("out", new ByteArrayDeserializer(), new ByteArrayDeserializer());
         assertArrayEquals("v".getBytes(), outTopic.readRecord().value(),
-                "a Channel.of factory called at both sends(...) and send(...) names the same"
+                "a Topic.of factory called at both sends(...) and send(...) names the same"
                         + " declared topic; a send on a declared topic must be sent"
                         + " (SPEC Structural 19)");
     }
@@ -400,13 +400,13 @@ class TopologyWiringTest {
     /** A self-loop re-sending via the delivered channel instance is sent, not refused. */
     @Test
     void selfLoopResendViaTheDeliveredChannelInstanceIsSent() {
-        Channel<String, String> loop = Channel.of("loop", Serdes.String(), Serdes.String());
+        Topic<String, String> loop = Topic.of("loop", Serdes.String(), Serdes.String());
         List<String> delivered = new ArrayList<>();
         Process definition = Process.named("p")
-                .receives(loop.startingAt(Channel.InitialPosition.LATEST), (delivery, state) -> {
+                .receives(loop.startingAt(Topic.InitialPosition.LATEST), (delivery, state) -> {
                     delivered.add(delivery.value());
                     return "seed".equals(delivery.value())
-                            ? Effects.builder().send(delivery.channel(), delivery.key(), "echo").build()
+                            ? Effects.builder().send(delivery.topic(), delivery.key(), "echo").build()
                             : Effects.none();
                 })
                 .sends(loop)
@@ -416,16 +416,16 @@ class TopologyWiringTest {
         input("loop").pipeInput(new TestRecord<>("k".getBytes(), "seed".getBytes()));
         assertEquals(List.of("seed", "echo"), delivered,
                 "receives(channel.startingAt(...)) and sends(channel) are distinct instances of"
-                        + " one declared topic, so a handler re-sending via delivery.channel()"
+                        + " one declared topic, so a handler re-sending via delivery.topic()"
                         + " must be sent, not refused");
     }
 
     /** A type-mismatched look-alike send fails closed before any write applies. */
     @Test
     void typeMismatchedLookAlikeSendFailsClosedBeforeAnyWriteApplies() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, Long> declared = Channel.of("out", Serdes.String(), Serdes.Long());
-        Channel<String, String> lookAlike = Channel.of("out", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, Long> declared = Topic.of("out", Serdes.String(), Serdes.Long());
+        Topic<String, String> lookAlike = Topic.of("out", Serdes.String(), Serdes.String());
         Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.builder()
@@ -452,7 +452,7 @@ class TopologyWiringTest {
     /** A swallowed undeclared-store read still fails the step. */
     @Test
     void swallowedUndeclaredStoreReadStillFailsTheStep() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
@@ -503,7 +503,7 @@ class TopologyWiringTest {
                     }
                     return new String(data, java.nio.charset.StandardCharsets.UTF_8);
                 });
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), capturingSerde);
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), capturingSerde);
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     captured.set(state);
@@ -540,7 +540,7 @@ class TopologyWiringTest {
                     }
                     return new String(data, java.nio.charset.StandardCharsets.UTF_8);
                 });
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), readingSerde);
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), readingSerde);
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     captured.set(state);
@@ -580,8 +580,8 @@ class TopologyWiringTest {
                     }
                     return data.getBytes(java.nio.charset.StandardCharsets.UTF_8);
                 }, Serdes.String().deserializer());
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> out = Channel.of("out", Serdes.String(), readingSerializerSerde);
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> out = Topic.of("out", Serdes.String(), readingSerializerSerde);
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     captured.set(state);
@@ -624,7 +624,7 @@ class TopologyWiringTest {
                         return deserialize(topic, data);
                     }
                 };
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(),
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(),
                 Serdes.serdeFrom(new StringSerializer(), headerAware));
         List<String> delivered = new ArrayList<>();
         Process definition = Process.named("p")
@@ -654,7 +654,7 @@ class TopologyWiringTest {
      */
     @Test
     void nullEffectsFromAHandlerFailClosedWithTheirOwnReason() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> null)
                 .build();
@@ -673,7 +673,7 @@ class TopologyWiringTest {
      */
     @Test
     void undecodableStoredStateValueFailsClosedEvenWhenSwallowed() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         org.apache.kafka.common.serialization.Serde<String> poisonRead =
                 Serdes.serdeFrom(new StringSerializer(), (topic, data) -> {
                     throw new RuntimeException("schema moved on");
@@ -710,7 +710,7 @@ class TopologyWiringTest {
      */
     @Test
     void nullReturningKeySerializerOnAStateReadFailsClosedEvenWhenSwallowed() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         org.apache.kafka.common.serialization.Serde<String> nullKeySerde =
                 Serdes.serdeFrom((topic, data) -> null, Serdes.String().deserializer());
         Store<String, String> store = Store.of("app-store", nullKeySerde, Serdes.String());
@@ -744,7 +744,7 @@ class TopologyWiringTest {
      */
     @Test
     void nullReturningKeySerializerOnAWriteFailsThePlanBeforeAnyWriteApplies() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         org.apache.kafka.common.serialization.Serde<String> nullOnPoison =
                 Serdes.serdeFrom((topic, data) -> "poison".equals(data) ? null
                         : data.getBytes(java.nio.charset.StandardCharsets.UTF_8),
@@ -785,7 +785,7 @@ class TopologyWiringTest {
      */
     @Test
     void throwingKeySerializerOnAStateReadFailsClosedEvenWhenSwallowed() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         org.apache.kafka.common.serialization.Serde<String> throwingKeySerde =
                 Serdes.serdeFrom((topic, data) -> {
                     throw new RuntimeException("key schema mismatch");
@@ -824,7 +824,7 @@ class TopologyWiringTest {
      */
     @Test
     void recordFromATopicWithoutAChannelForThisTaskIsRefusedWithTheDiagnosis() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.none())
                 .build();
@@ -840,7 +840,7 @@ class TopologyWiringTest {
     /** A null store on a state read is refused with a message. */
     @Test
     void nullStoreOnAStateReadIsRefusedWithAMessage() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     state.get(null, "k");
@@ -859,7 +859,7 @@ class TopologyWiringTest {
     /** A null key on a state read is refused with a message. */
     @Test
     void nullKeyOnAStateReadIsRefusedWithAMessage() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
@@ -880,8 +880,8 @@ class TopologyWiringTest {
     /** A state write ahead of a refused send is not applied. */
     @Test
     void writeAheadOfARefusedSendIsNotApplied() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> undeclared = Channel.of("out", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> undeclared = Topic.of("out", Serdes.String(), Serdes.String());
         Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> Effects.builder()
@@ -906,7 +906,7 @@ class TopologyWiringTest {
     /** A state write to an undeclared store fails closed before any write applies. */
     @Test
     void stateWriteToAnUndeclaredStoreFailsClosedBeforeAnyWriteApplies() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
@@ -932,7 +932,7 @@ class TopologyWiringTest {
     /** A state read from an undeclared store fails closed with its own reason. */
     @Test
     void stateReadFromAnUndeclaredStoreFailsClosedWithItsOwnReason() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
         Store<String, String> declared = Store.of("app-store", Serdes.String(), Serdes.String());
         Store<String, String> lookAlike = Store.of("app-store", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
@@ -954,8 +954,8 @@ class TopologyWiringTest {
     /** Application state reads see earlier writes and tombstones pass through. */
     @Test
     void applicationStateReadsSeeEarlierWritesAndTombstonesPassThrough() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> out = Topic.of("out", Serdes.String(), Serdes.String());
         Store<String, String> store = Store.of("app-store", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(in1, (delivery, state) -> {
@@ -985,8 +985,8 @@ class TopologyWiringTest {
     /** Stamped causes relay across processes and compress. */
     @Test
     void stampedCausesRelayAcrossProcessesAndCompress() throws Exception {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> out = Topic.of("out", Serdes.String(), Serdes.String());
         Process upstream = Process.named("up")
                 .receives(in1, (delivery, state) -> Effects.builder().send(out, "k", "v").build())
                 .sends(out)
@@ -1009,7 +1009,7 @@ class TopologyWiringTest {
     /** Self channel topology is accepted. */
     @Test
     void selfChannelTopologyIsAccepted() {
-        Channel<String, String> loop = Channel.of("loop", Serdes.String(), Serdes.String());
+        Topic<String, String> loop = Topic.of("loop", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
                 .receives(loop, (delivery, state) -> delivery.value().length() < 3
                         ? Effects.builder().send(loop, delivery.key(), delivery.value() + "x").build()
@@ -1027,9 +1027,9 @@ class TopologyWiringTest {
     /** Several send channels and several stores wire independently. */
     @Test
     void severalSendChannelsAndSeveralStoresWireIndependently() {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> out = Channel.of("out", Serdes.String(), Serdes.String());
-        Channel<String, String> out2 = Channel.of("in2", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> out = Topic.of("out", Serdes.String(), Serdes.String());
+        Topic<String, String> out2 = Topic.of("in2", Serdes.String(), Serdes.String());
         Store<String, String> storeA = Store.of("store-a", Serdes.String(), Serdes.String());
         Store<String, String> storeB = Store.of("store-b", Serdes.String(), Serdes.String());
         Process definition = Process.named("p")
@@ -1062,8 +1062,8 @@ class TopologyWiringTest {
     }
 
     private static Process twoInputRecorder(List<String> delivered) {
-        Channel<String, String> in1 = Channel.of("in1", Serdes.String(), Serdes.String());
-        Channel<String, String> in2 = Channel.of("in2", Serdes.String(), Serdes.String());
+        Topic<String, String> in1 = Topic.of("in1", Serdes.String(), Serdes.String());
+        Topic<String, String> in2 = Topic.of("in2", Serdes.String(), Serdes.String());
         return Process.named("p")
                 .receives(in1, (delivery, state) -> {
                     delivered.add(delivery.value());

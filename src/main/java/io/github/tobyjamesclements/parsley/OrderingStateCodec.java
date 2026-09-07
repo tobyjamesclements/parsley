@@ -79,8 +79,8 @@ final class OrderingStateCodec {
      * @param channel the channel the entry concerns
      * @return the key for one channel's entry of that class
      */
-    static byte[] channelKey(byte tag, ChannelId channel) {
-        ByteBuffer buffer = ByteBuffer.allocate(1 + ChannelId.ENCODED_LENGTH);
+    static byte[] channelKey(byte tag, Channel channel) {
+        ByteBuffer buffer = ByteBuffer.allocate(1 + Channel.ENCODED_LENGTH);
         buffer.put(tag);
         channel.writeTo(buffer);
         return buffer.array();
@@ -103,8 +103,8 @@ final class OrderingStateCodec {
      * @param position its position within that channel
      * @return the key for one held message, ordered by position within a channel
      */
-    static byte[] heldKey(ChannelId channel, long position) {
-        ByteBuffer buffer = ByteBuffer.allocate(1 + ChannelId.ENCODED_LENGTH + Long.BYTES);
+    static byte[] heldKey(Channel channel, long position) {
+        ByteBuffer buffer = ByteBuffer.allocate(1 + Channel.ENCODED_LENGTH + Long.BYTES);
         buffer.put(TAG_HELD);
         channel.writeTo(buffer);
         buffer.putLong(position);
@@ -115,7 +115,7 @@ final class OrderingStateCodec {
      * @param channel the channel to scan
      * @return the prefix matching every held message on that channel
      */
-    static byte[] heldPrefix(ChannelId channel) {
+    static byte[] heldPrefix(Channel channel) {
         return channelKey(TAG_HELD, channel);
     }
 
@@ -128,35 +128,35 @@ final class OrderingStateCodec {
     }
 
     /**
-     * @param key a key built by {@link #channelKey(byte, ChannelId)}
+     * @param key a key built by {@link #channelKey(byte, Channel)}
      * @return the channel it names
      * @throws FailClosedException with
      *         {@link FailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
      *         key is not the exact length that builder writes
      */
-    static ChannelId channelOfEntryKey(byte[] key) {
-        if (key.length != 1 + ChannelId.ENCODED_LENGTH) {
+    static Channel channelOfEntryKey(byte[] key) {
+        if (key.length != 1 + Channel.ENCODED_LENGTH) {
             throw new FailClosedException(
                     FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                     "corrupt ordering key: length " + key.length + " for tag '" + (char) key[0] + "'");
         }
-        return ChannelId.readFrom(ByteBuffer.wrap(key, 1, ChannelId.ENCODED_LENGTH));
+        return Channel.readFrom(ByteBuffer.wrap(key, 1, Channel.ENCODED_LENGTH));
     }
 
     /**
-     * @param key a key built by {@link #heldKey(ChannelId, long)}
+     * @param key a key built by {@link #heldKey(Channel, long)}
      * @return the channel it names
      * @throws FailClosedException with
      *         {@link FailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
      *         key is not the exact length that builder writes
      */
-    static ChannelId channelOfHeldKey(byte[] key) {
+    static Channel channelOfHeldKey(byte[] key) {
         requireHeldKeyLength(key);
-        return ChannelId.readFrom(ByteBuffer.wrap(key, 1, ChannelId.ENCODED_LENGTH));
+        return Channel.readFrom(ByteBuffer.wrap(key, 1, Channel.ENCODED_LENGTH));
     }
 
     /**
-     * @param key a key built by {@link #heldKey(ChannelId, long)}
+     * @param key a key built by {@link #heldKey(Channel, long)}
      * @return the position it names
      * @throws FailClosedException with
      *         {@link FailClosedException.Reason#UNKNOWN_ORDERING_STATE_FORMAT} if the
@@ -164,11 +164,11 @@ final class OrderingStateCodec {
      */
     static long positionOfHeldKey(byte[] key) {
         requireHeldKeyLength(key);
-        return ByteBuffer.wrap(key, 1 + ChannelId.ENCODED_LENGTH, Long.BYTES).getLong();
+        return ByteBuffer.wrap(key, 1 + Channel.ENCODED_LENGTH, Long.BYTES).getLong();
     }
 
     private static void requireHeldKeyLength(byte[] key) {
-        if (key.length != 1 + ChannelId.ENCODED_LENGTH + Long.BYTES) {
+        if (key.length != 1 + Channel.ENCODED_LENGTH + Long.BYTES) {
             throw new FailClosedException(
                     FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                     "corrupt held key: length " + key.length);
@@ -227,7 +227,7 @@ final class OrderingStateCodec {
             size += Integer.BYTES + headerKey.length + Integer.BYTES
                     + (header.value() == null ? 0 : header.value().length);
         }
-        size += Integer.BYTES + causes.size() * (ChannelId.ENCODED_LENGTH + Long.BYTES);
+        size += Integer.BYTES + causes.size() * (Channel.ENCODED_LENGTH + Long.BYTES);
 
         ByteBuffer buffer = ByteBuffer.allocate(size);
         buffer.put(HELD_BLOB_VERSION);
@@ -322,13 +322,13 @@ final class OrderingStateCodec {
             }
             int causeCount = buffer.getInt();
             if (causeCount < 0
-                    || buffer.remaining() != causeCount * (long) (ChannelId.ENCODED_LENGTH + Long.BYTES)) {
+                    || buffer.remaining() != causeCount * (long) (Channel.ENCODED_LENGTH + Long.BYTES)) {
                 throw corrupt("cause count " + causeCount + " does not match "
                         + buffer.remaining() + " bytes remaining");
             }
-            TreeMap<ChannelId, Long> causes = new TreeMap<>();
+            TreeMap<Channel, Long> causes = new TreeMap<>();
             for (int i = 0; i < causeCount; i++) {
-                ChannelId channel = ChannelId.readFrom(buffer);
+                Channel channel = Channel.readFrom(buffer);
                 causes.put(channel, buffer.getLong());
             }
             return new HeldBlob(timestamp, key, value, List.copyOf(headers), Causes.of(causes));

@@ -19,8 +19,8 @@ class OrderingStateInspectorTest {
     /** Finds live held entries, ignoring tombstones and other key classes. */
     @Test
     void findsLiveHeldEntriesAndIgnoresTombstonesAndOtherTags() {
-        ChannelId held = new ChannelId(new UUID(4, 1), 2);
-        ChannelId tombstoned = new ChannelId(new UUID(4, 2), 0);
+        Channel held = new Channel(new UUID(4, 1), 2);
+        Channel tombstoned = new Channel(new UUID(4, 2), 0);
         Map<byte[], byte[]> latest = new TreeMap<>(Arrays::compareUnsigned);
         latest.put(OrderingStateCodec.heldKey(held, 7), new byte[] {1});
         latest.put(OrderingStateCodec.heldKey(tombstoned, 3), null);
@@ -36,7 +36,7 @@ class OrderingStateInspectorTest {
         UUID topicId = new UUID(4, 9);
         Map<byte[], byte[]> latest = new TreeMap<>(Arrays::compareUnsigned);
 
-        latest.put(OrderingStateCodec.channelNameKey("orders"), new ChannelId(topicId, 2).toBytes());
+        latest.put(OrderingStateCodec.channelNameKey("orders"), new Channel(topicId, 2).toBytes());
         latest.put(OrderingStateCodec.channelNameKey("tombstoned"), null);
         latest.put(OrderingStateCodec.versionKey(), new byte[] {1});
 
@@ -46,8 +46,8 @@ class OrderingStateInspectorTest {
     /** Reads covered positions from fed-up-to entries, ignoring tombstones and other tags. */
     @Test
     void readsCoveredPositionsAndIgnoresTombstonesAndOtherTags() {
-        ChannelId covered = new ChannelId(new UUID(4, 5), 1);
-        ChannelId tombstoned = new ChannelId(new UUID(4, 6), 0);
+        Channel covered = new Channel(new UUID(4, 5), 1);
+        Channel tombstoned = new Channel(new UUID(4, 6), 0);
         Map<byte[], byte[]> latest = new TreeMap<>(Arrays::compareUnsigned);
         latest.put(OrderingStateCodec.channelKey(OrderingStateCodec.TAG_FED_UP_TO, covered), OrderingStateCodec.encodeLong(41));
         latest.put(OrderingStateCodec.channelKey(OrderingStateCodec.TAG_FED_UP_TO, tombstoned), null);
@@ -67,9 +67,9 @@ class OrderingStateInspectorTest {
         UUID newId = new UUID(4, 11);
         UUID stableId = new UUID(4, 12);
         Map<byte[], byte[]> latest = new TreeMap<>(Arrays::compareUnsigned);
-        latest.put(OrderingStateCodec.channelNameKey("recreated"), new ChannelId(oldId, 0).toBytes());
-        latest.put(OrderingStateCodec.channelNameKey("stable"), new ChannelId(stableId, 0).toBytes());
-        latest.put(OrderingStateCodec.heldKey(new ChannelId(oldId, 0), 5), new byte[] {1});
+        latest.put(OrderingStateCodec.channelNameKey("recreated"), new Channel(oldId, 0).toBytes());
+        latest.put(OrderingStateCodec.channelNameKey("stable"), new Channel(stableId, 0).toBytes());
+        latest.put(OrderingStateCodec.heldKey(new Channel(oldId, 0), 5), new byte[] {1});
 
         assertEquals(java.util.List.of("recreated"), OrderingStateInspector.identityChangedTopics(
                 latest, Map.of("recreated", newId, "stable", stableId)));

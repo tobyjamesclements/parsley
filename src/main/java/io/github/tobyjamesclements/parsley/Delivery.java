@@ -15,17 +15,17 @@ import java.util.List;
  * @see Handler#handle(Delivery, State)
  */
 public final class Delivery<K, V> {
-    private final Channel<K, V> channel;
-    private final int partition;
+    private final Topic<K, V> topic;
+    private final Channel channel;
     private final long position;
     private final long timestamp;
     private final K key;
     private final V value;
     private final List<Header> headers;
 
-    Delivery(Channel<K, V> channel, int partition, long position, long timestamp, K key, V value, List<Header> headers) {
+    Delivery(Topic<K, V> topic, Channel channel, long position, long timestamp, K key, V value, List<Header> headers) {
+        this.topic = topic;
         this.channel = channel;
-        this.partition = partition;
         this.position = position;
         this.timestamp = timestamp;
         this.key = key;
@@ -38,9 +38,9 @@ public final class Delivery<K, V> {
     /**
      * Builds a delivery. Intended for tests driving a {@link Handler} directly.
      *
-     * @param channel   the channel the message arrived on
-     * @param partition the partition within that channel
-     * @param position  the offset within that partition
+     * @param topic     the declared topic the message arrived on
+     * @param channel   the channel it arrived on: one partition of that topic, by identity
+     * @param position  the offset within that channel
      * @param timestamp the message timestamp
      * @param key       the message key
      * @param value     the message value
@@ -48,10 +48,26 @@ public final class Delivery<K, V> {
      * @param <K>       key type
      * @param <V>       value type
      * @return the delivery
+     * @throws IllegalArgumentException if {@code topic} or {@code channel} is null
      */
-    public static <K, V> Delivery<K, V> of(Channel<K, V> channel, int partition, long position, long timestamp,
+    public static <K, V> Delivery<K, V> of(Topic<K, V> topic, Channel channel, long position, long timestamp,
                                            K key, V value, List<Header> headers) {
-        return new Delivery<>(channel, partition, position, timestamp, key, value, headers);
+        if (topic == null) {
+            throw new IllegalArgumentException("topic must be non-null");
+        }
+        if (channel == null) {
+            throw new IllegalArgumentException(topic.name() + ": channel must be non-null");
+        }
+        return new Delivery<>(topic, channel, position, timestamp, key, value, headers);
+    }
+
+    /**
+     * Returns the declared topic this message arrived on.
+     *
+     * @return the declared topic this message arrived on
+     */
+    public Topic<K, V> topic() {
+        return topic;
     }
 
     /**
@@ -59,23 +75,23 @@ public final class Delivery<K, V> {
      *
      * @return the channel this message arrived on
      */
-    public Channel<K, V> channel() {
+    public Channel channel() {
         return channel;
     }
 
     /**
-     * Returns the partition within the channel.
+     * Returns the partition within the topic, which is {@link Channel#partition()}.
      *
-     * @return the partition within the channel
+     * @return the partition within the topic
      */
     public int partition() {
-        return partition;
+        return channel.partition();
     }
 
     /**
-     * Returns the offset of this message within its partition.
+     * Returns the offset of this message within its channel.
      *
-     * @return the offset of this message within its partition
+     * @return the offset of this message within its channel
      */
     public long position() {
         return position;

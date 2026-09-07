@@ -97,8 +97,8 @@ class FramedPayloadWireFormatTest {
     @Test
     void framedPayloadPassesThroughByteExact() {
         Serde<Order> framed = new FramedSerde();
-        Channel<String, Order> in = Channel.of("framed-in", Serdes.String(), framed);
-        Channel<String, Order> out = Channel.of("framed-out", Serdes.String(), framed);
+        Topic<String, Order> in = Topic.of("framed-in", Serdes.String(), framed);
+        Topic<String, Order> out = Topic.of("framed-out", Serdes.String(), framed);
         Process definition = Process.named("framed")
                 .receives(in, (delivery, state) -> Effects.builder()
                         .send(out, delivery.key(), new Order(delivery.value().item(), delivery.value().qty() * 2))

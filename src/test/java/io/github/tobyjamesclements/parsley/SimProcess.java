@@ -43,7 +43,7 @@ public final class SimProcess {
     private final EngineTestFactory.SabotageMode sabotage;
     private final MemoryOrderingStore store = new MemoryOrderingStore();
 
-    private Map<ChannelId, SimChannel> received;
+    private Map<Channel, SimChannel> received;
     private List<SimChannel> sendChannels;
     private final SimLogic logic;
 
@@ -51,12 +51,12 @@ public final class SimProcess {
     private FailClosedException failure;
     private Object openTxn;
     private final List<Oracle.Sent> stepAppends = new ArrayList<>();
-    private final Map<ChannelId, Long> committedNextRead = new HashMap<>();
-    private final Map<ChannelId, Long> workingNextRead = new HashMap<>();
+    private final Map<Channel, Long> committedNextRead = new HashMap<>();
+    private final Map<Channel, Long> workingNextRead = new HashMap<>();
 
-    private final Map<ChannelId, Long> initialNextRead = new HashMap<>();
+    private final Map<Channel, Long> initialNextRead = new HashMap<>();
 
-    private final Map<ChannelId, Long> highWaterNextRead = new HashMap<>();
+    private final Map<Channel, Long> highWaterNextRead = new HashMap<>();
 
     private HostFault hostFault = HostFault.NONE;
 
@@ -108,9 +108,9 @@ public final class SimProcess {
             throw new IllegalStateException(name + " already started");
         }
         failure = null;
-        Map<ChannelId, String> names = new LinkedHashMap<>();
+        Map<Channel, String> names = new LinkedHashMap<>();
         received.forEach((id, channel) -> names.put(id, channel.name));
-        Map<ChannelId, Long> startPositions = new HashMap<>();
+        Map<Channel, Long> startPositions = new HashMap<>();
         received.keySet().forEach(id -> startPositions.put(id, committedNextRead.get(id)));
         try {
             engine = EngineTestFactory.create(name, names, store, sabotage, startPositions);
@@ -226,7 +226,7 @@ public final class SimProcess {
      */
     public FeedResult feedOne(SimChannel channel) {
         ensureTxn();
-        ChannelId id = channel.id();
+        Channel id = channel.id();
         if (channel.dead) {
             return FeedResult.NOTHING;
         }
@@ -339,7 +339,7 @@ public final class SimProcess {
     private void send(SimChannel target, String uid) {
         byte[] causesHeader = engine.causesHeaderForSend();
         Set<Instance> trueCauses = oracle.causalPastSnapshot(name);
-        Map<ChannelId, Long> upperBound = oracle.expressionUpperBound(name);
+        Map<Channel, Long> upperBound = oracle.expressionUpperBound(name);
 
         // Only a dead channel excuses an unexpressed cause (SPEC Structural 13, 15): nothing
         // is dropped for retention any more, so a cause below its channel's log start must
@@ -353,7 +353,7 @@ public final class SimProcess {
         }
         Causes meta = decodeMeta(causesHeader);
 
-        Map<ChannelId, Long> lastAssigned = new TreeMap<>();
+        Map<Channel, Long> lastAssigned = new TreeMap<>();
         meta.byChannel().keySet().forEach(channelId -> {
             SimChannel simChannel = world.channel(channelId);
             if (simChannel != null) {
@@ -383,8 +383,8 @@ public final class SimProcess {
      */
     private void reportIdentity() {
         ensureTxn();
-        Set<ChannelId> dead = new java.util.TreeSet<>();
-        Set<ChannelId> recreated = new java.util.TreeSet<>();
+        Set<Channel> dead = new java.util.TreeSet<>();
+        Set<Channel> recreated = new java.util.TreeSet<>();
         for (SimChannel channel : world.allChannels()) {
             if (!channel.dead) {
                 continue;
@@ -417,7 +417,7 @@ public final class SimProcess {
         if (engine != null) {
             throw new IllegalStateException(name + " must be stopped to rewind offsets");
         }
-        ChannelId id = channel.id();
+        Channel id = channel.id();
         long target = Math.max(0, committedNextRead.get(id) - back);
         committedNextRead.put(id, target);
         workingNextRead.put(id, target);

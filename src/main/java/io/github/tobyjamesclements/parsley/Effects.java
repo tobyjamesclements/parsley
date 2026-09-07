@@ -23,7 +23,7 @@ public final class Effects {
     /**
      * One message to send.
      *
-     * @param channel   the channel to send on, which the process must have declared
+     * @param topic   the topic to send on, which the process must have declared
      * @param key       the message key
      * @param value     the message value
      * @param headers   application headers to attach
@@ -34,24 +34,24 @@ public final class Effects {
      * @param <K>       key type
      * @param <V>       value type
      */
-    public record Send<K, V>(Channel<K, V> channel, K key, V value, List<Header> headers,
+    public record Send<K, V>(Topic<K, V> topic, K key, V value, List<Header> headers,
                                  java.util.OptionalLong timestamp) {
         /**
          * A send inheriting the delivered message's timestamp.
          *
-         * @param channel the channel to send on, which the process must have declared
+         * @param topic the topic to send on, which the process must have declared
          * @param key     the message key
          * @param value   the message value
          * @param headers application headers to attach
          */
-        public Send(Channel<K, V> channel, K key, V value, List<Header> headers) {
-            this(channel, key, value, headers, java.util.OptionalLong.empty());
+        public Send(Topic<K, V> topic, K key, V value, List<Header> headers) {
+            this(topic, key, value, headers, java.util.OptionalLong.empty());
         }
 
         /**
          * Copies the headers and rejects any using the reserved prefix.
          *
-         * @throws IllegalArgumentException if {@code channel}, {@code headers} or
+         * @throws IllegalArgumentException if {@code topic}, {@code headers} or
          *         {@code timestamp} is null, {@code headers} contains a null element, or
          *         the timestamp is negative
          * @throws FailClosedException
@@ -59,18 +59,18 @@ public final class Effects {
          *         causal metadata
          */
         public Send {
-            if (channel == null) {
-                throw new IllegalArgumentException("channel must be non-null");
+            if (topic == null) {
+                throw new IllegalArgumentException("topic must be non-null");
             }
             if (headers == null) {
                 throw new IllegalArgumentException("headers must be non-null; pass List.of() for none");
             }
             if (timestamp == null) {
-                throw new IllegalArgumentException(channel.topic()
+                throw new IllegalArgumentException(topic.name()
                         + ": timestamp must be non-null; pass OptionalLong.empty() to inherit");
             }
             if (timestamp.isPresent() && timestamp.getAsLong() < 0) {
-                throw new IllegalArgumentException(channel.topic() + ": timestamp must be non-negative: "
+                throw new IllegalArgumentException(topic.name() + ": timestamp must be non-negative: "
                         + timestamp.getAsLong());
             }
             // One snapshot, one pass: checking the caller's mutable list and then copying
@@ -79,7 +79,7 @@ public final class Effects {
             Header[] snapshot = headers.toArray(new Header[0]);
             for (Header header : snapshot) {
                 if (header == null) {
-                    throw new IllegalArgumentException(channel.topic()
+                    throw new IllegalArgumentException(topic.name()
                             + ": headers may not contain a null element");
                 }
                 if (header.key().startsWith(CausesCodec.RESERVED_HEADER_PREFIX)) {
@@ -176,36 +176,36 @@ public final class Effects {
         /**
          * Sends a message with no application headers.
          *
-         * @param channel the channel to send on
+         * @param topic the topic to send on
          * @param key     the message key
          * @param value   the message value
          * @param <K>     key type
          * @param <V>     value type
          * @return this builder
-         * @throws IllegalArgumentException if {@code channel} is null
+         * @throws IllegalArgumentException if {@code topic} is null
          */
-        public <K, V> Builder send(Channel<K, V> channel, K key, V value) {
-            sends.add(new Send<>(channel, key, value, List.of()));
+        public <K, V> Builder send(Topic<K, V> topic, K key, V value) {
+            sends.add(new Send<>(topic, key, value, List.of()));
             return this;
         }
 
         /**
          * Sends a message carrying application headers.
          *
-         * @param channel the channel to send on
+         * @param topic the topic to send on
          * @param key     the message key
          * @param value   the message value
          * @param headers headers to attach
          * @param <K>     key type
          * @param <V>     value type
          * @return this builder
-         * @throws IllegalArgumentException if {@code channel} or {@code headers} is null,
+         * @throws IllegalArgumentException if {@code topic} or {@code headers} is null,
          *         or {@code headers} contains a null element
          * @throws FailClosedException
          *         if a header uses the reserved prefix
          */
-        public <K, V> Builder send(Channel<K, V> channel, K key, V value, List<Header> headers) {
-            sends.add(new Send<>(channel, key, value, headers));
+        public <K, V> Builder send(Topic<K, V> topic, K key, V value, List<Header> headers) {
+            sends.add(new Send<>(topic, key, value, headers));
             return this;
         }
 
@@ -215,25 +215,25 @@ public final class Effects {
          * <p>Derive it from delivered data, never from a clock: the runtime may invoke a
          * handler again for the same message, and the effects must be identical.
          *
-         * @param channel   the channel to send on
+         * @param topic   the topic to send on
          * @param key       the message key
          * @param value     the message value
          * @param timestamp the message timestamp, non-negative
          * @param <K>       key type
          * @param <V>       value type
          * @return this builder
-         * @throws IllegalArgumentException if {@code channel} is null or {@code timestamp}
+         * @throws IllegalArgumentException if {@code topic} is null or {@code timestamp}
          *         is negative
          */
-        public <K, V> Builder send(Channel<K, V> channel, K key, V value, long timestamp) {
-            sends.add(new Send<>(channel, key, value, List.of(), java.util.OptionalLong.of(timestamp)));
+        public <K, V> Builder send(Topic<K, V> topic, K key, V value, long timestamp) {
+            sends.add(new Send<>(topic, key, value, List.of(), java.util.OptionalLong.of(timestamp)));
             return this;
         }
 
         /**
          * Sends a message with application headers and its own timestamp.
          *
-         * @param channel   the channel to send on
+         * @param topic   the topic to send on
          * @param key       the message key
          * @param value     the message value
          * @param headers   headers to attach
@@ -241,13 +241,13 @@ public final class Effects {
          * @param <K>       key type
          * @param <V>       value type
          * @return this builder
-         * @throws IllegalArgumentException if {@code channel} or {@code headers} is null,
+         * @throws IllegalArgumentException if {@code topic} or {@code headers} is null,
          *         {@code headers} contains a null element, or {@code timestamp} is negative
          * @throws FailClosedException
          *         if a header uses the reserved prefix
          */
-        public <K, V> Builder send(Channel<K, V> channel, K key, V value, List<Header> headers, long timestamp) {
-            sends.add(new Send<>(channel, key, value, headers, java.util.OptionalLong.of(timestamp)));
+        public <K, V> Builder send(Topic<K, V> topic, K key, V value, List<Header> headers, long timestamp) {
+            sends.add(new Send<>(topic, key, value, headers, java.util.OptionalLong.of(timestamp)));
             return this;
         }
 

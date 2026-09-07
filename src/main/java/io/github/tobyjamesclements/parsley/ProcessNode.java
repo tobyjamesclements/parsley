@@ -73,8 +73,8 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
     private ProcessorContext<byte[], byte[]> context;
     private ProcessEngine engine;
     private int partition;
-    private final Map<String, ChannelId> channelByTopic = new HashMap<>();
-    private final Map<ChannelId, String> topicByChannel = new HashMap<>();
+    private final Map<String, Channel> channelByTopic = new HashMap<>();
+    private final Map<Channel, String> topicByChannel = new HashMap<>();
     private final Map<String, KeyValueStore<Bytes, byte[]>> appStores = new HashMap<>();
     private final Map<String, String> serdeTopicByStore = new HashMap<>();
     private State state;
@@ -144,11 +144,11 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
 
         channelByTopic.clear();
         topicByChannel.clear();
-        Map<ChannelId, Long> taskStartPositions = new HashMap<>();
+        Map<Channel, Long> taskStartPositions = new HashMap<>();
         for (String topic : ProcessTopology.inputTopics(definition)) {
             ResolvedTopic info = topics.get(topic);
             if (partition < info.partitions()) {
-                ChannelId channel = new ChannelId(info.topicId(), partition);
+                Channel channel = new Channel(info.topicId(), partition);
                 channelByTopic.put(topic, channel);
                 topicByChannel.put(channel, topic);
                 Long start = startPositions.get(new TopicPartition(topic, partition));
@@ -200,10 +200,10 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
     private void checkIdentity() {
         // Every channel this task's state names, defined once: the received channels and
         // the restored frontier.
-        Set<ChannelId> known = new HashSet<>(engine.frontierSnapshot().byChannel().keySet());
+        Set<Channel> known = new HashSet<>(engine.frontierSnapshot().byChannel().keySet());
         known.addAll(engine.receivedChannelSet());
         Set<UUID> topicIds = new HashSet<>();
-        for (ChannelId channel : known) {
+        for (Channel channel : known) {
             topicIds.add(channel.topicId());
         }
         TopicIdentityVerdicts verdicts;
@@ -227,9 +227,9 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
         if (verdicts.deleted().isEmpty() && verdicts.recreated().isEmpty()) {
             return;
         }
-        Set<ChannelId> dead = new HashSet<>();
-        Set<ChannelId> recreated = new HashSet<>();
-        for (ChannelId channel : known) {
+        Set<Channel> dead = new HashSet<>();
+        Set<Channel> recreated = new HashSet<>();
+        for (Channel channel : known) {
             if (verdicts.recreated().contains(channel.topicId())) {
                 recreated.add(channel);
             } else if (verdicts.deleted().contains(channel.topicId())) {
@@ -266,7 +266,7 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
     public void process(Record<byte[], byte[]> record) {
         RecordMetadata metadata = context.recordMetadata().orElseThrow(() ->
                 new IllegalStateException("record without topic metadata reached " + definition.name()));
-        ChannelId channel = channelByTopic.get(metadata.topic());
+        Channel channel = channelByTopic.get(metadata.topic());
         if (channel == null) {
             throw new IllegalStateException(definition.name() + " fed from undeclared topic " + metadata.topic());
         }
@@ -298,8 +298,8 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
         // own deserializers are application code and run before the handler, so a refusal
         // they latch through a captured reader must fail this step, not vanish.
         rethrowSeamViolation();
-        Channel<K, V> channel = input.channel();
-        String topic = channel.topic();
+        Topic<K, V> declared = input.topic();
+        String topic = declared.name();
         // Reserved transport headers are parsley's own carriage, invisible to application
         // logic in both directions (D56): deserializers see exactly the headers the
         // application sent, the same view Delivery presents one frame later.
@@ -309,9 +309,9 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
         V value;
         try {
             key = message.key() == null
-                    ? null : channel.keySerde().deserializer().deserialize(topic, receivedHeaders, message.key());
+                    ? null : declared.keySerde().deserializer().deserialize(topic, receivedHeaders, message.key());
             value = message.value() == null
-                    ? null : channel.valueSerde().deserializer().deserialize(topic, receivedHeaders, message.value());
+                    ? null : declared.valueSerde().deserializer().deserialize(topic, receivedHeaders, message.value());
         } catch (RuntimeException e) {
             // A reader refusal thrown through the deserializer keeps its own reason: the
             // latch identifies it, and wrapping it as a payload failure would mislabel
@@ -323,7 +323,7 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
         }
         rethrowSeamViolation();
 
-        Delivery<K, V> delivery = Delivery.of(channel, message.channel().partition(), message.position(),
+        Delivery<K, V> delivery = Delivery.of(declared, message.channel(), message.position(),
                 message.timestamp(), key, value, applicationHeaders);
         Effects effects = input.handler().handle(delivery, state);
         // The reader's refusal was thrown inside the handler's own frame, where an
@@ -434,8 +434,8 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
     }
 
     private PlannedSend planSend(Effects.Send<?, ?> send, long timestamp) {
-        String topic = send.channel().topic();
-        Channel<?, ?> declared = definition.output(topic);
+        String topic = send.topic().name();
+        Topic<?, ?> declared = definition.output(topic);
         if (declared == null) {
             throw new FailClosedException(
                     FailClosedException.Reason.SEND_TO_UNDECLARED_CHANNEL,
@@ -443,7 +443,7 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
         }
         RecordHeaders headers = toKafkaHeaders(send.headers());
         // The declared channel's serdes produce the bytes, the way the store seam writes
-        // with its declared store: name resolution decides the codec, so a second Channel
+        // with its declared store: name resolution decides the codec, so a second Topic
         // instance for a declared topic has no serdes to smuggle past sends(...).
         byte[] keyBytes = send.key() == null
                 ? null : serialize(declared.keySerde(), topic, headers, send.key());

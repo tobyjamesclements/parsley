@@ -43,7 +43,7 @@ class ProtocolPurityTest {
     private static final Set<String> PROTOCOL = Set.of(
             "Causes",
             "CausesCodec",
-            "ChannelId",
+            "Channel",
             "Deliverability",
             "DeliverableMessage",
             "FailClosedException",
@@ -62,7 +62,7 @@ class ProtocolPurityTest {
      */
     private static final Set<String> RUNTIME = Set.of(
             "AdminTopicIdentitySource",
-            "Channel",
+            "Topic",
             "Delivery",
             "Effects",
             "GroupMembershipCommitter",
@@ -109,8 +109,8 @@ class ProtocolPurityTest {
 
     /**
      * The three runtime names a protocol source may say. Every other entry of
-     * {@link #RUNTIME} is scanned for, and matching is by whole word, so {@code Channel}
-     * does not fire on {@code ChannelId} nor {@code State} on {@code OrderingStateCodec}.
+     * {@link #RUNTIME} is scanned for, and matching is by whole word, so {@code Process}
+     * does not fire on {@code ProcessEngine} nor {@code State} on {@code OrderingStateCodec}.
      *
      * <p>{@code Parsley} and {@code Delivery} are exempt because they are the product's name
      * and an ordinary English word, and each appears once in protocol prose.

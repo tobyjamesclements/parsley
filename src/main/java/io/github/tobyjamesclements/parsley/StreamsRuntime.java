@@ -476,7 +476,7 @@ final class StreamsRuntime implements AutoCloseable {
             }
         }
         // Reserved-namespace containment is not re-checked here: every declared topic came
-        // through Channel's constructor, which refuses it, so a runtime re-check would be
+        // through Topic's constructor, which refuses it, so a runtime re-check would be
         // unreachable and unpinnable. Only the composed-name collision can arise at start.
         for (String topic : declaredTopics(definitions)) {
             if (ownerByChangelog.containsKey(topic)) {
@@ -870,14 +870,14 @@ final class StreamsRuntime implements AutoCloseable {
                             + " this process's state was built against; their read positions for those names cannot"
                             + " be trusted. Reset the process's state and group offsets deliberately to proceed.");
         }
-        java.util.Set<ChannelId> declared = new java.util.TreeSet<>();
+        java.util.Set<Channel> declared = new java.util.TreeSet<>();
         for (String topic : ProcessTopology.inputTopics(definition)) {
             ResolvedTopic info = topics.get(topic);
             for (int partition = 0; partition < info.partitions(); partition++) {
-                declared.add(new ChannelId(info.topicId(), partition));
+                declared.add(new Channel(info.topicId(), partition));
             }
         }
-        java.util.Set<ChannelId> stranded =
+        java.util.Set<Channel> stranded =
                 new java.util.TreeSet<>(OrderingStateInspector
                         .heldChannels(orderingState));
         stranded.removeAll(declared);
@@ -939,7 +939,7 @@ final class StreamsRuntime implements AutoCloseable {
             // member's committed() is a stable fetch that retries until the transaction
             // resolves, so what it returns is authoritative.
             refuseLostOrderingState(applicationId, orderingView, committed, recheck);
-            Map<ChannelId, Long> covered =
+            Map<Channel, Long> covered =
                     OrderingStateInspector.coveredPositions(orderingView.latest());
             java.util.Set<String> receivedBefore =
                     OrderingStateInspector.nameBindings(orderingView.latest())
@@ -950,17 +950,17 @@ final class StreamsRuntime implements AutoCloseable {
                 if (committed.get(tp) != null) {
                     continue;
                 }
-                Long coveredUpTo = covered.get(new ChannelId(
+                Long coveredUpTo = covered.get(new Channel(
                         topics.get(tp.topic()).topicId(), tp.partition()));
                 java.util.OptionalLong resume = resumePosition(coveredUpTo, receivedBefore.contains(tp.topic()));
                 if (resume.isPresent()) {
                     toCommit.put(tp, new OffsetAndMetadata(resume.getAsLong(), BOOTSTRAP_OFFSET_STAMP));
                     continue;
                 }
-                Channel.InitialPosition initial = priorState
-                        ? Channel.InitialPosition.EARLIEST
-                        : definition.input(tp.topic()).channel().initialPosition();
-                wanted.put(tp, initial == Channel.InitialPosition.EARLIEST
+                Topic.InitialPosition initial = priorState
+                        ? Topic.InitialPosition.EARLIEST
+                        : definition.input(tp.topic()).topic().initialPosition();
+                wanted.put(tp, initial == Topic.InitialPosition.EARLIEST
                         ? OffsetSpec.earliest() : OffsetSpec.latest());
             }
             if (!wanted.isEmpty()) {

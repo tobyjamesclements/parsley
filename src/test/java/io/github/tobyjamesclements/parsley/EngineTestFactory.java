@@ -27,7 +27,7 @@ final class EngineTestFactory {
     }
 
     static ProcessEngine create(
-            String processName, Map<ChannelId, String> receivedChannels, OrderingStore store, SabotageMode mode) {
+            String processName, Map<Channel, String> receivedChannels, OrderingStore store, SabotageMode mode) {
         return create(processName, receivedChannels, store, mode, Map.of());
     }
 
@@ -37,8 +37,8 @@ final class EngineTestFactory {
      * way the Kafka host passes the bootstrap's.
      */
     static ProcessEngine create(
-            String processName, Map<ChannelId, String> receivedChannels, OrderingStore store, SabotageMode mode,
-            Map<ChannelId, Long> startPositions) {
+            String processName, Map<Channel, String> receivedChannels, OrderingStore store, SabotageMode mode,
+            Map<Channel, Long> startPositions) {
         Sabotage sabotage = mode == SabotageMode.NONE
                 ? Sabotage.NONE
                 : new Sabotage(Set.of(Sabotage.Mode.valueOf(mode.name())));
@@ -50,7 +50,7 @@ final class EngineTestFactory {
      * A received message with no causal stamp: the uid doubles as key and value, and the
      * position doubles as the offset.
      */
-    static ReceivedMessage plain(ChannelId channel, long position, String uid) {
+    static ReceivedMessage plain(Channel channel, long position, String uid) {
         return new ReceivedMessage(channel, position, position, uid.getBytes(), uid.getBytes(), List.of());
     }
 }

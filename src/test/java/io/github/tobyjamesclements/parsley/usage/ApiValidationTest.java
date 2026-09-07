@@ -6,7 +6,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.List;
 
-import io.github.tobyjamesclements.parsley.Channel;
+import io.github.tobyjamesclements.parsley.Topic;
 import io.github.tobyjamesclements.parsley.Effects;
 import io.github.tobyjamesclements.parsley.FailClosedException;
 import io.github.tobyjamesclements.parsley.Header;
@@ -29,8 +29,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class ApiValidationTest {
 
-    private static Channel<String, String> channel(String topic) {
-        return Channel.of(topic, Serdes.String(), Serdes.String());
+    private static Topic<String, String> channel(String topic) {
+        return Topic.of(topic, Serdes.String(), Serdes.String());
     }
 
     private static Store<String, String> store(String name) {
@@ -55,7 +55,7 @@ class ApiValidationTest {
                         + " application state in the guarantee-bearing topic");
     }
 
-    /** Channel topics containing the reserved namespace are refused at declaration. */
+    /** Topic topics containing the reserved namespace are refused at declaration. */
     @Test
     void reservedNamespaceTopicsAreUnconstructible() {
         assertThrows(IllegalArgumentException.class,
@@ -71,7 +71,7 @@ class ApiValidationTest {
     /** Reserved headers are unconstructible. */
     @Test
     void reservedHeadersAreUnconstructible() {
-        Channel<String, String> channel = channel("t");
+        Topic<String, String> channel = channel("t");
         FailClosedException e =
                 assertThrows(FailClosedException.class,
                         () -> Effects.builder().send(channel, "k", "v",
@@ -220,9 +220,9 @@ class ApiValidationTest {
     /** Null serdes are refused at declaration, not at first use on the stream thread. */
     @Test
     void nullSerdesAreRefusedAtDeclaration() {
-        assertThrows(IllegalArgumentException.class, () -> Channel.of("t", null, Serdes.String()),
+        assertThrows(IllegalArgumentException.class, () -> Topic.of("t", null, Serdes.String()),
                 "a null key serde would otherwise surface as an NPE on the stream thread");
-        assertThrows(IllegalArgumentException.class, () -> Channel.of("t", Serdes.String(), null),
+        assertThrows(IllegalArgumentException.class, () -> Topic.of("t", Serdes.String(), null),
                 "a null value serde would otherwise surface as an NPE on the stream thread");
         assertThrows(IllegalArgumentException.class, () -> Store.of("s", null, Serdes.String()),
                 "a null store key serde would otherwise surface at the first state access");
@@ -241,7 +241,7 @@ class ApiValidationTest {
     /** A send topic declared through two different channel instances is refused. */
     @Test
     void sendTopicDeclaredThroughTwoInstancesIsRefused() {
-        Channel<String, String> declared = channel("out");
+        Topic<String, String> declared = channel("out");
         Process.Builder builder = Process.named("p")
                 .receives(channel("in"), (d, s) -> Effects.none())
                 .sends(declared);
@@ -255,13 +255,13 @@ class ApiValidationTest {
     /** A refused sends call commits none of its arguments. */
     @Test
     void refusedSendsCallCommitsNothing() {
-        Channel<String, String> other = channel("other-out");
+        Topic<String, String> other = channel("other-out");
         Process.Builder builder = Process.named("p")
                 .receives(channel("in"), (d, s) -> Effects.none())
                 .sends(channel("out"));
         assertThrows(IllegalArgumentException.class, () -> builder.sends(other, channel("out")),
                 "the look-alike of the declared channel is refused");
-        assertEquals(List.of("out"), builder.build().outputs().stream().map(Channel::topic).toList(),
+        assertEquals(List.of("out"), builder.build().outputs().stream().map(Topic::name).toList(),
                 "sends(...) is all-or-nothing: a refusal mid-list must not leave earlier"
                         + " arguments committed");
     }
@@ -408,7 +408,7 @@ class ApiValidationTest {
         Process.Builder builder = Process.named("p")
                 .receives(channel("in"), (d, s) -> Effects.none());
         assertThrows(IllegalArgumentException.class,
-                () -> builder.sends(new Channel<?, ?>[] {null}),
+                () -> builder.sends(new Topic<?, ?>[] {null}),
                 "a null element must be refused per the taxonomy, not surface as a bare NPE");
     }
 
@@ -434,10 +434,10 @@ class ApiValidationTest {
         Process.Builder builder = Process.named("p")
                 .receives(channel("in"), (d, s) -> Effects.none());
         IllegalArgumentException e = assertThrows(IllegalArgumentException.class,
-                () -> builder.sends((Channel<?, ?>[]) null),
-                "a null channel array must be refused per the taxonomy, not surface as the"
+                () -> builder.sends((Topic<?, ?>[]) null),
+                "a null topic array must be refused per the taxonomy, not surface as the"
                         + " builder's bare NPE iterating it");
-        assertTrue(e.getMessage().contains("p: sends requires a non-null channel array"),
+        assertTrue(e.getMessage().contains("p: sends requires a non-null topic array"),
                 "the refusal names the process and the mistake: " + e.getMessage());
     }
 
@@ -516,7 +516,7 @@ class ApiValidationTest {
     /** A negative or null send timestamp is refused at construction. */
     @Test
     void negativeOrNullSendTimestampsAreRefusedAtConstruction() {
-        Channel<String, String> out = channel("out");
+        Topic<String, String> out = channel("out");
         assertThrows(IllegalArgumentException.class,
                 () -> Effects.builder().send(out, "k", "v", -1L),
                 "a negative timestamp cannot be a record timestamp");
@@ -625,10 +625,10 @@ class ApiValidationTest {
             stored.add(store);
         }
         Process definition = builder.build();
-        assertEquals(received, definition.inputs().stream().map(input -> input.channel().topic()).toList(),
+        assertEquals(received, definition.inputs().stream().map(input -> input.topic().name()).toList(),
                 "inputs() feeds the topology's sources array; a per-JVM iteration order"
                         + " makes the generated topology nondeterministic across restarts");
-        assertEquals(sent, definition.outputs().stream().map(Channel::topic).toList(),
+        assertEquals(sent, definition.outputs().stream().map(Topic::name).toList(),
                 "outputs() feeds the topology's sinks in declaration order");
         assertEquals(stored, definition.stores().stream().map(Store::name).toList(),
                 "stores() feeds addStateStore ordering and composed changelog names in"

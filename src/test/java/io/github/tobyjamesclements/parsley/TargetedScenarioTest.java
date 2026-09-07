@@ -56,7 +56,7 @@ class TargetedScenarioTest {
         }
 
         Instance externalCausedBy(SimChannel target, String uid, Instance observed, long expressedAt) {
-            Map<ChannelId, Long> meta = new TreeMap<>(observed.meta.byChannel());
+            Map<Channel, Long> meta = new TreeMap<>(observed.meta.byChannel());
             meta.merge(observed.channel, expressedAt, Math::max);
             Set<Instance> causes = new java.util.HashSet<>(observed.trueCauses);
             causes.add(observed);
@@ -498,7 +498,7 @@ class TargetedScenarioTest {
 
         p.feedOne(cx);
         p.drain();
-        Map<ChannelId, Long> blocked = Map.of(c9.id(), 9L);
+        Map<Channel, Long> blocked = Map.of(c9.id(), 9L);
         byte[] header = CausesCodec.encode(Causes.of(blocked));
         rig.world.appendExternal(cx, (channel, pos) -> new Instance(
                 channel, pos, "X1", "X1".getBytes(), "X1".getBytes(),
@@ -530,7 +530,7 @@ class TargetedScenarioTest {
      */
     static Rig retentionCrossesAHeldMessage(SabotageMode mode) {
         Rig rig = new Rig(mode);
-        // The drain scans received channels in ChannelId order; the inversion needs b < x.
+        // The drain scans received channels in Channel order; the inversion needs b < x.
         List<SimChannel> made = new java.util.ArrayList<>(List.of(
                 rig.channel("k0"), rig.channel("k1"), rig.channel("k2"), rig.channel("k3")));
         made.sort(java.util.Comparator.comparing(SimChannel::id));
@@ -653,7 +653,7 @@ class TargetedScenarioTest {
         SimChannel c2 = rig.channel("c2");
         SimProcess p = rig.process("p", List.of(newC1, c2), List.of(), d -> List.of());
 
-        Map<ChannelId, Long> meta = Map.of(oldC1.id(), 5L);
+        Map<Channel, Long> meta = Map.of(oldC1.id(), 5L);
         byte[] header = CausesCodec.encode(Causes.of(meta));
         rig.world.appendExternal(c2, (channel, pos) -> new Instance(
                 channel, pos, "B", "B".getBytes(), "B".getBytes(),
@@ -876,7 +876,7 @@ class TargetedScenarioTest {
 
         Instance a = rig.external(c1, "A");
         rig.external(c2, "pad");
-        Map<ChannelId, Long> meta = Map.of(c1.id(), a.position);
+        Map<Channel, Long> meta = Map.of(c1.id(), a.position);
         byte[] header = CausesCodec.encode(Causes.of(meta));
         rig.world.appendExternal(c2, (channel, pos) -> new Instance(
                 channel, pos, "B", "Bk".getBytes(), "Bv".getBytes(),

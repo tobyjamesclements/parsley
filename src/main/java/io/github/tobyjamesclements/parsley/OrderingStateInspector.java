@@ -32,17 +32,17 @@ public final class OrderingStateInspector {
      * @return {@code true} when the key is a held message's
      */
     public static boolean isHeldKey(byte[] key) {
-        return key.length == 1 + ChannelId.ENCODED_LENGTH + Long.BYTES && key[0] == OrderingStateCodec.TAG_HELD;
+        return key.length == 1 + Channel.ENCODED_LENGTH + Long.BYTES && key[0] == OrderingStateCodec.TAG_HELD;
     }
 
     /**
      * Finds the channels holding undelivered messages.
      *
      * @param latestPerKey the ordering state, as the latest value per key
-     * @return the channels with at least one held message, in {@link ChannelId} order
+     * @return the channels with at least one held message, in {@link Channel} order
      */
-    public static Set<ChannelId> heldChannels(Map<byte[], byte[]> latestPerKey) {
-        Set<ChannelId> channels = new TreeSet<>();
+    public static Set<Channel> heldChannels(Map<byte[], byte[]> latestPerKey) {
+        Set<Channel> channels = new TreeSet<>();
         latestPerKey.forEach((key, value) -> {
             if (value != null && isHeldKey(key)) {
                 channels.add(OrderingStateCodec.channelOfHeldKey(key));
@@ -82,8 +82,8 @@ public final class OrderingStateInspector {
      * @return per channel, the highest position covered as fed-or-never-arriving
      * @throws FailClosedException if a coverage entry is corrupt
      */
-    public static Map<ChannelId, Long> coveredPositions(Map<byte[], byte[]> latestPerKey) {
-        Map<ChannelId, Long> covered = new HashMap<>();
+    public static Map<Channel, Long> coveredPositions(Map<byte[], byte[]> latestPerKey) {
+        Map<Channel, Long> covered = new HashMap<>();
         latestPerKey.forEach((key, value) -> {
             if (value != null && key.length > 0 && key[0] == OrderingStateCodec.TAG_FED_UP_TO) {
                 covered.put(OrderingStateCodec.channelOfEntryKey(key), OrderingStateCodec.decodeLong(value));
@@ -102,9 +102,9 @@ public final class OrderingStateInspector {
         Map<String, UUID> bindings = new HashMap<>();
         latestPerKey.forEach((key, value) -> {
             if (value != null && key.length > 1 && key[0] == OrderingStateCodec.TAG_NAME_BINDING
-                    && value.length == ChannelId.ENCODED_LENGTH) {
+                    && value.length == Channel.ENCODED_LENGTH) {
                 String name = new String(key, 1, key.length - 1, StandardCharsets.UTF_8);
-                bindings.put(name, ChannelId.readFrom(ByteBuffer.wrap(value)).topicId());
+                bindings.put(name, Channel.readFrom(ByteBuffer.wrap(value)).topicId());
             }
         });
         return bindings;

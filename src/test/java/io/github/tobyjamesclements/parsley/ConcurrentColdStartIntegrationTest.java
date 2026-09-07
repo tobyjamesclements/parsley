@@ -56,7 +56,7 @@ class ConcurrentColdStartIntegrationTest {
     }
 
     private static Process definition(String topic) {
-        Channel<String, String> in = Channel.of(topic, Serdes.String(), Serdes.String());
+        Topic<String, String> in = Topic.of(topic, Serdes.String(), Serdes.String());
         return Process.named("cc").receives(in, (d, s) -> Effects.none()).build();
     }
 

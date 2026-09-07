@@ -287,7 +287,7 @@ reserved namespace. Deploy and restart.
 `<store> state write key serialized to null; the declared key serde could not encode it`,
 or `<store> state read key could not be serialized by the declared serde`.
 
-**What happened.** A declared serde threw, or returned `null` for a key. A `Channel` or
+**What happened.** A declared serde threw, or returned `null` for a key. A `Topic` or
 `Store` instance whose types differ from the declared one — a look-alike built with other
 serdes — is the common cause; the declared channel's serdes produce the bytes whatever
 instance carried the effect.

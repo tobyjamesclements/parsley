@@ -49,9 +49,9 @@ written in Kafka's own terms — topics, Serdes, Streams properties — by desig
 no seam for a second runtime.
 
 Fourteen types are public. Ten are the declaration surface: `Parsley`, `ParsleyConfig`,
-`Process`, `Channel`, `Store`, `Handler`, `Delivery`, `Effects`, `State` and
+`Process`, `Topic`, `Store`, `Handler`, `Delivery`, `Effects`, `State` and
 `ProcessStatus`. Four more an application or an operator handles rather than declares:
-`Header`, `FailClosedException`, and `OrderingStateInspector` with `ChannelId`, which two
+`Header`, `FailClosedException`, and `OrderingStateInspector` with `Channel`, which two
 of its signatures expose.
 
 The rest is package-private, and divides in two:

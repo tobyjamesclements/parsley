@@ -52,13 +52,13 @@ final class ProcessEngine {
     public static final int DEFAULT_METADATA_BUDGET_BYTES = 256 * 1024;
 
     private final String processName;
-    private final TreeSet<ChannelId> receivedChannels;
+    private final TreeSet<Channel> receivedChannels;
     private final OrderingStore store;
     private final int metadataBudgetBytes;
     private final Sabotage sabotage;
 
-    private final Map<ChannelId, Long> fedUpTo = new HashMap<>();
-    private final TreeMap<ChannelId, Long> frontier = new TreeMap<>();
+    private final Map<Channel, Long> fedUpTo = new HashMap<>();
+    private final TreeMap<Channel, Long> frontier = new TreeMap<>();
 
     // The frontier's encoded width, maintained incrementally so the budget check in
     // mergeFrontier stays O(1) now that size is a function of the frontier's shape rather
@@ -70,8 +70,8 @@ final class ProcessEngine {
     private final Map<UUID, Integer> frontierTopicPartitions = new HashMap<>();
     private int frontierBodyBytes;
 
-    private final Map<ChannelId, Long> deliveredPast = new HashMap<>();
-    private final Map<ChannelId, ArrayDeque<Hold>> held = new HashMap<>();
+    private final Map<Channel, Long> deliveredPast = new HashMap<>();
+    private final Map<Channel, ArrayDeque<Hold>> held = new HashMap<>();
 
     // Holds taken in since the last flush, in receipt order. A flush persists exactly these,
     // so its cost follows the holds added since the previous flush rather than the depth of
@@ -84,9 +84,9 @@ final class ProcessEngine {
     // sends none never encodes (D102).
     private byte[] encodedFrontier;
 
-    private final Map<ChannelId, Long> sessionFloor;
+    private final Map<Channel, Long> sessionFloor;
 
-    private final Map<ChannelId, Long> fedThisExecution = new HashMap<>();
+    private final Map<Channel, Long> fedThisExecution = new HashMap<>();
 
     /**
      * One held message.
@@ -101,7 +101,7 @@ final class ProcessEngine {
      * memory"; the four decoded fields are loaded and dropped together.
      */
     private static final class Hold {
-        final ChannelId channel;
+        final Channel channel;
         final long position;
         final long timestamp;
         Causes causes;
@@ -112,7 +112,7 @@ final class ProcessEngine {
         byte[] value;
         List<Header> headers;
 
-        Hold(ChannelId channel, long position, long timestamp, Causes causes, boolean persisted,
+        Hold(Channel channel, long position, long timestamp, Causes causes, boolean persisted,
              byte[] key, byte[] value, List<Header> headers) {
             this.channel = channel;
             this.position = position;
@@ -138,7 +138,7 @@ final class ProcessEngine {
      * @throws FailClosedException if the store carries a format version this build
      *         cannot read
      */
-    public ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store) {
+    public ProcessEngine(String processName, Map<Channel, String> receivedChannels, OrderingStore store) {
         this(processName, receivedChannels, store, DEFAULT_METADATA_BUDGET_BYTES, Sabotage.NONE, Map.of());
     }
 
@@ -152,7 +152,7 @@ final class ProcessEngine {
      * @throws FailClosedException if the store carries a format version this build
      *         cannot read
      */
-    public ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,
+    public ProcessEngine(String processName, Map<Channel, String> receivedChannels, OrderingStore store,
                          int metadataBudgetBytes) {
         this(processName, receivedChannels, store, metadataBudgetBytes, Sabotage.NONE, Map.of());
     }
@@ -178,13 +178,13 @@ final class ProcessEngine {
      * @throws FailClosedException if the store carries a format version this build
      *         cannot read
      */
-    public ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,
-                         int metadataBudgetBytes, Map<ChannelId, Long> startPositions) {
+    public ProcessEngine(String processName, Map<Channel, String> receivedChannels, OrderingStore store,
+                         int metadataBudgetBytes, Map<Channel, Long> startPositions) {
         this(processName, receivedChannels, store, metadataBudgetBytes, Sabotage.NONE, startPositions);
     }
 
-    ProcessEngine(String processName, Map<ChannelId, String> receivedChannels, OrderingStore store,
-                  int metadataBudgetBytes, Sabotage sabotage, Map<ChannelId, Long> startPositions) {
+    ProcessEngine(String processName, Map<Channel, String> receivedChannels, OrderingStore store,
+                  int metadataBudgetBytes, Sabotage sabotage, Map<Channel, Long> startPositions) {
         this.processName = processName;
         this.receivedChannels = new TreeSet<>(receivedChannels.keySet());
         this.store = store;
@@ -217,13 +217,13 @@ final class ProcessEngine {
         store.scanPrefix(OrderingStateCodec.tagPrefix(OrderingStateCodec.TAG_FED_UP_TO),
                 (key, value) -> fedUpTo.put(OrderingStateCodec.channelOfEntryKey(key), OrderingStateCodec.decodeLong(value)));
         store.scanPrefix(OrderingStateCodec.tagPrefix(OrderingStateCodec.TAG_FRONTIER), (key, value) -> {
-            ChannelId channel = OrderingStateCodec.channelOfEntryKey(key);
+            Channel channel = OrderingStateCodec.channelOfEntryKey(key);
             // The reserved zero topic id can only have entered a frontier through a forged
             // header absorbed before wire-format constraint 5 refused it at receipt: no
             // substrate query can ever answer for it, so restoring it would re-express and
             // re-persist untrustworthy state forever. Stored state that cannot be trusted
             // is a reason to stop (D88).
-            if (ChannelId.isZeroTopicId(channel.topicId())) {
+            if (Channel.isZeroTopicId(channel.topicId())) {
                 throw new FailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                         "process " + processName + ": restored frontier names the reserved zero topic id;"
                                 + " this state absorbed a forged causes header before receipt refused it"
@@ -234,12 +234,12 @@ final class ProcessEngine {
             frontierSizeAdd(channel);
         });
         store.scanPrefix(OrderingStateCodec.tagPrefix(OrderingStateCodec.TAG_DELIVERED_PAST), (key, value) -> {
-            ChannelId channel = OrderingStateCodec.channelOfEntryKey(key);
+            Channel channel = OrderingStateCodec.channelOfEntryKey(key);
             deliveredPast.put(channel,
                     requireAssignablePosition(channel, OrderingStateCodec.decodeLong(value), "delivered past"));
         });
         store.scanPrefix(OrderingStateCodec.tagPrefix(OrderingStateCodec.TAG_HELD), (key, value) -> {
-            ChannelId channel = OrderingStateCodec.channelOfHeldKey(key);
+            Channel channel = OrderingStateCodec.channelOfHeldKey(key);
             long position = OrderingStateCodec.positionOfHeldKey(key);
             if (!this.receivedChannels.contains(channel) && !sabotage.has(Sabotage.Mode.IGNORE_REMOVED_CHANNELS)) {
                 throw new FailClosedException(Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES,
@@ -264,7 +264,7 @@ final class ProcessEngine {
             buffer.addLast(new Hold(channel, position, blob.timestamp(), null, true, null, null, null));
         });
 
-        for (ChannelId channel : this.receivedChannels) {
+        for (Channel channel : this.receivedChannels) {
             Long past = deliveredPast.get(channel);
             if (past != null) {
                 advanceFedUpTo(channel, past);
@@ -295,7 +295,7 @@ final class ProcessEngine {
      * delivered past the maximum would reach {@code fedUpTo} through the join clamp and
      * read as "this channel no longer exists" for a topic that is alive.
      */
-    private long requireAssignablePosition(ChannelId channel, long position, String what) {
+    private long requireAssignablePosition(Channel channel, long position, String what) {
         if (position == Long.MAX_VALUE) {
             throw new FailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                     "process " + processName + ": restored " + what + " names position " + position + " on "
@@ -335,11 +335,11 @@ final class ProcessEngine {
     }
 
     /**
-     * Returns the channels this process receives, in {@link ChannelId} order.
+     * Returns the channels this process receives, in {@link Channel} order.
      *
-     * @return the channels this process receives, in {@link ChannelId} order
+     * @return the channels this process receives, in {@link Channel} order
      */
-    public Set<ChannelId> receivedChannelSet() {
+    public Set<Channel> receivedChannelSet() {
         return Collections.unmodifiableSet(receivedChannels);
     }
 
@@ -376,7 +376,7 @@ final class ProcessEngine {
      *         be decoded, or if the metadata exceeds the configured budget
      */
     public ReceiveOutcome onReceive(ReceivedMessage message) {
-        ChannelId channel = message.channel();
+        Channel channel = message.channel();
         if (!receivedChannels.contains(channel)) {
             throw new IllegalArgumentException(
                     "process " + processName + " received on undeclared channel " + channel);
@@ -493,7 +493,7 @@ final class ProcessEngine {
      */
     public void onIdentityReport(IdentityReport report) {
         if (!sabotage.has(Sabotage.Mode.IGNORE_RECREATION)) {
-            for (ChannelId channel : report.recreatedChannels()) {
+            for (Channel channel : report.recreatedChannels()) {
                 if (receivedChannels.contains(channel)) {
                     throw new FailClosedException(Reason.CHANNEL_IDENTITY_CHANGED,
                             "process " + processName + ": the topic of received channel " + channel
@@ -503,7 +503,7 @@ final class ProcessEngine {
                 }
             }
         }
-        for (ChannelId channel : report.deadChannels()) {
+        for (Channel channel : report.deadChannels()) {
             if (receivedChannels.contains(channel)) {
                 ArrayDeque<Hold> channelHeld = held.get(channel);
                 if (channelHeld != null && !channelHeld.isEmpty() && !sabotage.has(Sabotage.Mode.DELIVER_PAST_DEAD_HOLDS)) {
@@ -519,8 +519,8 @@ final class ProcessEngine {
             }
         }
 
-        List<ChannelId> prune = null;
-        for (ChannelId channel : frontier.keySet()) {
+        List<Channel> prune = null;
+        for (Channel channel : frontier.keySet()) {
             if (report.deadChannels().contains(channel) || report.recreatedChannels().contains(channel)) {
                 if (prune == null) {
                     prune = new ArrayList<>();
@@ -529,7 +529,7 @@ final class ProcessEngine {
             }
         }
         if (prune != null) {
-            for (ChannelId channel : prune) {
+            for (Channel channel : prune) {
                 frontier.remove(channel);
                 frontierSizeRemove(channel);
                 store.delete(OrderingStateCodec.channelKey(OrderingStateCodec.TAG_FRONTIER, channel));
@@ -537,8 +537,8 @@ final class ProcessEngine {
             encodedFrontier = null;
         }
 
-        List<ChannelId> pastPrune = null;
-        for (ChannelId channel : deliveredPast.keySet()) {
+        List<Channel> pastPrune = null;
+        for (Channel channel : deliveredPast.keySet()) {
             if (report.deadChannels().contains(channel) || report.recreatedChannels().contains(channel)) {
                 if (pastPrune == null) {
                     pastPrune = new ArrayList<>();
@@ -547,14 +547,14 @@ final class ProcessEngine {
             }
         }
         if (pastPrune != null) {
-            for (ChannelId channel : pastPrune) {
+            for (Channel channel : pastPrune) {
                 deliveredPast.remove(channel);
                 store.delete(OrderingStateCodec.channelKey(OrderingStateCodec.TAG_DELIVERED_PAST, channel));
             }
         }
     }
 
-    private void advanceFedUpTo(ChannelId channel, long position) {
+    private void advanceFedUpTo(Channel channel, long position) {
         Long current = fedUpTo.get(channel);
         if (current == null || position > current) {
             fedUpTo.put(channel, position);
@@ -562,7 +562,7 @@ final class ProcessEngine {
         }
     }
 
-    private void mergeFrontier(ChannelId channel, long position) {
+    private void mergeFrontier(Channel channel, long position) {
         Long current = frontier.get(channel);
         if (current == null || position > current) {
             frontier.put(channel, position);
@@ -582,7 +582,7 @@ final class ProcessEngine {
         }
     }
 
-    private void frontierSizeAdd(ChannelId channel) {
+    private void frontierSizeAdd(Channel channel) {
         int count = frontierTopicPartitions.merge(channel.topicId(), 1, Integer::sum);
         frontierBodyBytes += (count == 1
                 ? 2 * Long.BYTES + CausesCodec.unsignedVarintSize(1)
@@ -590,7 +590,7 @@ final class ProcessEngine {
                 + CausesCodec.unsignedVarintSize(channel.partition()) + Long.BYTES;
     }
 
-    private void frontierSizeRemove(ChannelId channel) {
+    private void frontierSizeRemove(Channel channel) {
         int count = frontierTopicPartitions.merge(channel.topicId(), -1, Integer::sum);
         if (count == 0) {
             frontierTopicPartitions.remove(channel.topicId());
@@ -609,11 +609,11 @@ final class ProcessEngine {
      * empty.
      *
      * @return the next deliverable message, or empty when every channel is blocked or idle
-     * @see #markDelivered(ChannelId, long)
+     * @see #markDelivered(Channel, long)
      */
     public Optional<DeliverableMessage> nextDeliverable() {
         Deliverability.SettledView settled = settledView();
-        for (ChannelId channel : receivedChannels) {
+        for (Channel channel : receivedChannels) {
             ArrayDeque<Hold> channelHeld = held.get(channel);
             if (channelHeld == null || channelHeld.isEmpty()) {
                 continue;
@@ -650,7 +650,7 @@ final class ProcessEngine {
      * @param channel the channel to report on
      * @return the head's position, or empty when nothing is held on that channel
      */
-    public OptionalLong headPosition(ChannelId channel) {
+    public OptionalLong headPosition(Channel channel) {
         ArrayDeque<Hold> channelHeld = held.get(channel);
         return channelHeld == null || channelHeld.isEmpty()
                 ? OptionalLong.empty() : OptionalLong.of(channelHeld.peekFirst().position);
@@ -664,7 +664,7 @@ final class ProcessEngine {
      * @param channel the channel to report on
      * @return the head's verdict, or empty when nothing is held on that channel
      */
-    public Optional<Deliverability.Verdict> headVerdict(ChannelId channel) {
+    public Optional<Deliverability.Verdict> headVerdict(Channel channel) {
         ArrayDeque<Hold> channelHeld = held.get(channel);
         if (channelHeld == null || channelHeld.isEmpty()) {
             return Optional.empty();
@@ -718,7 +718,7 @@ final class ProcessEngine {
      * @throws IllegalStateException if {@code position} is not the head of that channel's
      *         hold-back buffer
      */
-    public void markDelivered(ChannelId channel, long position) {
+    public void markDelivered(Channel channel, long position) {
         ArrayDeque<Hold> channelHeld = held.get(channel);
         Hold head = channelHeld == null ? null : channelHeld.peekFirst();
         if (head == null || (head.position != position && !sabotage.has(Sabotage.Mode.NO_FIFO))) {
@@ -754,7 +754,7 @@ final class ProcessEngine {
         }
     }
 
-    private void mergeDeliveredPast(ChannelId channel, long position) {
+    private void mergeDeliveredPast(Channel channel, long position) {
         Long current = deliveredPast.get(channel);
         if (current == null || position > current) {
             deliveredPast.put(channel, position);
@@ -820,7 +820,7 @@ final class ProcessEngine {
      */
     public Causes frontierSnapshot() {
         if (sabotage.has(Sabotage.Mode.OVEREXPRESS)) {
-            TreeMap<ChannelId, Long> inflated = new TreeMap<>(frontier);
+            TreeMap<Channel, Long> inflated = new TreeMap<>(frontier);
             fedUpTo.forEach((channel, fed) -> {
                 if (fed >= 0 && fed != FED_TO_END_OF_CHANNEL) {
                     inflated.merge(channel, fed, Math::max);
@@ -885,7 +885,7 @@ final class ProcessEngine {
      * @param channel the channel to report on
      * @return the highest position fed for that channel, or empty when none has been
      */
-    public OptionalLong fedUpTo(ChannelId channel) {
+    public OptionalLong fedUpTo(Channel channel) {
         Long fed = fedUpTo.get(channel);
         return fed == null ? OptionalLong.empty() : OptionalLong.of(fed);
     }
@@ -896,7 +896,7 @@ final class ProcessEngine {
      * @param channel the channel to report on
      * @return how many messages are held on that channel
      */
-    public int heldCount(ChannelId channel) {
+    public int heldCount(Channel channel) {
         ArrayDeque<Hold> channelHeld = held.get(channel);
         return channelHeld == null ? 0 : channelHeld.size();
     }

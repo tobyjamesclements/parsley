@@ -107,7 +107,7 @@ class EndToEndIntegrationTest {
         ClusterTestSupport.await(what, condition, timeout);
     }
 
-    private static RecordHeader causesHeader(Map<ChannelId, Long> causes) {
+    private static RecordHeader causesHeader(Map<Channel, Long> causes) {
         return new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(causes)));
     }
 
@@ -115,9 +115,9 @@ class EndToEndIntegrationTest {
     @Test
     void causalChainDeliversInOrderAndOutputDecodesWithPlainCodecs() throws Exception {
         createTopics("e2e-t0", "e2e-t1", "e2e-t2");
-        Channel<String, String> t0 = Channel.of("e2e-t0", Serdes.String(), Serdes.String());
-        Channel<String, String> t1 = Channel.of("e2e-t1", Serdes.String(), Serdes.String());
-        Channel<String, String> t2 = Channel.of("e2e-t2", Serdes.String(), Serdes.String());
+        Topic<String, String> t0 = Topic.of("e2e-t0", Serdes.String(), Serdes.String());
+        Topic<String, String> t1 = Topic.of("e2e-t1", Serdes.String(), Serdes.String());
+        Topic<String, String> t2 = Topic.of("e2e-t2", Serdes.String(), Serdes.String());
 
         ConcurrentLinkedQueue<String> deliveredAtP3 = new ConcurrentLinkedQueue<>();
         Process p1 = Process.named("p1")
@@ -153,7 +153,7 @@ class EndToEndIntegrationTest {
         assertEquals("B", b.value());
         assertEquals("k", b.key());
         Causes causes = CausesCodec.decode(b.headers().lastHeader(CausesCodec.HEADER_KEY).value());
-        assertEquals(0L, causes.byChannel().get(new ChannelId(topicId("e2e-t1"), 0)),
+        assertEquals(0L, causes.byChannel().get(new Channel(topicId("e2e-t1"), 0)),
                 "the effect's metadata must express its cause on e2e-t1");
     }
 
@@ -161,8 +161,8 @@ class EndToEndIntegrationTest {
     @Test
     void heldMessageSurvivesARealRestart() throws Exception {
         createTopics("hold-a", "hold-b");
-        Channel<String, String> a = Channel.of("hold-a", Serdes.String(), Serdes.String());
-        Channel<String, String> b = Channel.of("hold-b", Serdes.String(), Serdes.String());
+        Topic<String, String> a = Topic.of("hold-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("hold-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process ph = Process.named("ph")
                 .receives(a, (d, s) -> {
@@ -175,7 +175,7 @@ class EndToEndIntegrationTest {
                 })
                 .build();
 
-        produce("hold-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("hold-a"), 0), 0L)));
+        produce("hold-b", "k", "B", causesHeader(Map.of(new Channel(topicId("hold-a"), 0), 0L)));
 
         try (Parsley parsley = Parsley.start(config("hold"), ph)) {
             Thread.sleep(5_000);
@@ -201,8 +201,8 @@ class EndToEndIntegrationTest {
     @Test
     void heldMessageSurvivesTaskMigrationBetweenInstances() throws Exception {
         createTopics("mig-a", "mig-b");
-        Channel<String, String> a = Channel.of("mig-a", Serdes.String(), Serdes.String());
-        Channel<String, String> b = Channel.of("mig-b", Serdes.String(), Serdes.String());
+        Topic<String, String> a = Topic.of("mig-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("mig-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process pm = Process.named("pm")
                 .receives(a, (d, s) -> {
@@ -215,7 +215,7 @@ class EndToEndIntegrationTest {
                 })
                 .build();
 
-        produce("mig-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("mig-a"), 0), 0L)));
+        produce("mig-b", "k", "B", causesHeader(Map.of(new Channel(topicId("mig-a"), 0), 0L)));
 
         Parsley first = Parsley.start(instanceConfig("mig", "mig-1"), pm);
         try {
@@ -244,8 +244,8 @@ class EndToEndIntegrationTest {
     @Test
     void heldMessageSurvivesAStateDirWipeByChangelogRestore() throws Exception {
         createTopics("wipe-a", "wipe-b");
-        Channel<String, String> a = Channel.of("wipe-a", Serdes.String(), Serdes.String());
-        Channel<String, String> b = Channel.of("wipe-b", Serdes.String(), Serdes.String());
+        Topic<String, String> a = Topic.of("wipe-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("wipe-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process pw = Process.named("pw")
                 .receives(a, (d, s) -> {
@@ -258,7 +258,7 @@ class EndToEndIntegrationTest {
                 })
                 .build();
 
-        produce("wipe-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("wipe-a"), 0), 0L)));
+        produce("wipe-b", "k", "B", causesHeader(Map.of(new Channel(topicId("wipe-a"), 0), 0L)));
 
         try (Parsley parsley = Parsley.start(config("wipe"), pw)) {
             awaitFedAndHeld("wipe-pw", "wipe-b", delivered);
@@ -302,8 +302,8 @@ class EndToEndIntegrationTest {
     @Test
     void causeNamingAnAbortedPositionIsHeldAndVisibleUntilALaterRecordSettlesIt() throws Exception {
         createTopics("gap-a", "gap-b");
-        Channel<String, String> a = Channel.of("gap-a", Serdes.String(), Serdes.String());
-        Channel<String, String> b = Channel.of("gap-b", Serdes.String(), Serdes.String());
+        Topic<String, String> a = Topic.of("gap-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("gap-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process pg = Process.named("pg")
                 .receives(a, (d, s) -> {
@@ -323,7 +323,7 @@ class EndToEndIntegrationTest {
             // Offset 1 is the aborted record, offset 2 its abort marker: no committed record
             // will ever occupy either, so a cause naming 2 is out of contract.
             produceAborted("gap-a", "ghost");
-            produce("gap-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("gap-a"), 0), 2L)));
+            produce("gap-b", "k", "B", causesHeader(Map.of(new Channel(topicId("gap-a"), 0), 2L)));
 
             ClusterTestSupport.awaitCommitted(admin, "gap-pg", "gap-b", 1); // B was fed and its step committed
             Thread.sleep(3_000);
@@ -355,8 +355,8 @@ class EndToEndIntegrationTest {
     @Test
     void heldMessageDiscardedByRetentionStillDeliversInOrderFromTheChangelog() throws Exception {
         createTopics("ret-a", "ret-b");
-        Channel<String, String> a = Channel.of("ret-a", Serdes.String(), Serdes.String());
-        Channel<String, String> b = Channel.of("ret-b", Serdes.String(), Serdes.String());
+        Topic<String, String> a = Topic.of("ret-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("ret-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process pr = Process.named("pr")
                 .receives(a, (d, s) -> {
@@ -369,7 +369,7 @@ class EndToEndIntegrationTest {
                 })
                 .build();
 
-        produce("ret-b", "k", "B", causesHeader(Map.of(new ChannelId(topicId("ret-a"), 0), 0L)));
+        produce("ret-b", "k", "B", causesHeader(Map.of(new Channel(topicId("ret-a"), 0), 0L)));
 
         try (Parsley parsley = Parsley.start(config("ret"), pr)) {
             awaitFedAndHeld("ret-pr", "ret-b", delivered);
@@ -401,7 +401,7 @@ class EndToEndIntegrationTest {
     @Test
     void truncationBeyondTheReadPositionStopsTheProcess() throws Exception {
         createTopics("trunc-a");
-        Channel<String, String> a = Channel.of("trunc-a", Serdes.String(), Serdes.String());
+        Topic<String, String> a = Topic.of("trunc-a", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process pt = Process.named("pt")
                 .receives(a, (d, s) -> {
@@ -443,8 +443,8 @@ class EndToEndIntegrationTest {
     @Test
     void crashMidStepDeliversEffectsExactlyOnce() throws Exception {
         createTopics("once-in", "once-out");
-        Channel<String, String> in = Channel.of("once-in", Serdes.String(), Serdes.String());
-        Channel<String, String> out = Channel.of("once-out", Serdes.String(), Serdes.String());
+        Topic<String, String> in = Topic.of("once-in", Serdes.String(), Serdes.String());
+        Topic<String, String> out = Topic.of("once-out", Serdes.String(), Serdes.String());
         AtomicBoolean alreadyFailed = new AtomicBoolean(false);
         Process po = Process.named("po")
                 .receives(in, (d, s) -> {

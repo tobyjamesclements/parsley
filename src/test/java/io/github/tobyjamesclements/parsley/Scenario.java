@@ -183,7 +183,7 @@ public final class Scenario {
             if (p.failedClosed()) {
                 continue;
             }
-            Map<ChannelId, Long> deliveredPast = oracle.deliveredPastMax(p.name);
+            Map<Channel, Long> deliveredPast = oracle.deliveredPastMax(p.name);
             for (SimChannel channel : iterate(p.receivedChannels())) {
                 long covered = Math.max(p.highWaterNextRead(channel),
                         deliveredPast.getOrDefault(channel.id(), Long.MIN_VALUE) + 1);
@@ -366,7 +366,7 @@ public final class Scenario {
             return;
         }
 
-        Set<ChannelId> receivedNow = new HashSet<>();
+        Set<Channel> receivedNow = new HashSet<>();
         for (SimProcess p : processes) {
             for (SimChannel channel : p.receivedChannels()) {
                 receivedNow.add(channel.id());
@@ -421,7 +421,7 @@ public final class Scenario {
                 produceExternalPlain(world, target, uid);
                 return;
             }
-            Map<ChannelId, Long> meta = new TreeMap<>(observed.meta.byChannel());
+            Map<Channel, Long> meta = new TreeMap<>(observed.meta.byChannel());
             meta.merge(observed.channel, observed.position, Math::max);
             java.util.Set<Instance> causes = new java.util.HashSet<>(observed.trueCauses);
             causes.add(observed);

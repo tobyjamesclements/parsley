@@ -36,7 +36,7 @@ final class Deliverability {
          * @param channel the channel to report on
          * @return the highest settled position, or empty when nothing has settled
          */
-        OptionalLong settled(ChannelId channel);
+        OptionalLong settled(Channel channel);
     }
 
     /** The outcome of one decision. */
@@ -91,7 +91,7 @@ final class Deliverability {
      * @param requiredPosition the position that must settle before delivery
      * @param settledPosition  how far that channel has settled, or empty
      */
-    public record Blocker(ChannelId channel, long requiredPosition, OptionalLong settledPosition) {
+    public record Blocker(Channel channel, long requiredPosition, OptionalLong settledPosition) {
     }
 
     /**
@@ -107,10 +107,10 @@ final class Deliverability {
      * @return {@link Deliverable} when every relevant cause is satisfied, otherwise
      *         {@link Held} naming each outstanding one
      */
-    public static Verdict decide(Causes causes, Set<ChannelId> receivedChannels, SettledView settled) {
+    public static Verdict decide(Causes causes, Set<Channel> receivedChannels, SettledView settled) {
         List<Blocker> blockers = null;
         for (var entry : causes.byChannel().entrySet()) {
-            ChannelId channel = entry.getKey();
+            Channel channel = entry.getKey();
             long required = entry.getValue();
             if (!receivedChannels.contains(channel)) {
                 continue;

@@ -16,7 +16,7 @@ import java.util.Set;
  * FIFO per channel, and that everything received is eventually delivered.
  */
 public final class Oracle {
-    record Sent(Instance instance, Map<ChannelId, Long> upperBoundAtSend, Map<ChannelId, Long> lastAssignedAtSend,
+    record Sent(Instance instance, Map<Channel, Long> upperBoundAtSend, Map<Channel, Long> lastAssignedAtSend,
                 java.util.Set<Instance> excusedAtSend) {
     }
 
@@ -24,27 +24,27 @@ public final class Oracle {
         final List<Instance> committedDeliveries = new ArrayList<>();
         final Set<Instance> committedPast = new HashSet<>();
         final Set<Instance> committedFedOwed = new HashSet<>();
-        final Map<ChannelId, Long> committedExpressible = new HashMap<>();
+        final Map<Channel, Long> committedExpressible = new HashMap<>();
 
-        final Map<ChannelId, Long> committedPastMax = new HashMap<>();
+        final Map<Channel, Long> committedPastMax = new HashMap<>();
 
         final Set<Instance> committedFed = new HashSet<>();
         final Set<Instance> deltaFed = new HashSet<>();
         final List<Instance> deltaDeliveries = new ArrayList<>();
         final Set<Instance> deltaPast = new HashSet<>();
         final Set<Instance> deltaFedOwed = new HashSet<>();
-        final Map<ChannelId, Long> deltaExpressible = new HashMap<>();
+        final Map<Channel, Long> deltaExpressible = new HashMap<>();
 
         // Mirrors the engine's persisted delivered-past clamp: delivered positions merged
         // with each delivered message's *expressed* frontier — coarser than trueCauses, and
         // deliberately so, because the engine's sanctioned drops are judged by expression.
         // Kept apart from committedPastMax, whose trueCauses semantics D41 depends on.
-        final Map<ChannelId, Long> committedEnginePast = new HashMap<>();
-        final Map<ChannelId, Long> deltaEnginePast = new HashMap<>();
+        final Map<Channel, Long> committedEnginePast = new HashMap<>();
+        final Map<Channel, Long> deltaEnginePast = new HashMap<>();
         final Set<Instance> committedDeliveredSet = new HashSet<>();
         final Set<Instance> deltaDeliveredSet = new HashSet<>();
 
-        Map<ChannelId, Long> executionExemption = Map.of();
+        Map<Channel, Long> executionExemption = Map.of();
     }
 
     private final Map<String, ProcState> processes = new LinkedHashMap<>();
@@ -59,7 +59,7 @@ public final class Oracle {
         st.executionExemption = deliveredPastMax(process);
     }
 
-    public Map<ChannelId, Long> deliveredPastMax(String process) {
+    public Map<Channel, Long> deliveredPastMax(String process) {
         return new HashMap<>(state(process).committedPastMax);
     }
 
@@ -123,9 +123,9 @@ public final class Oracle {
         return snapshot;
     }
 
-    public Map<ChannelId, Long> expressionUpperBound(String process) {
+    public Map<Channel, Long> expressionUpperBound(String process) {
         ProcState st = state(process);
-        Map<ChannelId, Long> bound = new HashMap<>(st.committedExpressible);
+        Map<Channel, Long> bound = new HashMap<>(st.committedExpressible);
         st.deltaExpressible.forEach((channel, position) -> bound.merge(channel, position, Math::max));
         return bound;
     }
@@ -206,7 +206,7 @@ public final class Oracle {
                             + previous + " and " + i + ")");
                 }
             }
-            Map<ChannelId, Long> lastPerChannel = new HashMap<>();
+            Map<Channel, Long> lastPerChannel = new HashMap<>();
             for (Instance delivered : st.committedDeliveries) {
                 Long last = lastPerChannel.put(delivered.channel, delivered.position);
                 if (last != null && delivered.position <= last) {
@@ -252,11 +252,11 @@ public final class Oracle {
         return state(process).committedFed.contains(instance);
     }
 
-    public Map<ChannelId, List<Instance>> undeliveredOwedByChannel(String process) {
+    public Map<Channel, List<Instance>> undeliveredOwedByChannel(String process) {
         ProcState st = state(process);
         Set<Instance> undelivered = new HashSet<>(st.committedFedOwed);
         st.committedDeliveries.forEach(undelivered::remove);
-        Map<ChannelId, List<Instance>> byChannel = new HashMap<>();
+        Map<Channel, List<Instance>> byChannel = new HashMap<>();
         for (Instance instance : undelivered) {
             byChannel.computeIfAbsent(instance.channel, c -> new ArrayList<>()).add(instance);
         }

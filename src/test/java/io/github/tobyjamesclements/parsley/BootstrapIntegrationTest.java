@@ -86,7 +86,7 @@ class BootstrapIntegrationTest {
         ClusterTestSupport.awaitCommitted(admin, groupId, topic, atLeast);
     }
 
-    private static RecordHeader causesHeader(Map<ChannelId, Long> causes) {
+    private static RecordHeader causesHeader(Map<Channel, Long> causes) {
         return new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(causes)));
     }
 
@@ -163,7 +163,7 @@ class BootstrapIntegrationTest {
     @Test
     void orderingChangelogIsCreatedCompacted() throws Exception {
         createTopics(new NewTopic("clog-in", 1, (short) 1));
-        Channel<String, String> in = Channel.of("clog-in", Serdes.String(), Serdes.String());
+        Topic<String, String> in = Topic.of("clog-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process p = Process.named("pc")
                 .receives(in, (d, s) -> {
@@ -196,8 +196,8 @@ class BootstrapIntegrationTest {
     void expiredOffsetsResumeFromCoverageNotTheDeclaredLatest() throws Exception {
         createTopics(new NewTopic("ex-in", 1, (short) 1));
         produce("ex-in", null, "k", "early");
-        Channel<String, String> in = Channel.of("ex-in", Serdes.String(), Serdes.String())
-                .startingAt(Channel.InitialPosition.LATEST);
+        Topic<String, String> in = Topic.of("ex-in", Serdes.String(), Serdes.String())
+                .startingAt(Topic.InitialPosition.LATEST);
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process p = Process.named("ex")
                 .receives(in, (d, s) -> {
@@ -247,7 +247,7 @@ class BootstrapIntegrationTest {
     @Test
     void expiredOffsetsBeyondRetentionRefuseAtTheFetchRatherThanAbsorbTheGap() throws Exception {
         createTopics(new NewTopic("exd-in", 1, (short) 1));
-        Channel<String, String> in = Channel.of("exd-in", Serdes.String(), Serdes.String());
+        Topic<String, String> in = Topic.of("exd-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process p = Process.named("exd")
                 .receives(in, (d, s) -> {
@@ -308,8 +308,8 @@ class BootstrapIntegrationTest {
     @Test
     void aNeverFedReceivedPartitionResumesAtZeroAndRefusesWhereRetentionPassedIt() throws Exception {
         createTopics(new NewTopic("nf-a", 1, (short) 1), new NewTopic("nf-b", 1, (short) 1));
-        Channel<String, String> a = Channel.of("nf-a", Serdes.String(), Serdes.String());
-        Channel<String, String> b = Channel.of("nf-b", Serdes.String(), Serdes.String());
+        Topic<String, String> a = Topic.of("nf-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("nf-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process p = Process.named("nf")
                 .receives(a, (d, s) -> {
@@ -379,8 +379,8 @@ class BootstrapIntegrationTest {
     @Test
     void expiredOffsetsWithinRetentionResumeAtTheCoveredPositionPlusOne() throws Exception {
         createTopics(new NewTopic("exr-in", 1, (short) 1));
-        Channel<String, String> in = Channel.of("exr-in", Serdes.String(), Serdes.String())
-                .startingAt(Channel.InitialPosition.LATEST);
+        Topic<String, String> in = Topic.of("exr-in", Serdes.String(), Serdes.String())
+                .startingAt(Topic.InitialPosition.LATEST);
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process p = Process.named("exr")
                 .receives(in, (d, s) -> {
@@ -438,7 +438,7 @@ class BootstrapIntegrationTest {
     @Test
     void lostOrderingChangelogWithSurvivingOffsetsRefusesToStart() throws Exception {
         createTopics(new NewTopic("lost-in", 1, (short) 1));
-        Channel<String, String> in = Channel.of("lost-in", Serdes.String(), Serdes.String());
+        Topic<String, String> in = Topic.of("lost-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process p = Process.named("lost")
                 .receives(in, (d, s) -> {
@@ -483,8 +483,8 @@ class BootstrapIntegrationTest {
     @Test
     void lostChangelogWithOffsetsOnAFormerlyReceivedTopicRefusesToStart() throws Exception {
         createTopics(new NewTopic("lostb-a", 1, (short) 1), new NewTopic("lostb-b", 1, (short) 1));
-        Channel<String, String> a = Channel.of("lostb-a", Serdes.String(), Serdes.String());
-        Channel<String, String> b = Channel.of("lostb-b", Serdes.String(), Serdes.String());
+        Topic<String, String> a = Topic.of("lostb-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("lostb-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process receivingA = Process.named("lostb")
                 .receives(a, (d, s) -> {
@@ -534,7 +534,7 @@ class BootstrapIntegrationTest {
     @Test
     void emptiedChangelogWithSurvivingOffsetsRefusesToStart() throws Exception {
         createTopics(new NewTopic("lostc-in", 1, (short) 1));
-        Channel<String, String> in = Channel.of("lostc-in", Serdes.String(), Serdes.String());
+        Topic<String, String> in = Topic.of("lostc-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process p = Process.named("lostc")
                 .receives(in, (d, s) -> {
@@ -581,7 +581,7 @@ class BootstrapIntegrationTest {
     @Test
     void emptiedChangelogPartitionWithSurvivingOffsetsRefusesToStart() throws Exception {
         createTopics(new NewTopic("lostp-in", 2, (short) 1));
-        Channel<String, String> in = Channel.of("lostp-in", Serdes.String(), Serdes.String());
+        Topic<String, String> in = Topic.of("lostp-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process p = Process.named("lostp")
                 .receives(in, (d, s) -> {
@@ -644,7 +644,7 @@ class BootstrapIntegrationTest {
                     new OffsetAndMetadata(0, StreamsRuntime.BOOTSTRAP_OFFSET_STAMP)));
         }
 
-        Channel<String, String> in = Channel.of("boot-in", Serdes.String(), Serdes.String());
+        Topic<String, String> in = Topic.of("boot-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process p = Process.named("boot")
                 .receives(in, (d, s) -> {
@@ -668,7 +668,7 @@ class BootstrapIntegrationTest {
      */
     @Test
     void aDeclaredTopicThatDoesNotExistRefusesToStartNamingTheResolutionFailure() {
-        Channel<String, String> in = Channel.of("nx-never-created", Serdes.String(), Serdes.String());
+        Topic<String, String> in = Topic.of("nx-never-created", Serdes.String(), Serdes.String());
         Process p = Process.named("nx")
                 .receives(in, (d, s) -> Effects.none())
                 .build();
@@ -690,15 +690,15 @@ class BootstrapIntegrationTest {
     void strandedHeldMessagesRefuseAtStart() throws Exception {
         createTopics(new NewTopic("st-a", 1, (short) 1), new NewTopic("st-b", 1, (short) 1));
         UUID aId = topicId("st-a");
-        Channel<String, String> a = Channel.of("st-a", Serdes.String(), Serdes.String());
-        Channel<String, String> b = Channel.of("st-b", Serdes.String(), Serdes.String());
+        Topic<String, String> a = Topic.of("st-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("st-b", Serdes.String(), Serdes.String());
         Process both = Process.named("st")
                 .receives(a, (d, s) -> Effects.none())
                 .receives(b, (d, s) -> Effects.none())
                 .build();
 
         try (Parsley parsley = Parsley.start(config("st"), both)) {
-            produce("st-b", null, "k", "H", causesHeader(Map.of(new ChannelId(aId, 0), 9L)));
+            produce("st-b", null, "k", "H", causesHeader(Map.of(new Channel(aId, 0), 9L)));
             awaitCommitted("st-st", "st-b", 1);
         }
 
@@ -714,8 +714,8 @@ class BootstrapIntegrationTest {
     @Test
     void widthChangingRestartIsRefusedWithTheAccurateDiagnosis() throws Exception {
         createTopics(new NewTopic("mp-in", 3, (short) 1), new NewTopic("mp-single", 1, (short) 1));
-        Channel<String, String> wide = Channel.of("mp-in", Serdes.String(), Serdes.String());
-        Channel<String, String> narrow = Channel.of("mp-single", Serdes.String(), Serdes.String());
+        Topic<String, String> wide = Topic.of("mp-in", Serdes.String(), Serdes.String());
+        Topic<String, String> narrow = Topic.of("mp-single", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process both = Process.named("mp")
                 .receives(wide, (d, s) -> {

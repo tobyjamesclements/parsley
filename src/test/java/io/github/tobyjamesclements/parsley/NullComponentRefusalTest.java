@@ -25,15 +25,15 @@ class NullComponentRefusalTest {
     /** A null channel topic identity is refused with the taxonomy's exception, not an NPE. */
     @Test
     void nullTopicIdIsRefusedAsAnIllegalArgument() {
-        assertThrows(IllegalArgumentException.class, () -> new ChannelId(null, 0),
-                "one rule for null components: ChannelId's null refusal must match its own"
+        assertThrows(IllegalArgumentException.class, () -> new Channel(null, 0),
+                "one rule for null components: Channel's null refusal must match its own"
                         + " negative-partition refusal and the rest of the surface");
     }
 
     /** A negative partition stays refused alongside the null rule. */
     @Test
     void negativePartitionStaysRefused() {
-        assertThrows(IllegalArgumentException.class, () -> new ChannelId(new UUID(1, 1), -1),
+        assertThrows(IllegalArgumentException.class, () -> new Channel(new UUID(1, 1), -1),
                 "the taxonomy change must not loosen the existing range check");
     }
 }

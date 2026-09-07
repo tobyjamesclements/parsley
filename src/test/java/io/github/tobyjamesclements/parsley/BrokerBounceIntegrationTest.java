@@ -55,8 +55,8 @@ class BrokerBounceIntegrationTest {
     void heldMessageSurvivesABrokerBounceAndReleasesOnlyByEvidence() throws Exception {
         admin.createTopics(List.of(new NewTopic("bounce-a", 1, (short) 1), new NewTopic("bounce-b", 1, (short) 1)))
                 .all().get(30, TimeUnit.SECONDS);
-        Channel<String, String> a = Channel.of("bounce-a", Serdes.String(), Serdes.String());
-        Channel<String, String> b = Channel.of("bounce-b", Serdes.String(), Serdes.String());
+        Topic<String, String> a = Topic.of("bounce-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("bounce-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process pb = Process.named("pb")
                 .receives(a, (d, s) -> {
@@ -71,7 +71,7 @@ class BrokerBounceIntegrationTest {
 
         UUID aTopicId = ClusterTestSupport.topicId(admin, "bounce-a");
         ClusterTestSupport.produce(cluster.bootstrapServers(), "bounce-b", "k", "B", new RecordHeader(CausesCodec.HEADER_KEY,
-                CausesCodec.encode(Causes.of(Map.of(new ChannelId(aTopicId, 0), 0L)))));
+                CausesCodec.encode(Causes.of(Map.of(new Channel(aTopicId, 0), 0L)))));
 
         ParsleyConfig config = ParsleyConfig.builder(cluster.bootstrapServers(), "bounce")
                 .stateDir(stateDir.resolve("bounce").toString())

@@ -215,8 +215,8 @@ class ChangelogReadStallTest {
     @Test
     void heldMessageBodiesAreKeptAsPresenceMarkersNotRetained() {
         ScriptedConsumer consumer = new ScriptedConsumer(List.of(P0));
-        ChannelId channel =
-                new ChannelId(new java.util.UUID(5, 5), 0);
+        Channel channel =
+                new Channel(new java.util.UUID(5, 5), 0);
         byte[] heldKey = heldKey(channel, 7L);
         byte[] otherHeldKey = heldKey(channel, 9L);
         byte[] body = new byte[64 * 1024];
@@ -236,7 +236,7 @@ class ChangelogReadStallTest {
         assertArrayEquals(bytes("covered"), view.latest().get(bytes("task0")), "other tags keep their values");
     }
 
-    private static byte[] heldKey(ChannelId channel, long position) {
+    private static byte[] heldKey(Channel channel, long position) {
         java.nio.ByteBuffer buffer = java.nio.ByteBuffer.allocate(1 + 20 + 8);
         buffer.put((byte) 'h');
         channel.writeTo(buffer);

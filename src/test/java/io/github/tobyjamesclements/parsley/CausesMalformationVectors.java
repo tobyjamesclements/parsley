@@ -34,8 +34,8 @@ public final class CausesMalformationVectors {
     public record Vector(String family, String label, byte[] bytes, String diagnosisFragment) {
     }
 
-    private static final ChannelId CH_A = new ChannelId(new UUID(1, 1), 0);
-    private static final ChannelId CH_B = new ChannelId(new UUID(1, 2), 3);
+    private static final Channel CH_A = new Channel(new UUID(1, 1), 0);
+    private static final Channel CH_B = new Channel(new UUID(1, 2), 3);
 
     private CausesMalformationVectors() {
     }
@@ -104,7 +104,7 @@ public final class CausesMalformationVectors {
         byte[] partitionsOverstated = oneTopic.clone();
         partitionsOverstated[18] = 2;
         byte[] partitionsUnderstated = CausesCodec.encode(
-                Causes.of(Map.of(CH_A, 1L, new ChannelId(CH_A.topicId(), 6), 2L)));
+                Causes.of(Map.of(CH_A, 1L, new Channel(CH_A.topicId(), 6), 2L)));
         partitionsUnderstated[18] = 1;
 
         ByteBuffer paddedTopicCount = header(1 + 2 + 26);

@@ -27,8 +27,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * anything is allocated from it.
  */
 class OrderingStateCodecCorruptionTest {
-    private static final ChannelId CH = new ChannelId(new UUID(1, 2), 0);
-    private static final int CAUSE_ENTRY = ChannelId.ENCODED_LENGTH + Long.BYTES;
+    private static final Channel CH = new Channel(new UUID(1, 2), 0);
+    private static final int CAUSE_ENTRY = Channel.ENCODED_LENGTH + Long.BYTES;
 
     /**
      * A tag constant added to {@link OrderingStateCodec} without an entry in {@code STATE_TAGS}
@@ -239,7 +239,7 @@ class OrderingStateCodecCorruptionTest {
     void malformedChannelKeysRaiseTheRefusal() {
         byte[] shortKey = {OrderingStateCodec.TAG_FED_UP_TO, 1, 2, 3};
         assertThrows(FailClosedException.class, () -> OrderingStateCodec.channelOfEntryKey(shortKey));
-        byte[] longKey = new byte[1 + ChannelId.ENCODED_LENGTH + 1];
+        byte[] longKey = new byte[1 + Channel.ENCODED_LENGTH + 1];
         longKey[0] = OrderingStateCodec.TAG_FRONTIER;
         assertThrows(FailClosedException.class, () -> OrderingStateCodec.channelOfEntryKey(longKey));
         assertEquals(CH, OrderingStateCodec.channelOfEntryKey(OrderingStateCodec.channelKey(OrderingStateCodec.TAG_FED_UP_TO, CH)));
@@ -330,7 +330,7 @@ class OrderingStateCodecCorruptionTest {
      */
     @Test
     void engineRefusesHeldStateVisitedOutOfOrder() {
-        ChannelId other = new ChannelId(new UUID(5, 5), 0);
+        Channel other = new Channel(new UUID(5, 5), 0);
         MemoryOrderingStore inner = new MemoryOrderingStore();
         ProcessEngine writer = new ProcessEngine("p", Map.of(CH, "in", other, "other"), inner, 64 * 1024);
         Header causes = new Header(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(Map.of(other, 5L))));

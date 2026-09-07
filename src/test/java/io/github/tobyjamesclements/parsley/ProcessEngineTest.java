@@ -23,11 +23,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * held messages restored, and each condition that stops a process.
  */
 class ProcessEngineTest {
-    private static final ChannelId C1 = new ChannelId(new UUID(9, 1), 0);
-    private static final ChannelId C2 = new ChannelId(new UUID(9, 2), 0);
-    private static final Map<ChannelId, String> BOTH = Map.of(C1, "c1", C2, "c2");
+    private static final Channel C1 = new Channel(new UUID(9, 1), 0);
+    private static final Channel C2 = new Channel(new UUID(9, 2), 0);
+    private static final Map<Channel, String> BOTH = Map.of(C1, "c1", C2, "c2");
 
-    private static ReceivedMessage caused(ChannelId channel, long position, String uid, Map<ChannelId, Long> causes) {
+    private static ReceivedMessage caused(Channel channel, long position, String uid, Map<Channel, Long> causes) {
         byte[] header = CausesCodec.encode(Causes.of(causes));
         return new ReceivedMessage(channel, position, position, uid.getBytes(), uid.getBytes(),
                 List.of(new Header(CausesCodec.HEADER_KEY, header)));
@@ -102,7 +102,7 @@ class ProcessEngineTest {
     void aStartPositionCoversEverythingBelowItWithinTheSessionFloor() {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine started = new ProcessEngine("p", BOTH, store, ProcessEngine.DEFAULT_METADATA_BUDGET_BYTES,
-                Map.of(C1, 5L, C2, 0L, new ChannelId(new UUID(9, 3), 0), 9L));
+                Map.of(C1, 5L, C2, 0L, new Channel(new UUID(9, 3), 0), 9L));
         assertEquals(java.util.OptionalLong.of(4), started.fedUpTo(C1), "coverage sits just below the start");
         assertTrue(started.fedUpTo(C2).isEmpty(), "a start position of zero covers nothing");
         assertEquals(Causes.none(), started.frontierSnapshot(), "a start position is coverage, not a cause");
@@ -187,7 +187,7 @@ class ProcessEngineTest {
     /** Recreated frontier channel is pruned immediately. */
     @Test
     void recreatedFrontierChannelIsPrunedImmediately() throws Exception {
-        ChannelId foreign = new ChannelId(new UUID(9, 3), 0);
+        Channel foreign = new Channel(new UUID(9, 3), 0);
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         engine.onReceive(caused(C1, 0, "M", Map.of(foreign, 7L)));
@@ -205,9 +205,9 @@ class ProcessEngineTest {
     void metadataBeyondTheBudgetFailsClosedOnReceipt() {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store, 64);
-        java.util.TreeMap<ChannelId, Long> big = new java.util.TreeMap<>();
+        java.util.TreeMap<Channel, Long> big = new java.util.TreeMap<>();
         for (int i = 0; i < 10; i++) {
-            big.put(new ChannelId(new UUID(20, i), 0), 1L);
+            big.put(new Channel(new UUID(20, i), 0), 1L);
         }
         FailClosedException e = assertThrows(FailClosedException.class,
                 () -> engine.onReceive(caused(C1, 0, "M", big)),
@@ -234,21 +234,21 @@ class ProcessEngineTest {
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(), "empty frontier");
 
-        java.util.TreeMap<ChannelId, Long> causes = new java.util.TreeMap<>();
+        java.util.TreeMap<Channel, Long> causes = new java.util.TreeMap<>();
         for (int partition = 0; partition < 3; partition++) {
-            causes.put(new ChannelId(new UUID(40, 1), partition), 5L);
+            causes.put(new Channel(new UUID(40, 1), partition), 5L);
         }
-        causes.put(new ChannelId(new UUID(40, 2), 300), 9L);
+        causes.put(new Channel(new UUID(40, 2), 300), 9L);
         engine.onReceive(caused(C1, 0, "A", causes));
         engine.markDelivered(C1, 0);
         assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "after growth through receipt and delivery");
 
-        engine.onReceive(caused(C1, 1, "B", Map.of(new ChannelId(new UUID(40, 1), 0), 50L)));
+        engine.onReceive(caused(C1, 1, "B", Map.of(new Channel(new UUID(40, 1), 0), 50L)));
         assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "after a position-raising re-merge of a tracked channel, which must not re-count it");
 
-        engine.onIdentityReport(new IdentityReport(Set.of(new ChannelId(new UUID(40, 1), 1)), Set.of()));
+        engine.onIdentityReport(new IdentityReport(Set.of(new Channel(new UUID(40, 1), 1)), Set.of()));
         assertEquals(4, engine.frontierSize(), "staging: the dead channel must actually leave the frontier");
         assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "after pruning a mid-group partition");
@@ -256,18 +256,18 @@ class ProcessEngineTest {
         // One topic wide enough to push its partition count from one varint byte to two,
         // and enough distinct topics to do the same to the topic count: 3 in the frontier
         // already, plus this group and 124 singles makes exactly 128.
-        java.util.TreeMap<ChannelId, Long> wide = new java.util.TreeMap<>();
+        java.util.TreeMap<Channel, Long> wide = new java.util.TreeMap<>();
         for (int partition = 0; partition < 130; partition++) {
-            wide.put(new ChannelId(new UUID(41, 1), partition), 1L);
+            wide.put(new Channel(new UUID(41, 1), partition), 1L);
         }
         for (int topic = 1; topic <= 124; topic++) {
-            wide.put(new ChannelId(new UUID(42, topic), 0), 1L);
+            wide.put(new Channel(new UUID(42, topic), 0), 1L);
         }
         engine.onReceive(caused(C2, 0, "C", wide));
         assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "with a 130-partition group and 128 distinct topics, both count varints two bytes wide");
 
-        engine.onIdentityReport(new IdentityReport(Set.of(new ChannelId(new UUID(40, 2), 300)), Set.of()));
+        engine.onIdentityReport(new IdentityReport(Set.of(new Channel(new UUID(40, 2), 300)), Set.of()));
         assertEquals(257, engine.frontierSize(),
                 "staging: the emptied topic's only channel must actually leave the frontier");
         assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
@@ -285,12 +285,12 @@ class ProcessEngineTest {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store, 70);
 
-        engine.onReceive(caused(C1, 0, "A", Map.of(new ChannelId(new UUID(21, 1), 0), 1L)));
+        engine.onReceive(caused(C1, 0, "A", Map.of(new Channel(new UUID(21, 1), 0), 1L)));
         engine.markDelivered(C1, 0);
         assertTrue(engine.causesHeaderForSend().length <= 70, "still within budget");
 
         FailClosedException e = assertThrows(FailClosedException.class,
-                () -> engine.onReceive(caused(C1, 1, "B", Map.of(new ChannelId(new UUID(21, 2), 0), 1L))),
+                () -> engine.onReceive(caused(C1, 1, "B", Map.of(new Channel(new UUID(21, 2), 0), 1L))),
                 "a frontier grown past the budget must fail closed before the substrate's wall");
         assertEquals(FailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason());
         assertTrue(engine.frontierSize() >= 3, "the frontier size is observable (SPEC Operational 5)");
@@ -360,7 +360,7 @@ class ProcessEngineTest {
     @Test
     void joiningChannelDoesNotReenterDeliveredCausalPast() {
         MemoryOrderingStore store = new MemoryOrderingStore();
-        Map<ChannelId, String> onlyC2 = Map.of(C2, "c2");
+        Map<Channel, String> onlyC2 = Map.of(C2, "c2");
         ProcessEngine first = new ProcessEngine("p", onlyC2, store);
         first.onReceive(caused(C2, 0, "B", Map.of(C1, 3L)));
         assertTrue(first.nextDeliverable().isPresent());
@@ -386,7 +386,7 @@ class ProcessEngineTest {
         first.flushHolds();
         store.commit();
 
-        ChannelId recreated = new ChannelId(new UUID(9, 99), 0);
+        Channel recreated = new Channel(new UUID(9, 99), 0);
         FailClosedException e = assertThrows(FailClosedException.class,
                 () -> new ProcessEngine("p", Map.of(recreated, "orders"), store));
         assertEquals(FailClosedException.Reason.CHANNEL_IDENTITY_CHANGED, e.reason());
@@ -396,14 +396,14 @@ class ProcessEngineTest {
     @Test
     void causesOfAJoinClampDroppedMessageStillBindSends() throws Exception {
         MemoryOrderingStore store = new MemoryOrderingStore();
-        Map<ChannelId, String> onlyC2 = Map.of(C2, "c2");
+        Map<Channel, String> onlyC2 = Map.of(C2, "c2");
         ProcessEngine first = new ProcessEngine("p", onlyC2, store);
         first.onReceive(caused(C2, 0, "B", Map.of(C1, 3L)));
         first.markDelivered(C2, 0);
         first.flushHolds();
         store.commit();
 
-        ChannelId elsewhere = new ChannelId(new UUID(9, 77), 0);
+        Channel elsewhere = new Channel(new UUID(9, 77), 0);
         ProcessEngine second = new ProcessEngine("p", BOTH, store);
         assertEquals(ProcessEngine.ReceiveOutcome.DUPLICATE_DROPPED,
                 second.onReceive(caused(C1, 2, "A", Map.of(elsewhere, 9L))));
@@ -459,8 +459,8 @@ class ProcessEngineTest {
     void identityReportPrunesCausesOnDeadChannelsAndNothingElse() throws Exception {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
-        ChannelId foreign = new ChannelId(new UUID(9, 9), 0);
-        ChannelId foreign2 = new ChannelId(new UUID(9, 10), 0);
+        Channel foreign = new Channel(new UUID(9, 9), 0);
+        Channel foreign2 = new Channel(new UUID(9, 10), 0);
         engine.onReceive(caused(C1, 0, "A", Map.of(foreign, 4L, foreign2, 2L)));
         engine.markDelivered(C1, 0);
         assertEquals(Causes.of(Map.of(foreign, 4L, foreign2, 2L, C1, 0L)),
@@ -541,7 +541,7 @@ class ProcessEngineTest {
     void restoredFrontierNamingTheZeroTopicIdFailsClosed() {
         MemoryOrderingStore store = new MemoryOrderingStore();
         new ProcessEngine("p", BOTH, store);
-        store.put(OrderingStateCodec.channelKey(OrderingStateCodec.TAG_FRONTIER, new ChannelId(new UUID(0, 0), 0)),
+        store.put(OrderingStateCodec.channelKey(OrderingStateCodec.TAG_FRONTIER, new Channel(new UUID(0, 0), 0)),
                 OrderingStateCodec.encodeLong(7));
 
         FailClosedException e = assertThrows(FailClosedException.class,
@@ -655,9 +655,9 @@ class ProcessEngineTest {
     void aFrontierRestoredPastAShrunkenBudgetFailsClosedAtSendNotAtRestore() {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine generous = new ProcessEngine("p", BOTH, store);
-        java.util.TreeMap<ChannelId, Long> wide = new java.util.TreeMap<>();
+        java.util.TreeMap<Channel, Long> wide = new java.util.TreeMap<>();
         for (int i = 0; i < 10; i++) {
-            wide.put(new ChannelId(new UUID(30, i + 1), 0), 1L);
+            wide.put(new Channel(new UUID(30, i + 1), 0), 1L);
         }
         generous.onReceive(caused(C1, 0, "M", wide));
         generous.markDelivered(C1, 0);
@@ -702,8 +702,8 @@ class ProcessEngineTest {
     void anOversizedHeaderNamingOnlyFrontierChannelsIsRefusedByThePerMessageGate() {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store, 100);
-        ChannelId f1 = new ChannelId(new UUID(31, 1), 0);
-        ChannelId f2 = new ChannelId(new UUID(31, 2), 0);
+        Channel f1 = new Channel(new UUID(31, 1), 0);
+        Channel f2 = new Channel(new UUID(31, 2), 0);
         engine.onReceive(caused(C1, 0, "A", Map.of(f1, 5L, f2, 9L)));
         assertEquals(Causes.of(Map.of(f1, 5L, f2, 9L)), engine.frontierSnapshot(),
                 "staging: both channels sit in the frontier, and the frontier is within budget");
@@ -733,8 +733,8 @@ class ProcessEngineTest {
      */
     @Test
     void onlyTheHeadOfEachBufferKeepsItsDecodedFormOnceFlushed() {
-        ChannelId c3 = new ChannelId(new UUID(9, 3), 0);
-        Map<ChannelId, String> three = Map.of(C1, "c1", C2, "c2", c3, "c3");
+        Channel c3 = new Channel(new UUID(9, 3), 0);
+        Map<Channel, String> three = Map.of(C1, "c1", C2, "c2", c3, "c3");
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", three, store);
         for (int i = 0; i < 5; i++) {
@@ -775,7 +775,7 @@ class ProcessEngineTest {
      */
     @Test
     void aHoldReloadedFromTheStoreReachesLogicWithItsCausesIntact() {
-        ChannelId foreign = new ChannelId(new UUID(9, 3), 0);
+        Channel foreign = new Channel(new UUID(9, 3), 0);
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         ReceivedMessage received = caused(C2, 4, "B", Map.of(C1, 3L, foreign, 9L));
@@ -852,7 +852,7 @@ class ProcessEngineTest {
      */
     @Test
     void theSendHeaderIsReusedUntilTheFrontierChangesAndHandedOutAsACopy() throws Exception {
-        ChannelId foreign = new ChannelId(new UUID(9, 3), 0);
+        Channel foreign = new Channel(new UUID(9, 3), 0);
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         engine.onReceive(caused(C2, 7, "B", Map.of(C1, 3L, foreign, 5L)));
@@ -985,16 +985,16 @@ class ProcessEngineTest {
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         UUID wideTopic = new UUID(43, 1);
-        java.util.TreeMap<ChannelId, Long> wide = new java.util.TreeMap<>();
+        java.util.TreeMap<Channel, Long> wide = new java.util.TreeMap<>();
         for (int partition = 0; partition < 129; partition++) {
-            wide.put(new ChannelId(wideTopic, partition), 1L);
+            wide.put(new Channel(wideTopic, partition), 1L);
         }
         engine.onReceive(caused(C1, 0, "A", wide));
         assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "with a 129-partition group, the partition count two varint bytes wide");
 
         for (int remaining = 128; remaining >= 126; remaining--) {
-            engine.onIdentityReport(new IdentityReport(Set.of(new ChannelId(wideTopic, remaining)), Set.of()));
+            engine.onIdentityReport(new IdentityReport(Set.of(new Channel(wideTopic, remaining)), Set.of()));
             assertEquals(remaining, engine.frontierSize(),
                     "staging: the pruned partition must actually leave the frontier");
             assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),

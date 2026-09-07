@@ -1,135 +1,114 @@
 package io.github.tobyjamesclements.parsley;
 
-import org.apache.kafka.common.serialization.Serde;
+import java.nio.ByteBuffer;
+import java.util.UUID;
 
 /**
- * A typed topic a process receives from or sends to.
+ * A channel, named by topic identity rather than topic name.
  *
- * <p>A channel binds a topic name to the serdes for its keys and values. Causal metadata
- * travels in reserved headers and never in the key or value, so a channel's serdes describe
- * only the application's own data.
+ * <p>Names are reusable and identities are not, so a topic deleted and recreated under the
+ * same name yields a different {@code Channel}. Positions carried against the old identity
+ * cannot be mistaken for positions in the new log.
  *
- * @param <K> key type
- * @param <V> value type
- * @see Process.Builder#receives(Channel, Handler)
- * @see Process.Builder#sends(Channel...)
+ * <p>Ordering is unsigned over the topic identity, then by partition, which gives the
+ * canonical order the wire format encodes in.
+ *
+ * @param topicId   the topic's identity as assigned by the broker
+ * @param partition the partition within that topic
  */
-public final class Channel<K, V> {
+public record Channel(UUID topicId, int partition) implements Comparable<Channel> {
 
-    /** Where a process begins reading a channel it has no committed position for. */
-    public enum InitialPosition {
-        /** Begin at the earliest retained message. */
-        EARLIEST,
-        /** Begin at the end, skipping messages already retained. */
-        LATEST
-    }
+    /** Encoded width in bytes: two longs of topic identity, then the partition. */
+    public static final int ENCODED_LENGTH = 20;
 
-    private final String topic;
-    private final Serde<K> keySerde;
-    private final Serde<V> valueSerde;
-    private final InitialPosition initialPosition;
-
-    private Channel(String topic, Serde<K> keySerde, Serde<V> valueSerde, InitialPosition initialPosition) {
-        if (topic == null || topic.isBlank()) {
-            throw new IllegalArgumentException("topic must be non-blank");
+    /**
+     * Validates the topic identity and partition.
+     *
+     * @throws IllegalArgumentException if {@code topicId} is null or {@code partition} is
+     *                                  negative
+     */
+    public Channel {
+        if (topicId == null) {
+            throw new IllegalArgumentException("topicId must be non-null");
         }
-        if (topic.contains(Parsley.RESERVED_PREFIX)) {
-            throw new IllegalArgumentException("topic may not contain the reserved namespace "
-                    + Parsley.RESERVED_PREFIX + ", which parsley uses for its own topics: " + topic);
+        if (partition < 0) {
+            throw new IllegalArgumentException("partition must be non-negative: " + partition);
         }
-        if (keySerde == null) {
-            throw new IllegalArgumentException(topic + ": keySerde must be non-null");
-        }
-        if (valueSerde == null) {
-            throw new IllegalArgumentException(topic + ": valueSerde must be non-null");
-        }
-        if (initialPosition == null) {
-            throw new IllegalArgumentException(topic + ": initialPosition must be non-null");
-        }
-        this.topic = topic;
-        this.keySerde = keySerde;
-        this.valueSerde = valueSerde;
-        this.initialPosition = initialPosition;
     }
 
     /**
-     * Defines a channel starting at {@link InitialPosition#EARLIEST}.
+     * Appends this channel to a buffer in wire order.
      *
-     * @param topic      the Kafka topic name
-     * @param keySerde   serde for keys
-     * @param valueSerde serde for values
-     * @param <K>        key type
-     * @param <V>        value type
+     * @param buffer the buffer to write to, with {@link #ENCODED_LENGTH} bytes remaining
+     */
+    public void writeTo(ByteBuffer buffer) {
+        buffer.putLong(topicId.getMostSignificantBits());
+        buffer.putLong(topicId.getLeastSignificantBits());
+        buffer.putInt(partition);
+    }
+
+    /**
+     * Reads one channel from a buffer.
+     *
+     * @param buffer positioned at an encoded channel
      * @return the channel
-     * @throws IllegalArgumentException if {@code topic} is null or blank, contains the
-     *                                  reserved {@link Parsley#RESERVED_PREFIX} namespace, or
-     *                                  a serde is null
      */
-    public static <K, V> Channel<K, V> of(String topic, Serde<K> keySerde, Serde<V> valueSerde) {
-        return new Channel<>(topic, keySerde, valueSerde, InitialPosition.EARLIEST);
+    public static Channel readFrom(ByteBuffer buffer) {
+        long msb = buffer.getLong();
+        long lsb = buffer.getLong();
+        int partition = buffer.getInt();
+        return new Channel(new UUID(msb, lsb), partition);
     }
 
     /**
-     * Returns a copy of this channel with a different starting position.
+     * Returns this channel encoded into a fresh array of {@link #ENCODED_LENGTH} bytes.
      *
-     * <p>The starting position applies only on a process's first start ever, before it has
-     * any ordering state. A channel added later to a process that has run, or a partition
-     * whose committed position has expired, begins at {@link InitialPosition#EARLIEST}
-     * whatever was declared: a later {@code LATEST} would make a restart observable in
-     * what is delivered (D36). Positions below the first receipt count as already
-     * satisfied.
-     *
-     * @param initialPosition where to begin reading
-     * @return a new channel, leaving this one unchanged
-     * @throws IllegalArgumentException if {@code initialPosition} is null
+     * @return this channel encoded into a fresh array of {@link #ENCODED_LENGTH} bytes
      */
-    public Channel<K, V> startingAt(InitialPosition initialPosition) {
-        return new Channel<>(topic, keySerde, valueSerde, initialPosition);
+    public byte[] toBytes() {
+        ByteBuffer buffer = ByteBuffer.allocate(ENCODED_LENGTH);
+        writeTo(buffer);
+        return buffer.array();
     }
 
     /**
-     * Returns the Kafka topic name.
+     * Orders by topic identity unsigned, then by partition.
      *
-     * @return the Kafka topic name
+     * @param other the channel to compare against
+     * @return a negative value, zero, or a positive value as this sorts before, with, or
+     *         after {@code other}
      */
-    public String topic() {
-        return topic;
+    @Override
+    public int compareTo(Channel other) {
+        int c = compareTopicIds(topicId, other.topicId);
+        return c != 0 ? c : Integer.compare(partition, other.partition);
     }
 
     /**
-     * Returns the serde for keys.
-     *
-     * @return the serde for keys
+     * The topic half of the canonical channel order: unsigned over the 16 identity bytes.
+     * The one spelling of the rule, shared with the wire codec's group-order check.
      */
-    public Serde<K> keySerde() {
-        return keySerde;
+    static int compareTopicIds(UUID a, UUID b) {
+        int c = Long.compareUnsigned(a.getMostSignificantBits(), b.getMostSignificantBits());
+        return c != 0 ? c : Long.compareUnsigned(a.getLeastSignificantBits(), b.getLeastSignificantBits());
     }
 
     /**
-     * Returns the serde for values.
-     *
-     * @return the serde for values
+     * Whether this is the reserved all-zero topic identity, which the substrate never
+     * assigns to a channel (wire-format constraint 5, D83). The one spelling of the
+     * predicate, shared by the wire decode and the ordering-state restore.
      */
-    public Serde<V> valueSerde() {
-        return valueSerde;
+    static boolean isZeroTopicId(UUID topicId) {
+        return topicId.getMostSignificantBits() == 0 && topicId.getLeastSignificantBits() == 0;
     }
 
     /**
-     * Returns where reading begins when no committed position exists.
+     * Returns {@code topicId-partition}.
      *
-     * @return where reading begins when no committed position exists
-     */
-    public InitialPosition initialPosition() {
-        return initialPosition;
-    }
-
-    /**
-     * Returns the topic name, wrapped for diagnostics.
-     *
-     * @return the topic name, wrapped for diagnostics
+     * @return {@code topicId-partition}
      */
     @Override
     public String toString() {
-        return "Channel(" + topic + ")";
+        return topicId + "-" + partition;
     }
 }

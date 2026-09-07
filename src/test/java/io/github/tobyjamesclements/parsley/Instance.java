@@ -8,7 +8,7 @@ import java.util.Set;
  * One execution of a simulated process, with the state it keeps across restarts.
  */
 public final class Instance {
-    final ChannelId channel;
+    final Channel channel;
     final long position;
     final String uid;
     final byte[] key;
@@ -24,7 +24,7 @@ public final class Instance {
      */
     final long timestamp;
 
-    Instance(ChannelId channel, long position, String uid, byte[] key, byte[] value,
+    Instance(Channel channel, long position, String uid, byte[] key, byte[] value,
              List<Header> headers, Causes meta, Set<Instance> trueCauses) {
         this.channel = channel;
         this.position = position;

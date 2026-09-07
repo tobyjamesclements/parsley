@@ -121,7 +121,7 @@ class IdentityIntegrationTest {
                 AccessControlEntryFilter.ANY))).all().get(30, TimeUnit.SECONDS);
     }
 
-    private static RecordHeader causesHeader(Map<ChannelId, Long> causes) {
+    private static RecordHeader causesHeader(Map<Channel, Long> causes) {
         return new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(causes)));
     }
 
@@ -154,8 +154,8 @@ class IdentityIntegrationTest {
     @Test
     void aReceivedTopicDeletedWhileHeldFromStopsTheProcessBeforeDeliveringPastTheHold() throws Exception {
         createTopics("dh-a", "dh-b");
-        Channel<String, String> a = Channel.of("dh-a", Serdes.String(), Serdes.String());
-        Channel<String, String> b = Channel.of("dh-b", Serdes.String(), Serdes.String());
+        Topic<String, String> a = Topic.of("dh-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("dh-b", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process p = Process.named("dh")
                 .receives(a, (d, s) -> {
@@ -168,7 +168,7 @@ class IdentityIntegrationTest {
                 })
                 .build();
 
-        produce("dh-a", "k", "H", causesHeader(Map.of(new ChannelId(topicId("dh-b"), 0), 9L)));
+        produce("dh-a", "k", "H", causesHeader(Map.of(new Channel(topicId("dh-b"), 0), 9L)));
 
         try (Parsley parsley = Parsley.start(config("dh"), p)) {
             ClusterTestSupport.awaitFedAndHeld(admin, "dh-dh", "dh-a", delivered);
@@ -268,7 +268,7 @@ class IdentityIntegrationTest {
     @Test
     void aReceivedTopicRecreatedWhileTheProcessPollsStopsTheProcess() throws Exception {
         createTopics("rr-in");
-        Channel<String, String> in = Channel.of("rr-in", Serdes.String(), Serdes.String());
+        Topic<String, String> in = Topic.of("rr-in", Serdes.String(), Serdes.String());
         ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
         Process p = Process.named("rr")
                 .receives(in, (d, s) -> {
@@ -316,7 +316,7 @@ class IdentityIntegrationTest {
     void deliberateRefusalIsReadableInTheStatusSurface() throws Exception {
         createTopics("sr-in", "sr-x");
         UUID xId = topicId("sr-x");
-        Channel<String, String> in = Channel.of("sr-in", Serdes.String(), Serdes.String());
+        Topic<String, String> in = Topic.of("sr-in", Serdes.String(), Serdes.String());
         Process p = Process.named("sr")
                 .receives(in, (d, s) -> Effects.none())
                 .build();
@@ -326,12 +326,12 @@ class IdentityIntegrationTest {
                 .build();
 
         try (Parsley parsley = Parsley.start(tinyBudget, p)) {
-            Map<ChannelId, Long> big = new java.util.TreeMap<>();
+            Map<Channel, Long> big = new java.util.TreeMap<>();
             // Six single-topic partitions encode to 73 grouped bytes, past the 64-byte
             // budget's raw-length gate (five would land exactly on 64, which the strict
             // gate admits).
             for (int partition = 0; partition < 6; partition++) {
-                big.put(new ChannelId(xId, partition), 1L);
+                big.put(new Channel(xId, partition), 1L);
             }
             produce("sr-in", "k", "H", causesHeader(big));
 
@@ -359,9 +359,9 @@ class IdentityIntegrationTest {
     void deniedDescribeOnAFrontierTopicDoesNotPruneItsCauseAtInitialisation() throws Exception {
         createTopics("acl-in", "acl-out", "acl-x");
         UUID xId = topicId("acl-x");
-        ChannelId xChannel = new ChannelId(xId, 0);
-        Channel<String, String> in = Channel.of("acl-in", Serdes.String(), Serdes.String());
-        Channel<String, String> out = Channel.of("acl-out", Serdes.String(), Serdes.String());
+        Channel xChannel = new Channel(xId, 0);
+        Topic<String, String> in = Topic.of("acl-in", Serdes.String(), Serdes.String());
+        Topic<String, String> out = Topic.of("acl-out", Serdes.String(), Serdes.String());
         Process p = Process.named("acl")
                 .receives(in, (d, s) -> Effects.builder().send(out, d.key(), d.value()).build())
                 .sends(out)
@@ -395,9 +395,9 @@ class IdentityIntegrationTest {
     void recreationAcrossARestartIsDiagnosedAsIdentityChangeNotRemoval() throws Exception {
         createTopics("md-in", "md-x");
         UUID xId = topicId("md-x");
-        ChannelId xChannel = new ChannelId(xId, 0);
-        Channel<String, String> in = Channel.of("md-in", Serdes.String(), Serdes.String());
-        Channel<String, String> x = Channel.of("md-x", Serdes.String(), Serdes.String());
+        Channel xChannel = new Channel(xId, 0);
+        Topic<String, String> in = Topic.of("md-in", Serdes.String(), Serdes.String());
+        Topic<String, String> x = Topic.of("md-x", Serdes.String(), Serdes.String());
         Process p = Process.named("md")
                 .receives(in, (d, s) -> Effects.none())
                 .receives(x, (d, s) -> Effects.none())

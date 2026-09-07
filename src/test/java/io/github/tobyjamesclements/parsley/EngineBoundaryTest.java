@@ -25,11 +25,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * the fed-to-end sentinel (D105).
  */
 class EngineBoundaryTest {
-    private static final ChannelId C1 = new ChannelId(new UUID(9, 1), 0);
-    private static final ChannelId C2 = new ChannelId(new UUID(9, 2), 0);
-    private static final Map<ChannelId, String> BOTH = Map.of(C1, "c1", C2, "c2");
+    private static final Channel C1 = new Channel(new UUID(9, 1), 0);
+    private static final Channel C2 = new Channel(new UUID(9, 2), 0);
+    private static final Map<Channel, String> BOTH = Map.of(C1, "c1", C2, "c2");
 
-    private static ReceivedMessage caused(ChannelId channel, long position, String uid, Map<ChannelId, Long> causes) {
+    private static ReceivedMessage caused(Channel channel, long position, String uid, Map<Channel, Long> causes) {
         byte[] header = CausesCodec.encode(Causes.of(causes));
         return new ReceivedMessage(channel, position, position, uid.getBytes(), uid.getBytes(),
                 List.of(new Header(CausesCodec.HEADER_KEY, header)));
@@ -137,8 +137,8 @@ class EngineBoundaryTest {
      */
     @Test
     void budgetGatesAreInclusiveAtExactlyTheBudget() {
-        ChannelId f1 = new ChannelId(new UUID(31, 1), 0);
-        ChannelId f2 = new ChannelId(new UUID(31, 2), 0);
+        Channel f1 = new Channel(new UUID(31, 1), 0);
+        Channel f2 = new Channel(new UUID(31, 2), 0);
         byte[] exact = CausesCodec.encode(Causes.of(Map.of(f1, 5L, f2, 9L)));
         int budget = exact.length;
 
@@ -168,8 +168,8 @@ class EngineBoundaryTest {
      */
     @Test
     void emissionHeaderIsByteExactAfterEveryFrontierMutationKind() {
-        ChannelId x = new ChannelId(new UUID(50, 1), 3);
-        ChannelId y = new ChannelId(new UUID(50, 1), 7);
+        Channel x = new Channel(new UUID(50, 1), 3);
+        Channel y = new Channel(new UUID(50, 1), 7);
         MemoryOrderingStore store = new MemoryOrderingStore();
         ProcessEngine engine = new ProcessEngine("p", BOTH, store);
         assertArrayEquals(CausesCodec.encode(Causes.none()), engine.causesHeaderForSend(), "empty");

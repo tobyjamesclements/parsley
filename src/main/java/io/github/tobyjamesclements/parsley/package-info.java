@@ -1,7 +1,7 @@
 /**
  * The declaration surface and the Kafka Streams runtime behind it.
  *
- * <p>An application declares {@link io.github.tobyjamesclements.parsley.Channel} typed
+ * <p>An application declares {@link io.github.tobyjamesclements.parsley.Topic} typed
  * topics, {@link io.github.tobyjamesclements.parsley.Store} typed stores, and one
  * {@link io.github.tobyjamesclements.parsley.Process} per process. Logic is a
  * {@link io.github.tobyjamesclements.parsley.Handler}, which receives a
@@ -37,7 +37,7 @@
  * {@link io.github.tobyjamesclements.parsley.FailClosedException} and its reason when a
  * process refuses, and
  * {@link io.github.tobyjamesclements.parsley.OrderingStateInspector} with
- * {@link io.github.tobyjamesclements.parsley.ChannelId} to read what a stopped process was
+ * {@link io.github.tobyjamesclements.parsley.Channel} to read what a stopped process was
  * holding. Everything else is package-private.
  *
  * <p>Package-private types divide into two groups that must not be confused. The protocol

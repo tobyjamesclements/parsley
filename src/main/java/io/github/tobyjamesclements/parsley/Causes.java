@@ -11,7 +11,7 @@ import java.util.TreeMap;
  * channel because the protocol carries no process identity. A message stamped with a frontier
  * asserts that everything at or below each named position happened before it was sent.
  *
- * <p>Instances are immutable, and iterate in {@link ChannelId} order, which is the order the
+ * <p>Instances are immutable, and iterate in {@link Channel} order, which is the order the
  * wire format encodes in.
  *
  * @see CausesCodec
@@ -20,9 +20,9 @@ import java.util.TreeMap;
 final class Causes {
     private static final Causes NONE = new Causes(Collections.emptySortedMap());
 
-    private final java.util.SortedMap<ChannelId, Long> byChannel;
+    private final java.util.SortedMap<Channel, Long> byChannel;
 
-    private Causes(java.util.SortedMap<ChannelId, Long> byChannel) {
+    private Causes(java.util.SortedMap<Channel, Long> byChannel) {
         this.byChannel = byChannel;
     }
 
@@ -43,11 +43,11 @@ final class Causes {
      * @throws IllegalArgumentException if any position is null, negative, or the reserved
      *         maximum {@code Long.MAX_VALUE}, which no channel can assign (D105)
      */
-    public static Causes of(Map<ChannelId, Long> byChannel) {
+    public static Causes of(Map<Channel, Long> byChannel) {
         if (byChannel.isEmpty()) {
             return NONE;
         }
-        TreeMap<ChannelId, Long> copy = new TreeMap<>();
+        TreeMap<Channel, Long> copy = new TreeMap<>();
         byChannel.forEach((channel, position) -> {
             if (position == null || position < 0) {
                 throw new IllegalArgumentException("position must be non-negative on " + channel + ": " + position);
@@ -62,11 +62,11 @@ final class Causes {
     }
 
     /**
-     * Returns the frontier as an unmodifiable map in {@link ChannelId} order.
+     * Returns the frontier as an unmodifiable map in {@link Channel} order.
      *
-     * @return the frontier as an unmodifiable map in {@link ChannelId} order
+     * @return the frontier as an unmodifiable map in {@link Channel} order
      */
-    public java.util.SortedMap<ChannelId, Long> byChannel() {
+    public java.util.SortedMap<Channel, Long> byChannel() {
         return byChannel;
     }
 
