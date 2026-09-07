@@ -19,7 +19,7 @@ import java.util.UUID;
 public record Channel(UUID topicId, int partition) implements Comparable<Channel> {
 
     /** Encoded width in bytes: two longs of topic identity, then the partition. */
-    public static final int ENCODED_LENGTH = 20;
+    static final int ENCODED_LENGTH = 20;
 
     /**
      * Validates the topic identity and partition.
@@ -41,7 +41,7 @@ public record Channel(UUID topicId, int partition) implements Comparable<Channel
      *
      * @param buffer the buffer to write to, with {@link #ENCODED_LENGTH} bytes remaining
      */
-    public void writeTo(ByteBuffer buffer) {
+    void writeTo(ByteBuffer buffer) {
         buffer.putLong(topicId.getMostSignificantBits());
         buffer.putLong(topicId.getLeastSignificantBits());
         buffer.putInt(partition);
@@ -53,7 +53,7 @@ public record Channel(UUID topicId, int partition) implements Comparable<Channel
      * @param buffer positioned at an encoded channel
      * @return the channel
      */
-    public static Channel readFrom(ByteBuffer buffer) {
+    static Channel readFrom(ByteBuffer buffer) {
         long msb = buffer.getLong();
         long lsb = buffer.getLong();
         int partition = buffer.getInt();
@@ -65,7 +65,7 @@ public record Channel(UUID topicId, int partition) implements Comparable<Channel
      *
      * @return this channel encoded into a fresh array of {@link #ENCODED_LENGTH} bytes
      */
-    public byte[] toBytes() {
+    byte[] toBytes() {
         ByteBuffer buffer = ByteBuffer.allocate(ENCODED_LENGTH);
         writeTo(buffer);
         return buffer.array();

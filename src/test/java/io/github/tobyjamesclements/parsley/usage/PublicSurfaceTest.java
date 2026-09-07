@@ -3,7 +3,6 @@ package io.github.tobyjamesclements.parsley.usage;
 import org.apache.kafka.common.serialization.Serdes;
 import org.junit.jupiter.api.Test;
 
-import java.nio.ByteBuffer;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -105,26 +104,14 @@ class PublicSurfaceTest {
                 "a property parsley does not own is carried through");
     }
 
-    /**
-     * A channel identity round-trips through its wire encoding, and orders by identity
-     * then partition.
-     */
+    /** A channel identity names a topic by id and a partition, and orders by identity then partition. */
     @Test
-    void aChannelIdentityRoundTripsAndOrders() {
+    void aChannelIdentityOrders() {
         UUID topic = new UUID(1L, 2L);
         Channel channel = new Channel(topic, 3);
 
         assertEquals(topic, channel.topicId(), "the topic identity is the one given");
         assertEquals(3, channel.partition(), "the partition is the one given");
-
-        byte[] encoded = channel.toBytes();
-        assertEquals(Channel.ENCODED_LENGTH, encoded.length, "an encoded channel is a fixed width");
-        assertEquals(channel, Channel.readFrom(ByteBuffer.wrap(encoded)), "and decodes back to itself");
-
-        ByteBuffer buffer = ByteBuffer.allocate(Channel.ENCODED_LENGTH);
-        channel.writeTo(buffer);
-        assertEquals(channel, Channel.readFrom(buffer.flip()), "writeTo and readFrom agree");
-
         assertTrue(channel.compareTo(new Channel(topic, 4)) < 0, "a lower partition sorts first");
     }
 
