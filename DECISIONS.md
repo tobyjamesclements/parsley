@@ -5246,3 +5246,79 @@ discarding a cause; it named the mechanism D104 later showed unsound. Constraint
 the wire format because it is a property of the bytes' meaning that every reader relies on and
 no reader can check — the specification should have said, from the start, what a position is
 allowed to be.
+
+### D116 — The `api` and `kafka` packages merge into the root package; the adapter's lifecycle owner is package-private (issue #110, step A)
+
+**Context**
+
+The tree had four packages. `api` was the declaration surface, `kafka` the Kafka Streams
+adapter, and they imported each other: `api.Parsley` delegated every method to
+`kafka.ParsleyRuntime`, which was public for that one caller and for nothing else, and the
+adapter imported six `api` types and spelled `api.ProcessStatus` fully qualified seven times
+inside `status()`. The boundary suggested a host-neutral declaration surface over a
+replaceable adapter, and nothing in `api` was host-neutral in substance: `Channel` and
+`Store` take Kafka `Serde`s, `ParsleyConfig` is a Kafka Streams configuration deny-list,
+`ProcessStatus.State` projects `KafkaStreams.State`, and `Delivery` carries partition, offset,
+timestamp and headers. The specification settles portability already: Substrate and
+toolchain 1 and 2 mandate Apache Kafka and Kafka Streams. Issue #110 assessed the layout and
+recommended one package, sequenced in steps; its names predate the tree's current ones
+(`StreamsRuntime` is `ParsleyRuntime`, `ProcessNode` is `ParsleyProcessor`, `Process` is
+`ProcessDefinition`, `State` is `StateReader`).
+
+**Decision**
+
+`api` and `kafka` become the root package `io.github.tobyjamesclements.parsley`, sources and
+tests alike, moved as renames so history follows each file. `ParsleyRuntime` loses `public`
+on the class and on `start`, `status`, `awaitStopped` (both) and `healthy`; `close()` stays
+public because `AutoCloseable` requires it. Nothing else in the former adapter was public,
+so `Parsley` is now the one public way to start, observe, wait on or stop a process
+(Structural 9's compile-level evidence gains that fact). Public top-level types across the
+two former packages go from 13 to 12; the imports between them go from thirty lines to none.
+One `package-info.java` describes the root: what an application declares, and the adapter
+that runs it. The `core` package is untouched, and stays public where the adapter uses it;
+folding it in is issue #110's next step, which also carries the Structural 7 decision on
+whether `Deliverability` stays public, and is not taken here.
+
+`SessionPurityTest` fenced the companion against the adapter and the declaration surface by
+package name, two fixed strings the scan looked for. The root package's name is the prefix of
+every subpackage, the core's included, so no fixed string can name "a type of the root
+package" without also naming the core the companion is allowed to use. `PurityScan` gains
+`assertSourcesMatchNone`, the same recursive scan against regular expressions, and the
+companion's fence is the pattern `parsley\.[A-Z]`: a fully qualified reference to any type
+declared directly in the root package, imports, code and prose alike. The host-facility
+fence is unchanged and still the shared `HOST_FACILITIES` list.
+
+`AGENTS.md`'s map is one bullet shorter, and its citation for the core's purity fence is
+corrected from Structural 9 (no unsafe public operation) to Structural 7 (the decision is a
+pure function, testable without a host), which is the criterion the fence serves.
+`docs/api.md`, `docs/session.md` and `docs/verification.md` say what the tree now is.
+
+**Alternatives**
+
+* Keep three packages and break the cycle by moving `Parsley` into `kafka`. Rejected: the
+  cycle was the symptom, not the problem; the declaration surface is Kafka-specific, and a
+  package promising a host-neutral API the library does not offer misleads a reader.
+* Fold `core` in at the same time. Rejected for this step: that change makes nine protocol
+  types and their public members package-private, moves the simulator and the core tests
+  into the flat package, rebuilds the purity fence as an allow-list, and decides Structural
+  7's reading of "expose". Each is worth its own record, and the mechanical half is worth
+  landing green on its own first.
+* Rename the surface while moving it. Rejected: a move whose diff is package lines and
+  deleted imports is reviewable at a glance; renames are not, and none was asked for.
+* Spell the session fence as a list of the root package's public type names. Rejected: a
+  type added to the root package would escape the fence until someone remembered the list;
+  the pattern fences every present and future root type with no maintenance.
+
+**Cost**
+
+Every file in the two packages moves; blame follows through rename detection, and the
+`pre-rewrite` tag and issue #110's line references are unaffected because both predate the
+move. Applications written against 0.2.0 change their imports from
+`io.github.tobyjamesclements.parsley.api.*` to `io.github.tobyjamesclements.parsley.*`; this
+tree is 0.3.0-SNAPSHOT and its API already differs from the release (D115), so the move
+lands in a version that breaks source compatibility anyway.
+
+**Specification gap**
+
+None. Structural 9 asks that the public API expose no unsafe operation; removing
+`ParsleyRuntime` from it removes surface rather than adding any.

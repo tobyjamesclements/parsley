@@ -8,7 +8,7 @@ package io.github.tobyjamesclements.parsley.core;
  * condition to retry.
  *
  * @see #reason()
- * @see io.github.tobyjamesclements.parsley.api.ProcessStatus#refusalReason()
+ * @see io.github.tobyjamesclements.parsley.ProcessStatus#refusalReason()
  */
 public final class ParsleyFailClosedException extends RuntimeException {
 

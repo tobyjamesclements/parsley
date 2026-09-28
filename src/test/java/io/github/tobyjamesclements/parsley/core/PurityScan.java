@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -20,7 +21,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * fence is used from more than one test package.
  *
  * <p>The check is textual {@code contains} over the whole source text, comments and
- * javadoc included, so a forbidden string must not appear even in prose.
+ * javadoc included, so a forbidden string must not appear even in prose. Where a fixed
+ * string cannot spell the fence, {@link #assertSourcesMatchNone} takes a pattern: a type of
+ * the root package, say, whose name every subpackage shares as a prefix.
  */
 public final class PurityScan {
 
@@ -61,6 +64,38 @@ public final class PurityScan {
      */
     public static void assertSourcesAvoid(Path sourceDir, List<String> forbidden, String rationale)
             throws IOException {
+        scan(sourceDir, (path, source) -> {
+            for (String entry : forbidden) {
+                assertTrue(!source.contains(entry),
+                        path.getFileName() + " must not use \"" + entry + "\": " + rationale);
+            }
+        });
+    }
+
+    /**
+     * As {@link #assertSourcesAvoid}, against regular expressions found anywhere in the
+     * source text.
+     *
+     * @param sourceDir the source directory to scan, which must exist
+     * @param forbidden the patterns no scanned source may match
+     * @param rationale appended to the failure message, saying why the package is fenced
+     * @throws IOException if a source file cannot be read
+     */
+    public static void assertSourcesMatchNone(Path sourceDir, List<Pattern> forbidden, String rationale)
+            throws IOException {
+        scan(sourceDir, (path, source) -> {
+            for (Pattern entry : forbidden) {
+                assertTrue(!entry.matcher(source).find(),
+                        path.getFileName() + " must not match \"" + entry + "\": " + rationale);
+            }
+        });
+    }
+
+    private interface SourceCheck {
+        void check(Path path, String source);
+    }
+
+    private static void scan(Path sourceDir, SourceCheck check) throws IOException {
         assertTrue(Files.isDirectory(sourceDir), sourceDir + " must be present for this scan");
         try (Stream<Path> files = Files.walk(sourceDir)) {
             files.filter(path -> path.toString().endsWith(".java")).forEach(path -> {
@@ -70,10 +105,7 @@ public final class PurityScan {
                 } catch (IOException e) {
                     throw new java.io.UncheckedIOException(e);
                 }
-                for (String entry : forbidden) {
-                    assertTrue(!source.contains(entry),
-                            path.getFileName() + " must not use \"" + entry + "\": " + rationale);
-                }
+                check.check(path, source);
             });
         }
     }

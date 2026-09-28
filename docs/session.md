@@ -12,7 +12,7 @@ read-your-writes, monotonic reads, writes-follow-reads — for a participant tha
 protocol at all.
 
 This is an application-layer pattern built *on* Parsley, not a change to the guarantee
-Parsley provides. Nothing in `core`, `api` or `kafka` reads a token, and holding one grants
+Parsley provides. Nothing in the root package or `core` reads a token, and holding one grants
 no delivery guarantee. The design and its open questions are recorded in issue
 [#96](https://github.com/tobyjamesclements/parsley/issues/96); the layout decision is D99.
 

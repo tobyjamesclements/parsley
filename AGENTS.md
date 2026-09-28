@@ -50,20 +50,23 @@ by reordering, skipping, or adding a timeout. Where the guarantee cannot be uphe
   codec (`CausesCodec`), the hold-back buffer and the pure deliverability decision
   (`Deliverability.decide`), driven by `ProcessEngine` over an `OrderingStore`. This package
   names no host type, and `CorePurityTest` enforces it by scanning the directory: no clock,
-  no network, no Kafka (SPEC Structural 9). Keep it that way.
-- `…/parsley/api`, the public, statically-typed declaration surface: `Parsley`,
-  `ParsleyConfig`, `ProcessDefinition`, `Channel`, `Store`, `Handler`, `Delivery`,
-  `Effects`, `StateReader`, `ProcessStatus` with its per-task `TaskStatus`, and
-  `KafkaNames`, the one spelling of the topic-name rule every declared name satisfies.
-- `…/parsley/kafka`, the Kafka Streams adapter: byte topologies (`ProcessTopology`,
-  `ParsleyProcessor`), topic identity at task initialisation (`TopicIdentitySource`,
-  `AdminTopicIdentitySource`), the store over a Streams state store
-  (`StreamsOrderingStore`), and the EOS lifecycle (`ParsleyRuntime`).
+  no network, no Kafka (SPEC Structural 7). Keep it that way.
+- `…/parsley`, the root package (D116), holding both the public, statically-typed
+  declaration surface — `Parsley`, `ParsleyConfig`, `ProcessDefinition`, `Channel`, `Store`,
+  `Handler`, `Delivery`, `Effects`, `StateReader`, `ProcessStatus` with its per-task
+  `TaskStatus`, and `KafkaNames`, the one spelling of the topic-name rule every declared name
+  satisfies — and, package-private beside it, the Kafka Streams adapter: byte topologies
+  (`ProcessTopology`, `ParsleyProcessor`), topic identity at task initialisation
+  (`TopicIdentitySource`, `AdminTopicIdentitySource`), the store over a Streams state store
+  (`StreamsOrderingStore`), and the EOS lifecycle (`ParsleyRuntime`). `Parsley` is the only
+  way in; the library is Kafka Streams specific by charter (SPEC Substrate and toolchain 1
+  and 2), and nothing abstracts over the host.
 - `…/parsley/session`, the companion surface for session consistency at the pipeline's
   edge (issue #96, D99): `CausalPast`, a causal frontier carried as a client token or
   recorded beside projected data, with a coverage check that fails closed over channels
-  the past cannot verify. It rides the core's public surface, nothing in the other three
-  packages reads it, and `SessionPurityTest` keeps it host-free. It must not accrete into
+  the past cannot verify. It rides the core's public surface, nothing in the other two
+  packages reads it, and `SessionPurityTest` keeps it host-free and off the root package. It
+  must not accrete into
   `core`, and the engine's private delivered past stays private.
 
 `Sabotage` lives in `core` but is package-private on purpose: the public API offers no way

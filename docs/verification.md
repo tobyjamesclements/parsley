@@ -11,9 +11,9 @@ clock, randomness, the network, or the substrate in the `core` sources.
 **Session companion.** Unit tests over `CausalPast` in the same style: merge and coverage
 semantics, and a malformation battery drawn from the shared vector catalogue the codec's
 own tests also sweep, so both decoders stay exactly as strict with one spelling per
-vector. The purity scan runs again over the `session` sources, with the Kafka adapter and
-`api` packages additionally forbidden, pinning the companion to the core's public surface
-([Session consistency](session.md)).
+vector. The purity scan runs again over the `session` sources, with every type of the root
+package — the declaration surface and the Kafka Streams adapter — additionally forbidden,
+pinning the companion to the core's public surface ([Session consistency](session.md)).
 
 **Simulation.** A simulated substrate and host honouring the host obligations drives many
 engines over randomised topologies, interleavings, gaps, aborted-transaction runs, crashes
