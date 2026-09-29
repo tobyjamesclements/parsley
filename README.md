@@ -35,6 +35,7 @@ agent, working on the code. The `docs/` directory has the rest:
 | [Runbooks](docs/runbooks.md) | What an operator does when a process stops or holds, reason by reason |
 | [Wire format](docs/wire-format.md) | The frozen on-wire definition of causal metadata |
 | [Verification](docs/verification.md) | How the guarantee is tested |
+| [Gotchas](docs/gotchas.md) | What bites when you build causal delivery on Kafka Streams, and the shape that survived each trap |
 
 ## Requirements
 
