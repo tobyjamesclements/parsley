@@ -320,7 +320,7 @@ class EndToEndIntegrationTest {
             produce("gap-a", "k", "A0");
             await("A0 delivered", () -> delivered.contains("A0"), Duration.ofSeconds(120));
 
-            /**
+            /*
              * Offset 1 is the aborted record, offset 2 its abort marker: no committed record
              * will ever occupy either, so a cause naming 2 is out of contract.
              */
@@ -335,7 +335,7 @@ class EndToEndIntegrationTest {
             produce("gap-a", "k", "A3");
             await("B to go once the record that settles the run below it is received",
                     () -> delivered.contains("B") && delivered.contains("A3"), Duration.ofSeconds(120));
-            /**
+            /*
              * B and A3 are causally independent — B names gap-a@2, not A3 — so once gap-a@3
              * is received both are deliverable and their relative order is the drain's, not
              * causal order. What is pinned: B went only after that receipt (the 3 s pause

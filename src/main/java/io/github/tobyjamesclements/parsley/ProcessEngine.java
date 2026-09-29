@@ -60,7 +60,7 @@ final class ProcessEngine {
     private final Map<Channel, Long> fedUpTo = new HashMap<>();
     private final TreeMap<Channel, Long> frontier = new TreeMap<>();
 
-    /**
+    /*
      * The frontier's encoded width, maintained incrementally so the budget check in
      * mergeFrontier stays O(1) now that size is a function of the frontier's shape rather
      * than its entry count. frontierBodyBytes counts everything after the version
@@ -75,7 +75,7 @@ final class ProcessEngine {
     private final Map<Channel, Long> deliveredPast = new HashMap<>();
     private final Map<Channel, ArrayDeque<Hold>> held = new HashMap<>();
 
-    /**
+    /*
      * Holds taken in since the last flush, in receipt order. A flush persists exactly these,
      * so its cost follows the holds added since the previous flush rather than the depth of
      * every buffer, which is what keeps a deep hold-back buffer from taxing every later
@@ -83,7 +83,7 @@ final class ProcessEngine {
      */
     private final ArrayDeque<Hold> unpersisted = new ArrayDeque<>();
 
-    /**
+    /*
      * The frontier's encoded form, built on first use and dropped at the frontier's
      * mutation sites, so a step that sends several messages encodes once and a step that
      * sends none never encodes.
@@ -224,7 +224,7 @@ final class ProcessEngine {
                 (key, value) -> fedUpTo.put(OrderingStateCodec.channelOfEntryKey(key), OrderingStateCodec.decodeLong(value)));
         store.scanPrefix(OrderingStateCodec.tagPrefix(OrderingStateCodec.TAG_FRONTIER), (key, value) -> {
             Channel channel = OrderingStateCodec.channelOfEntryKey(key);
-            /**
+            /*
              * The reserved zero topic id can only have entered a frontier through a forged
              * header absorbed before wire-format constraint 5 refused it at receipt: no
              * substrate query can ever answer for it, so restoring it would re-express and
@@ -254,14 +254,14 @@ final class ProcessEngine {
                         "process " + processName + ": held message at " + channel + "@" + position
                                 + " but the channel is no longer in the declared received-channel set");
             }
-            /**
+            /*
              * Decoded here to refuse a corrupt blob at start rather than at delivery; only
              * the skeleton is retained, the decoded form is reloaded when the hold reaches
              * the head of its buffer.
              */
             OrderingStateCodec.HeldBlob blob = OrderingStateCodec.decodeHeld(value);
 
-            /**
+            /*
              * Everything downstream treats the deque head as the minimum held position, so
              * the scan order the store promises is verified rather than assumed.
              */
@@ -282,7 +282,7 @@ final class ProcessEngine {
                 advanceFedUpTo(channel, past);
             }
         }
-        /**
+        /*
          * The host's start position is the one position it reports (Host obligation 2):
          * everything below it was fed and committed by an earlier execution, or was skipped
          * by the initial position the process was started at. Raising coverage to just
@@ -424,7 +424,7 @@ final class ProcessEngine {
             }
             Long floor = sessionFloor.get(channel);
             if (floor == null || message.position() > floor) {
-                /**
+                /*
                  * Not a feed-order violation: in-execution order is checked against
                  * fedThisExecution above. Coverage above the session floor is only ever
                  * raised by this execution's own receipts, which fedThisExecution already
@@ -755,7 +755,7 @@ final class ProcessEngine {
             }
         }
         if (delivered != null) {
-            /**
+            /*
              * Its causes are needed below, and they may live only in the store: read them
              * before the entry goes.
              */
@@ -805,7 +805,7 @@ final class ProcessEngine {
                             + metadataBudgetBytes + " bytes. The frontier's growth law is documented in"
                             + " docs/model.md.");
         }
-        /**
+        /*
          * A copy per send: the cached bytes are this engine's, and a header handed to a
          * host is the host's to keep or alter.
          */
@@ -865,7 +865,7 @@ final class ProcessEngine {
         Hold hold;
         while ((hold = unpersisted.pollFirst()) != null) {
             if (hold.removed) {
-                /**
+                /*
                  * Delivered within the step that received it: it was never in the store
                  * and must not enter it now.
                  */
@@ -875,7 +875,7 @@ final class ProcessEngine {
                     OrderingStateCodec.encodeHeld(hold.timestamp, hold.key, hold.value, hold.headers, hold.causes));
             hold.persisted = true;
             if (held.get(hold.channel).peekFirst() != hold) {
-                /**
+                /*
                  * Only the head is read before it is delivered; everything behind it waits
                  * in the store and is decoded again on reaching the head.
                  */

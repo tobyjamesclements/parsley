@@ -50,14 +50,14 @@ final class GroupMembershipCommitter implements AutoCloseable {
         props.put(ConsumerConfig.CLIENT_ID_CONFIG, CLIENT_ID_PREFIX + java.util.UUID.randomUUID());
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
-        /**
+        /*
          * The member's subscription must never create a missing received topic: every
          * received topic was resolved by start() moments before this join, so a deletion
          * racing the bootstrap must surface as this join's failure, not be papered over by
          * the metadata request auto-creating an empty impostor.
          */
         props.put(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false);
-        /**
+        /*
          * committed() is a transaction-stable offset fetch regardless of configuration:
          * the consumer sets requireStable on every OffsetFetch it sends (verified in
          * kafka-clients 4.3.1, ConsumerCoordinator#sendOffsetFetchRequest), retrying
@@ -65,7 +65,7 @@ final class GroupMembershipCommitter implements AutoCloseable {
          * isolation.level — this member never fetches a record.
          */
 
-        /**
+        /*
          * This member must vacate the group the moment it closes — the Streams start that
          * follows joins the same group under a different protocol. A static member sends no
          * LeaveGroup on close, so an inherited instance id would hold the group for the full
@@ -82,7 +82,7 @@ final class GroupMembershipCommitter implements AutoCloseable {
         if (sessionTimeout.isEmpty()) {
             props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 10_000);
         } else {
-            /**
+            /*
              * Resolved across the Streams spellings too: a broker may enforce a minimum
              * above the default, and a timeout configured the idiomatic prefixed way must
              * reach this plain consumer or the join is rejected outright.

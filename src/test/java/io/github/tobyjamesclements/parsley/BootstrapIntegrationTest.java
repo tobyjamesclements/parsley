@@ -406,7 +406,7 @@ class BootstrapIntegrationTest {
         }, Duration.ofSeconds(60));
 
         try (Parsley parsley = Parsley.start(config("exr"), p)) {
-            /**
+            /*
              * Nothing has been produced since the stop, so Streams has nothing to commit and
              * the group's offset is the bootstrap's own: coverage (m0 at 0) plus one.
              */
@@ -553,7 +553,7 @@ class BootstrapIntegrationTest {
 
         String changelog = "lostc-lostc-__parsley.ordering-changelog";
         TopicPartition tp = new TopicPartition(changelog, 0);
-        /**
+        /*
          * The operator excursion the refusal guards against: compaction briefly turned
          * off, records purged, the topic never stopping existing.
          */

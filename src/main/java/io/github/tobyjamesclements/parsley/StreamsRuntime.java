@@ -55,7 +55,7 @@ final class StreamsRuntime implements AutoCloseable {
     static final java.time.Duration CORROBORATION_BACKOFF = java.time.Duration.ofMillis(500);
 
     private final Admin admin;
-    /**
+    /*
      * Populated by start() and read by status()/healthy()/close() from monitoring threads,
      * so these are concurrent like failuresByProcess; insertion order is preserved for
      * status reporting.
@@ -68,7 +68,7 @@ final class StreamsRuntime implements AutoCloseable {
     /** Counted down when any process stops or this runtime closes. */
     private final java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(1);
 
-    /**
+    /*
      * Package-private for RecordFailureDiagnosticsTest, which drives recordFailure and
      * reads the merge's outcome directly — the failure path never touches the admin
      * client, so the test passes none. Production construction stays inside start().
@@ -112,7 +112,7 @@ final class StreamsRuntime implements AutoCloseable {
                                 changelog.get().partitions().size())
                         : ChangelogView.ABSENT;
                 Map<byte[], byte[]> orderingState = orderingView.latest();
-                /**
+                /*
                  * Prior state means committed ordering records, not the topic's mere
                  * existence: a task's first committed step wrote the store's version entry,
                  * which compaction retains, so any committed execution leaves records — a
@@ -129,7 +129,7 @@ final class StreamsRuntime implements AutoCloseable {
                 Map<UUID, String> namesById = new HashMap<>();
                 topics.forEach((name, info) -> namesById.put(info.topicId(), name));
 
-                /**
+                /*
                  * The declared names are what let a task's initialisation tell a deleted
                  * received topic from a denied describe; names of upstream topics are
                  * learned as tasks initialise.
@@ -141,7 +141,7 @@ final class StreamsRuntime implements AutoCloseable {
                                 ProcessNode.PUNCTUATION_INTERVAL, config.metadataBudgetBytes()),
                         streamsProperties(config, applicationId));
                 java.time.Duration memberBound = sessionTimeout(clientProps, java.time.Duration.ofSeconds(10));
-                /**
+                /*
                  * A refused join is replaced only while another instance's bootstrap member can
                  * still be lingering: twice its session timeout from here covers the pre-start
                  * wait below and one ungraceful exit. Past that, a member speaking another
@@ -151,7 +151,7 @@ final class StreamsRuntime implements AutoCloseable {
                 long collisionDeadline = System.nanoTime() + 2 * memberBound.toNanos();
                 kafkaStreams.setUncaughtExceptionHandler(exception -> {
                     if (shouldReplaceThread(exception, System.nanoTime(), collisionDeadline)) {
-                        /**
+                        /*
                          * Another instance's bootstrap member is still in the group under the
                          * consumer protocol, so this thread's join was refused. That member
                          * leaves within milliseconds of committing; a replacement thread
@@ -373,13 +373,13 @@ final class StreamsRuntime implements AutoCloseable {
                 && FailClosedException.findIn(latest) != null ? latest : existing;
     }
 
-    /**
+    /*
      * Package-private so RecordFailureDiagnosticsTest can pin the merge wiring and the
      * per-diagnosis log lines directly; production reaches it only through the uncaught
      * exception handler start() installs.
      */
     void recordFailure(String process, Throwable exception) {
-        /**
+        /*
          * A stop the substrate detected but that recurs identically on restart carries its
          * reason into status() like an engine refusal (Operational 1): a supervisor
          * keyed on refusalReason must not read it as a transient and restart forever.
@@ -475,7 +475,7 @@ final class StreamsRuntime implements AutoCloseable {
     }
 
     private static void refuseReservedTopicNames(ParsleyConfig config, List<Process> definitions) {
-        /**
+        /*
          * Composed changelog names must be distinct across every process: process names
          * are distinct, but composition can still collide ("app-orders" + "audit-log" and
          * "app-orders-audit" + "log" both give app-orders-audit-log-changelog), and a
@@ -494,7 +494,7 @@ final class StreamsRuntime implements AutoCloseable {
                         definition.name());
             }
         }
-        /**
+        /*
          * Reserved-namespace containment is not re-checked here: every declared topic came
          * through Topic's constructor, which refuses it, so a runtime re-check would be
          * unreachable and unpinnable. Only the composed-name collision can arise at start.
@@ -768,7 +768,7 @@ final class StreamsRuntime implements AutoCloseable {
             } else {
                 stallDeadline = System.nanoTime() + stallTimeout.toNanos();
                 polled.forEach(record -> {
-                    /**
+                    /*
                      * A held message's body is never read here — the view answers which
                      * channels hold something, not what — so it is kept as a presence
                      * marker, and a tombstone still clears it. Retaining every blob
@@ -781,7 +781,7 @@ final class StreamsRuntime implements AutoCloseable {
                     partitionsWithRecords.add(record.partition());
                 });
             }
-            /**
+            /*
              * A partition that reached its snapshot end stops feeding the loop:
              * records past the snapshot would otherwise keep resetting the stall
              * deadline forever while another partition sits pinned below its end,
@@ -955,7 +955,7 @@ final class StreamsRuntime implements AutoCloseable {
             committer.join(Set.copyOf(ProcessTopology.inputTopics(definition)),
                     sessionTimeout(clientProps, java.time.Duration.ofSeconds(45)).multipliedBy(2));
             Map<TopicPartition, OffsetAndMetadata> committed = committer.committed(received);
-            /**
+            /*
              * Re-checked against the member's fetch: the admin listing above silently
              * omits any partition whose offset has a pending transactional commit
              * (partition-level UNSTABLE_OFFSET_COMMIT is skipped, not failed, by the
@@ -1001,7 +1001,7 @@ final class StreamsRuntime implements AutoCloseable {
             LOG.info("{}: committed initial positions for {}", applicationId, toCommit.keySet());
             return startPositions(received, committed, toCommit);
         } catch (FailClosedException | RetryableStartException e) {
-            /**
+            /*
              * The retryable transient keeps its own diagnosis: wrapping it in the terminal
              * "could not be established" shape would send the operator to a remedy the
              * next attempt makes destructive.

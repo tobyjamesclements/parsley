@@ -327,7 +327,7 @@ class IdentityIntegrationTest {
 
         try (Parsley parsley = Parsley.start(tinyBudget, p)) {
             Map<Channel, Long> big = new java.util.TreeMap<>();
-            /**
+            /*
              * Six single-topic partitions encode to 73 grouped bytes, past the 64-byte
              * budget's raw-length gate (five would land exactly on 64, which the strict
              * gate admits).

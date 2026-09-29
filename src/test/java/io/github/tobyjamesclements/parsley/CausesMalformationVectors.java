@@ -88,7 +88,7 @@ final class CausesMalformationVectors {
         zeroPartitions.put((byte) 1);
         zeroPartitions.putLong(1).putLong(1).put((byte) 0);
 
-        /**
+        /*
          * Count miscounts mutate real encoder output, so the vectors cannot drift from the
          * grammar. At these values every count is a one-byte varint: the topic count at
          * offset 1, the first group's partition count at offset 18. An overstated count
@@ -128,7 +128,7 @@ final class CausesMalformationVectors {
                     buffer.array(), "exceeds the non-negative int range");
         }
 
-        /**
+        /*
          * Snapshot-era flat-grammar shapes: version byte 1 hardcoded, not
          * FORMAT_VERSION, because these bytes are historical constants — the retired flat
          * layout was version, a fixed 4-byte big-endian entry count, then 28-byte entries.
