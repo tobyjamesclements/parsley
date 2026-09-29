@@ -84,3 +84,14 @@ seed reproduces the run exactly.
 Output lands in `target/reports/apidocs`. The Javadoc of `main` is published at
 https://tobyjamesclements.github.io/parsley/ on every push.
 
+## Releasing
+
+Push a tag `v<version>`. The Release workflow sets the POM version from the tag, builds the
+jar with its sources and Javadoc jars, signs them with the project's GPG key, and uploads the
+bundle to the Central Portal, where it waits for a manual publish. Locally, the same
+artifacts build without signing:
+
+```
+./mvnw -Prelease package -DskipTests -Dgpg.skip
+```
+
