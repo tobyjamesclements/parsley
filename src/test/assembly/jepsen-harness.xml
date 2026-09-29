@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The Jepsen harness jar: Parsley, its test tree (the harness, the simulator and the
+  exporters live there) and the runtime dependencies, in one executable jar the Jepsen DB
+  adapter installs on each node. Built by ./mvnw -Pjepsen-harness -DskipTests package.
+-->
+<assembly xmlns="http://maven.apache.org/ASSEMBLY/2.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/ASSEMBLY/2.2.0 http://maven.apache.org/xsd/assembly-2.2.0.xsd">
+  <id>jepsen-harness</id>
+  <formats>
+    <format>jar</format>
+  </formats>
+  <includeBaseDirectory>false</includeBaseDirectory>
+  <fileSets>
+    <fileSet>
+      <directory>${project.build.outputDirectory}</directory>
+      <outputDirectory>/</outputDirectory>
+    </fileSet>
+    <fileSet>
+      <directory>${project.build.testOutputDirectory}</directory>
+      <outputDirectory>/</outputDirectory>
+    </fileSet>
+  </fileSets>
+  <dependencySets>
+    <dependencySet>
+      <outputDirectory>/</outputDirectory>
+      <unpack>true</unpack>
+      <scope>test</scope>
+      <useProjectArtifact>false</useProjectArtifact>
+      <excludes>
+        <!-- The embedded broker and JUnit serve the suite, not the harness. -->
+        <exclude>org.apache.kafka:kafka-test-common-runtime</exclude>
+        <exclude>org.apache.kafka:kafka-streams-test-utils</exclude>
+        <exclude>org.junit.jupiter:*</exclude>
+        <exclude>org.junit.platform:*</exclude>
+        <exclude>org.opentest4j:*</exclude>
+        <exclude>org.apiguardian:*</exclude>
+      </excludes>
+      <unpackOptions>
+        <excludes>
+          <exclude>META-INF/*.SF</exclude>
+          <exclude>META-INF/*.DSA</exclude>
+          <exclude>META-INF/*.RSA</exclude>
+          <exclude>META-INF/versions/**/module-info.class</exclude>
+          <exclude>module-info.class</exclude>
+        </excludes>
+      </unpackOptions>
+    </dependencySet>
+  </dependencySets>
+</assembly>

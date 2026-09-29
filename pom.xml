@@ -197,5 +197,41 @@
         </plugins>
       </build>
     </profile>
+    <!--
+      The Jepsen harness: one executable jar from this tree's main and test classes, for the
+      DB adapter in tobyjamesclements/parsley-jepsen to install on each node.
+      ./mvnw -Pjepsen-harness -DskipTests package builds target/parsley-<version>-jepsen-harness.jar.
+    -->
+    <profile>
+      <id>jepsen-harness</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-assembly-plugin</artifactId>
+            <version>3.7.1</version>
+            <configuration>
+              <descriptors>
+                <descriptor>src/test/assembly/jepsen-harness.xml</descriptor>
+              </descriptors>
+              <archive>
+                <manifest>
+                  <mainClass>io.github.tobyjamesclements.parsley.JepsenHarness</mainClass>
+                </manifest>
+              </archive>
+            </configuration>
+            <executions>
+              <execution>
+                <id>jepsen-harness</id>
+                <phase>package</phase>
+                <goals>
+                  <goal>single</goal>
+                </goals>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
   </profiles>
 </project>

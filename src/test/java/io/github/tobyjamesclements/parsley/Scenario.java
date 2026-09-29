@@ -40,15 +40,41 @@ public final class Scenario {
         final List<String> violations = new ArrayList<>();
     }
 
+    /**
+     * Sees the scenario's events as structured facts rather than journal lines, for the
+     * Jepsen calibration export: every external record with the record it was stamped
+     * from, every injected fault with the refusals it justifies, and the world at the end.
+     * The default does nothing.
+     */
+    public interface Observer extends SimProcess.Observer {
+        default void externalProduced(SimChannel channel, Instance instance, Instance observed) {
+        }
+
+        default void fault(String kind, SimChannel channel, String process, Map<String, Object> details,
+                           Set<FailClosedException.Reason> justifies) {
+        }
+
+        default void finished(SimWorld world, List<SimProcess> processes) {
+        }
+    }
+
+    static final Observer UNOBSERVED = new Observer() {
+    };
+
     public static Result run(long seed, SabotageMode mode) {
         return run(seed, mode, SimProcess.HostFault.NONE);
     }
 
     /** Runs a scenario under an engine sabotage and a host fault together. */
     public static Result run(long seed, SabotageMode mode, SimProcess.HostFault hostFault) {
+        return run(seed, mode, hostFault, UNOBSERVED);
+    }
+
+    /** Runs a scenario under observation; the observer changes nothing about the run. */
+    public static Result run(long seed, SabotageMode mode, SimProcess.HostFault hostFault, Observer observer) {
         List<String> journal = new ArrayList<>();
         try {
-            return runInner(seed, mode, hostFault, journal);
+            return runInner(seed, mode, hostFault, journal, observer);
         } catch (Throwable t) {
             return new Result(List.of("threw: " + t + "\n  journal tail:\n    " + tail(journal, 40)), null, t,
                     List.copyOf(journal));
@@ -56,7 +82,7 @@ public final class Scenario {
     }
 
     private static Result runInner(long seed, SabotageMode mode, SimProcess.HostFault hostFault,
-                                   List<String> journal) {
+                                   List<String> journal, Observer observer) {
         Random rng = new Random(seed);
         SimWorld world = new SimWorld(seed);
         Oracle oracle = new Oracle();
@@ -86,13 +112,14 @@ public final class Scenario {
             SimProcess process = new SimProcess("p" + i, world, oracle, received, sends,
                     delivered -> emitTargets(delivered, sends), mode);
             process.hostFault(hostFault);
+            process.observe(observer);
             processes.add(process);
             process.start();
         }
 
         int seedMessages = 4 + rng.nextInt(8);
         for (int i = 0; i < seedMessages; i++) {
-            produceExternal(world, channels.get(rng.nextInt(channelCount)), rng, "x" + i);
+            produceExternal(world, channels.get(rng.nextInt(channelCount)), rng, "x" + i, observer);
         }
 
         int events = 250 + rng.nextInt(250);
@@ -104,7 +131,7 @@ public final class Scenario {
                     journal.add(p.name + " restart attempt");
                     guard(p, p::start, journal, ledger);
                 } else {
-                    redeclareEvent(p, channels, rng, journal, ledger);
+                    redeclareEvent(p, channels, rng, journal, ledger, observer);
                 }
                 continue;
             }
@@ -121,10 +148,14 @@ public final class Scenario {
                 if (rng.nextInt(5) == 0) {
                     journal.add("external corrupt -> " + target.name);
                     ledger.justifiable.add(FailClosedException.Reason.UNDECODABLE_METADATA);
-                    corrupted.add(produceCorrupt(world, target, "g" + e));
+                    CorruptSpot spot = produceCorrupt(world, target, "g" + e);
+                    corrupted.add(spot);
+                    observer.fault("corrupt", target, null, Map.of("position", spot.position()),
+                            Set.of(FailClosedException.Reason.UNDECODABLE_METADATA));
+                    observer.externalProduced(target, spot.instance(), null);
                 } else {
                     journal.add("external -> " + target.name);
-                    produceExternal(world, target, rng, "x" + seedMessages + "e" + e);
+                    produceExternal(world, target, rng, "x" + seedMessages + "e" + e, observer);
                 }
             } else if (roll < 67) {
                 SimChannel channel = channels.get(rng.nextInt(channelCount));
@@ -147,19 +178,20 @@ public final class Scenario {
                 guard(p, p::start, journal, ledger);
             } else if (roll < 88) {
                 journal.add(p.name + " rewind");
-                rewind(p, world, rng, journal, ledger);
+                rewind(p, world, rng, journal, ledger, observer);
             } else if (roll < 90) {
-                truncateEvent(world, processes, channels, rng, journal, ledger);
+                truncateEvent(world, processes, channels, rng, journal, ledger, observer);
             } else if (roll < 92) {
-                killEvent(world, processes, channels, rng, journal, ledger);
+                killEvent(world, processes, channels, rng, journal, ledger, observer);
             } else if (roll < 96) {
-                recreateEvent(world, processes, channels, rng, journal, ledger);
+                recreateEvent(world, processes, channels, rng, journal, ledger, observer);
             } else {
-                redeclareEvent(p, channels, rng, journal, ledger);
+                redeclareEvent(p, channels, rng, journal, ledger, observer);
             }
         }
 
         quiesce(processes, ledger);
+        observer.finished(world, processes);
 
         oracle.finalChecks();
 
@@ -255,16 +287,20 @@ public final class Scenario {
         }
     }
 
-    private static void rewind(SimProcess p, SimWorld world, Random rng, List<String> journal, RefusalLedger ledger) {
+    private static void rewind(SimProcess p, SimWorld world, Random rng, List<String> journal, RefusalLedger ledger,
+                               Observer observer) {
         p.stopCleanly();
         List<SimChannel> received = iterate(p.receivedChannels());
         SimChannel channel = received.get(rng.nextInt(received.size()));
-        p.rewindCommitted(channel, rng.nextInt(4) + 1);
+        int back = rng.nextInt(4) + 1;
+        p.rewindCommitted(channel, back);
+        observer.fault("rewind", channel, p.name, Map.of("back", (long) back, "to", p.committedNextRead(channel)),
+                Set.of());
         guard(p, p::start, journal, ledger);
     }
 
     private static void truncateEvent(SimWorld world, List<SimProcess> processes, List<SimChannel> channels,
-                                      Random rng, List<String> journal, RefusalLedger ledger) {
+                                      Random rng, List<String> journal, RefusalLedger ledger, Observer observer) {
         /*
          * Biased toward channels some running process holds messages from, as killEvent is:
          * retention crossing a held message is the shape the engine once refused and now delivers
@@ -306,6 +342,8 @@ public final class Scenario {
         journal.add("truncate " + channel.name + " to " + target);
         ledger.justifiable.add(FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD);
         world.truncate(channel, target);
+        observer.fault("truncate", channel, null, Map.of("to", target),
+                Set.of(FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD));
     }
 
     private static List<SimChannel> destructibleChannels(List<SimProcess> processes, List<SimChannel> channels) {
@@ -321,7 +359,7 @@ public final class Scenario {
     }
 
     private static void killEvent(SimWorld world, List<SimProcess> processes, List<SimChannel> channels,
-                                  Random rng, List<String> journal, RefusalLedger ledger) {
+                                  Random rng, List<String> journal, RefusalLedger ledger, Observer observer) {
         List<SimChannel> eligible = destructibleChannels(processes, channels);
         if (eligible.isEmpty()) {
             return;
@@ -337,6 +375,8 @@ public final class Scenario {
         journal.add("kill topic of " + victim.name);
         ledger.justifiable.add(FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES);
         world.killChannel(victim);
+        observer.fault("kill", victim, null, Map.of("topic", victim.topicName),
+                Set.of(FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES));
         reinitialiseReceivers(processes, victim, journal, ledger);
     }
 
@@ -368,7 +408,7 @@ public final class Scenario {
     }
 
     private static void recreateEvent(SimWorld world, List<SimProcess> processes, List<SimChannel> channels,
-                                      Random rng, List<String> journal, RefusalLedger ledger) {
+                                      Random rng, List<String> journal, RefusalLedger ledger, Observer observer) {
         List<SimChannel> eligible = destructibleChannels(processes, channels);
         if (eligible.isEmpty()) {
             return;
@@ -390,11 +430,21 @@ public final class Scenario {
         List<SimChannel> fresh = world.recreateTopic(victim);
         channels.removeIf(c -> c.id().topicId().equals(victim.id().topicId()));
         channels.addAll(fresh);
+        /*
+         * The receivers re-initialise at once, so a step committed afterwards while the dead
+         * incarnation is still received is a step on the wrong log; the fault carries both
+         * ids so an export-based checker can make the judgement commitStep makes here.
+         */
+        observer.fault("recreate", victim, null, Map.of("topic", victim.topicName,
+                "old", victim.id().topicId().toString(), "new", fresh.get(0).id().topicId().toString(),
+                "reinitialised", true),
+                java.util.EnumSet.of(FailClosedException.Reason.CHANNEL_IDENTITY_CHANGED,
+                        FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES));
         reinitialiseReceivers(processes, victim, journal, ledger);
     }
 
     private static void redeclareEvent(SimProcess p, List<SimChannel> channels, Random rng, List<String> journal,
-                                       RefusalLedger ledger) {
+                                       RefusalLedger ledger, Observer observer) {
         if (p.isRunning()) {
             p.stopCleanly();
         }
@@ -407,10 +457,13 @@ public final class Scenario {
             SimChannel removed = declaration.remove(rng.nextInt(declaration.size()));
             journal.add(p.name + " redeclare without " + removed.name);
             ledger.justifiable.add(FailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES);
+            observer.fault("redeclare-remove", removed, p.name, Map.of("topic", removed.topicName),
+                    Set.of(FailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES));
         } else if (!absent.isEmpty()) {
             SimChannel added = absent.get(rng.nextInt(absent.size()));
             declaration.add(added);
             journal.add(p.name + " redeclare adding " + added.name);
+            observer.fault("redeclare-add", added, p.name, Map.of("topic", added.topicName), Set.of());
         } else {
             journal.add(p.name + " redeclare unchanged");
         }
@@ -418,15 +471,16 @@ public final class Scenario {
         guard(p, p::start, journal, ledger);
     }
 
-    private static void produceExternal(SimWorld world, SimChannel target, Random rng, String uid) {
+    private static void produceExternal(SimWorld world, SimChannel target, Random rng, String uid, Observer observer) {
         if (rng.nextBoolean()) {
-            world.appendExternal(target, (channelId, pos) -> new Instance(
+            Instance appended = world.appendExternal(target, (channelId, pos) -> new Instance(
                     channelId, pos, uid, rng.nextBoolean() ? uid.getBytes() : null, uid.getBytes(),
                     List.of(new Header("app.header", new byte[] {1})), Causes.none(), java.util.Set.of()));
+            observer.externalProduced(target, appended, null);
         } else {
             Instance observed = randomCommitted(world, rng);
             if (observed == null) {
-                produceExternalPlain(world, target, uid);
+                observer.externalProduced(target, produceExternalPlain(world, target, uid), null);
                 return;
             }
             Map<Channel, Long> meta = new TreeMap<>(observed.meta.byChannel());
@@ -434,9 +488,10 @@ public final class Scenario {
             java.util.Set<Instance> causes = new java.util.HashSet<>(observed.trueCauses);
             causes.add(observed);
             byte[] header = CausesCodec.encode(Causes.of(meta));
-            world.appendExternal(target, (channelId, pos) -> new Instance(
+            Instance appended = world.appendExternal(target, (channelId, pos) -> new Instance(
                     channelId, pos, uid, uid.getBytes(), uid.getBytes(),
                     List.of(new Header(CausesCodec.HEADER_KEY, header)), Causes.of(meta), causes));
+            observer.externalProduced(target, appended, observed);
         }
     }
 
@@ -448,8 +503,8 @@ public final class Scenario {
         return new CorruptSpot(target, appended.position, appended);
     }
 
-    private static void produceExternalPlain(SimWorld world, SimChannel target, String uid) {
-        world.appendExternal(target, (channelId, pos) -> new Instance(
+    private static Instance produceExternalPlain(SimWorld world, SimChannel target, String uid) {
+        return world.appendExternal(target, (channelId, pos) -> new Instance(
                 channelId, pos, uid, uid.getBytes(), uid.getBytes(), List.of(), Causes.none(), java.util.Set.of()));
     }
 

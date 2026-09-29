@@ -27,6 +27,35 @@ public final class SimProcess {
     public enum FeedResult { FED, NOTHING }
 
     /**
+     * Sees what the simulated host does, for the Jepsen calibration export
+     * ({@link JepsenSimulatorExport}): each delivery with the frontier the step expressed and
+     * the sends it made, each commit with the read positions it committed, each abort, each
+     * start and each refusal. The default does nothing, so the suite runs unobserved.
+     */
+    public interface Observer {
+        default void started(String process, Map<Channel, Long> startPositions) {
+        }
+
+        default void delivered(String process, Instance instance, byte[] causesHeader, List<String> effectTopics,
+                               List<String> effectUids) {
+        }
+
+        default void committed(String process, Map<Channel, Long> committedNextRead) {
+        }
+
+        default void aborted(String process) {
+        }
+
+        default void refused(String process, FailClosedException failure) {
+        }
+    }
+
+    static final Observer UNOBSERVED = new Observer() {
+    };
+
+    private Observer observer = UNOBSERVED;
+
+    /**
      * A deliberate host fault, the host-side counterpart of {@link EngineTestFactory.SabotageMode}:
      * the engine no longer checks retention, so the proof that the harness catches a host
      * sailing past discarded positions has to break the host, not the engine.
@@ -98,6 +127,11 @@ public final class SimProcess {
         this.hostFault = fault;
     }
 
+    /** Attaches an observer; the export sets one, the suite never does. */
+    public void observe(Observer observer) {
+        this.observer = observer;
+    }
+
     /**
      * Starts an execution: builds the engine over the committed store with the host's
      * committed read positions as its start positions, then reports channel identity — the
@@ -130,6 +164,7 @@ public final class SimProcess {
             crash();
             throw e;
         }
+        observer.started(name, Map.copyOf(startPositions));
     }
 
     /**
@@ -154,11 +189,13 @@ public final class SimProcess {
         workingNextRead.clear();
         workingNextRead.putAll(committedNextRead);
         engine = null;
+        observer.aborted(name);
     }
 
     public void failClosed(FailClosedException e) {
         crash();
         failure = e;
+        observer.refused(name, e);
     }
 
     public boolean failedClosed() {
@@ -204,6 +241,7 @@ public final class SimProcess {
         oracle.commitStep(name, List.copyOf(stepAppends));
         stepAppends.clear();
         openTxn = null;
+        observer.committed(name, Map.copyOf(committedNextRead));
         /*
          * SPEC Assumption 2, judged at the moment it is breached rather than at the end of
          * the run: a step committed while a received channel is a dead incarnation whose
@@ -279,8 +317,20 @@ public final class SimProcess {
             engine.markDelivered(message.channel(), message.position());
             oracle.onDelivered(name, instance, settledCauses(instance));
             delivered++;
+            List<String> effectTopics = new ArrayList<>();
+            List<String> effectUids = new ArrayList<>();
             for (SimChannel target : logic.emitTargets(instance)) {
-                send(target, instance.uid + ">" + name + ">" + target.name);
+                String uid = instance.uid + ">" + name + ">" + target.name;
+                send(target, uid);
+                effectTopics.add(target.topicName);
+                effectUids.add(uid);
+            }
+            if (observer != UNOBSERVED) {
+                /*
+                 * The frontier the step expressed, as the harness's trace record carries it:
+                 * the same bytes every send of the step was stamped with.
+                 */
+                observer.delivered(name, instance, engine.causesHeaderForSend(), effectTopics, effectUids);
             }
         }
     }
