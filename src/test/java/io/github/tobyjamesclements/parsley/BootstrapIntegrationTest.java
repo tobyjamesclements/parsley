@@ -1,0 +1,750 @@
+package io.github.tobyjamesclements.parsley;
+
+import org.apache.kafka.common.test.KafkaClusterTestKit;
+import org.apache.kafka.clients.admin.Admin;
+import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.consumer.CommitFailedException;
+import org.apache.kafka.clients.consumer.ConsumerConfig;
+import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.OffsetAndMetadata;
+import org.apache.kafka.common.TopicPartition;
+import org.apache.kafka.common.header.internals.RecordHeader;
+import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+import org.apache.kafka.common.serialization.Serdes;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.file.Path;
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
+
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+@Timeout(value = 300, unit = TimeUnit.SECONDS)
+/**
+ * Establishes the start sequence against a real broker.
+ *
+ * <p>Covers position pre-commit under group fencing, expired positions resumed at the covered
+ * position plus one and judged by the first fetch, refusal where held messages are stranded,
+ * and a width-changing restart.
+ */
+class BootstrapIntegrationTest {
+    private static KafkaClusterTestKit cluster;
+    private static Admin admin;
+
+    @TempDir
+    static Path stateDir;
+
+    @BeforeAll
+    static void startCluster() throws Exception {
+        cluster = ClusterTestSupport.startCluster(Map.of("group.min.session.timeout.ms", "1000"));
+        admin = Admin.create(Map.of("bootstrap.servers", cluster.bootstrapServers()));
+    }
+
+    @AfterAll
+    static void stopCluster() throws Exception {
+        ClusterTestSupport.stopCluster(cluster, admin);
+    }
+
+    private static void createTopics(NewTopic... topics) throws Exception {
+        admin.createTopics(List.of(topics)).all().get(30, TimeUnit.SECONDS);
+    }
+
+    private static ParsleyConfig config(String prefix) {
+        return ParsleyConfig.builder(cluster.bootstrapServers(), prefix)
+                .stateDir(stateDir.resolve(prefix).toString())
+                .build();
+    }
+
+    private static void produce(String topic, Integer partition, String key, String value, RecordHeader... headers) {
+        ClusterTestSupport.produce(cluster.bootstrapServers(), topic, partition, key, value, headers);
+    }
+
+    private static UUID topicId(String topic) throws Exception {
+        return ClusterTestSupport.topicId(admin, topic);
+    }
+
+    private static void await(String what, BooleanSupplier condition, Duration timeout) {
+        ClusterTestSupport.await(what, condition, timeout);
+    }
+
+    private static void awaitCommitted(String groupId, String topic, long atLeast) {
+        ClusterTestSupport.awaitCommitted(admin, groupId, topic, atLeast);
+    }
+
+    private static RecordHeader causesHeader(Map<Channel, Long> causes) {
+        return new RecordHeader(CausesCodec.HEADER_KEY, CausesCodec.encode(Causes.of(causes)));
+    }
+
+    /**
+     * Bootstrap membership stays dynamic: a static-membership config cannot defeat
+     * leave-on-close. A static member sends no LeaveGroup when closed, so its slot would
+     * hold the group — under the consumer protocol — for the full session timeout, failing
+     * the Streams start that immediately follows bootstrap.
+     */
+    @Test
+    void bootstrapMemberLeavesOnCloseDespiteStaticMembershipConfig() throws Exception {
+        createTopics(new NewTopic("m2-in", 1, (short) 1));
+        Map<String, Object> clientProps = new HashMap<>();
+        clientProps.put("bootstrap.servers", cluster.bootstrapServers());
+        clientProps.put(ConsumerConfig.GROUP_INSTANCE_ID_CONFIG, "static-1");
+        clientProps.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 60_000);
+
+        try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, "m2-group")) {
+            committer.join(Set.of("m2-in"), Duration.ofSeconds(30));
+        }
+
+        await("the closed bootstrap member to have left the group", () -> {
+            try {
+                return admin.describeConsumerGroups(List.of("m2-group")).all()
+                        .get(30, TimeUnit.SECONDS).get("m2-group").members().isEmpty();
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, Duration.ofSeconds(10));
+    }
+
+    /** Stale bootstrap commit is fenced by group membership. */
+    @Test
+    void staleBootstrapCommitIsFencedByGroupMembership() throws Exception {
+        createTopics(new NewTopic("fence-in", 1, (short) 1));
+        TopicPartition tp = new TopicPartition("fence-in", 0);
+        Map<String, Object> clientProps = new HashMap<>();
+        clientProps.put("bootstrap.servers", cluster.bootstrapServers());
+        clientProps.put(ConsumerConfig.MAX_POLL_INTERVAL_MS_CONFIG, 1000);
+        clientProps.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 1001);
+        clientProps.put(ConsumerConfig.HEARTBEAT_INTERVAL_MS_CONFIG, 333);
+
+        try (GroupMembershipCommitter stale = new GroupMembershipCommitter(clientProps, "fence-group")) {
+            stale.join(Set.of("fence-in"), Duration.ofSeconds(30));
+            stale.committed(Set.of(tp));
+
+            Map<String, Object> newerProps = new HashMap<>(clientProps);
+            newerProps.put(ConsumerConfig.GROUP_ID_CONFIG, "fence-group");
+            newerProps.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
+            try (var newer = new KafkaConsumer<>(newerProps,
+                    new ByteArrayDeserializer(), new ByteArrayDeserializer())) {
+                newer.subscribe(List.of("fence-in"));
+                await("the newer lifetime to be assigned", () -> {
+                    newer.poll(Duration.ofMillis(100));
+                    return !newer.assignment().isEmpty();
+                }, Duration.ofSeconds(30));
+                newer.commitSync(Map.of(tp, new OffsetAndMetadata(7)));
+            }
+
+            assertThrows(CommitFailedException.class,
+                    () -> stale.commit(Map.of(tp, new OffsetAndMetadata(0))),
+                    "a stale membership's commit must be rejected by the broker's generation fencing");
+        }
+        var committed = admin.listConsumerGroupOffsets("fence-group").partitionsToOffsetAndMetadata()
+                .get(30, TimeUnit.SECONDS);
+        assertEquals(7, committed.get(tp).offset(), "the newer lifetime's offsets stand untouched");
+    }
+
+    /**
+     * The ordering changelog is created compacted. Changelog restore — and the F2 refusal's
+     * premise that the version entry at the head of the changelog outlives every rewrite —
+     * both rest on this policy, so its presence is asserted rather than assumed.
+     */
+    @Test
+    void orderingChangelogIsCreatedCompacted() throws Exception {
+        createTopics(new NewTopic("clog-in", 1, (short) 1));
+        Topic<String, String> in = Topic.of("clog-in", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process p = Process.named("pc")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("clog"), p)) {
+            produce("clog-in", null, "k", "v");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+        }
+
+        var resource = new org.apache.kafka.common.config.ConfigResource(
+                org.apache.kafka.common.config.ConfigResource.Type.TOPIC,
+                "clog-pc-__parsley.ordering-changelog");
+        var config = admin.describeConfigs(List.of(resource)).all().get(30, TimeUnit.SECONDS).get(resource);
+        assertEquals("compact",
+                config.get(org.apache.kafka.common.config.TopicConfig.CLEANUP_POLICY_CONFIG).value(),
+                "the ordering changelog must be compacted; state restore depends on it");
+    }
+
+    /**
+     * Expired offsets resume from the ordering state's coverage, never the declared LATEST
+     * (D36 as D115 narrows it): a process with prior state resumes at the covered position
+     * plus one, so the record produced while it was stopped delivers, history the first
+     * execution skipped stays skipped, and what it delivered is not delivered again.
+     */
+    @Test
+    void expiredOffsetsResumeFromCoverageNotTheDeclaredLatest() throws Exception {
+        createTopics(new NewTopic("ex-in", 1, (short) 1));
+        produce("ex-in", null, "k", "early");
+        Topic<String, String> in = Topic.of("ex-in", Serdes.String(), Serdes.String())
+                .startingAt(Topic.InitialPosition.LATEST);
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process p = Process.named("ex")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("ex"), p)) {
+            produce("ex-in", null, "k", "live");
+            await("the live record to deliver", () -> delivered.contains("live"), Duration.ofSeconds(60));
+            assertFalse(delivered.contains("early"), "LATEST on a genuine first start skips history");
+            awaitCommitted("ex-ex", "ex-in", 2);
+        }
+
+        await("the group's offsets to be deletable", () -> {
+            try {
+                admin.deleteConsumerGroupOffsets("ex-ex", Set.of(new TopicPartition("ex-in", 0)))
+                        .all().get(10, TimeUnit.SECONDS);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }, Duration.ofSeconds(60));
+        produce("ex-in", null, "k", "while-stopped");
+
+        try (Parsley parsley = Parsley.start(config("ex"), p)) {
+            await("the record produced while stopped to deliver",
+                    () -> delivered.contains("while-stopped"), Duration.ofSeconds(60));
+            assertEquals(1, delivered.stream().filter("live"::equals).count(),
+                    "re-fed history is dropped by the session floor, not redelivered");
+            assertFalse(delivered.contains("early"),
+                    "positions below the first execution's baseline stay covered");
+        }
+    }
+
+    /**
+     * An expired committed position past retention refuses at the fetch (D115): the
+     * bootstrap resumes the partition at the ordering state's covered position plus one,
+     * Kafka Streams' first fetch of it finds the position below the log start, and
+     * {@code auto.offset.reset=none} stops the process with POSITIONS_DISCARDED_UNREAD in
+     * {@code status()} rather than skipping the gap (SPEC Safety 8, D9/D81/D109). Nothing
+     * past the discarded positions is delivered. D74's start-time comparison against the
+     * log start used to refuse this from {@code start()} itself; the fetch is now the one
+     * judge of retention, and there is no other.
+     */
+    @Test
+    void expiredOffsetsBeyondRetentionRefuseAtTheFetchRatherThanAbsorbTheGap() throws Exception {
+        createTopics(new NewTopic("exd-in", 1, (short) 1));
+        Topic<String, String> in = Topic.of("exd-in", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process p = Process.named("exd")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("exd"), p)) {
+            produce("exd-in", null, "k", "m0");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+            awaitCommitted("exd-exd", "exd-in", 1);
+        }
+
+        produce("exd-in", null, "k", "m1");
+        produce("exd-in", null, "k", "m2");
+        await("the group's offsets to be deletable", () -> {
+            try {
+                admin.deleteConsumerGroupOffsets("exd-exd", Set.of(new TopicPartition("exd-in", 0)))
+                        .all().get(10, TimeUnit.SECONDS);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }, Duration.ofSeconds(60));
+        admin.deleteRecords(Map.of(new TopicPartition("exd-in", 0),
+                        org.apache.kafka.clients.admin.RecordsToDelete.beforeOffset(3)))
+                .all().get(30, TimeUnit.SECONDS);
+
+        Parsley parsley = Parsley.start(config("exd"), p);
+        try {
+            await("the first fetch at the resumed position to refuse", () -> {
+                var status = parsley.status().get("exd");
+                return status != null && status.refusalReason().isPresent();
+            }, Duration.ofSeconds(120));
+            assertEquals(FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
+                    parsley.status().get("exd").refusalReason().orElseThrow(),
+                    "the consumer's out-of-range stop names Safety 8's condition, not a generic failure");
+            assertEquals(List.of("m0"), List.copyOf(delivered), "nothing may be delivered past the discarded positions");
+        } finally {
+            parsley.close();
+        }
+        var committed = admin.listConsumerGroupOffsets("exd-exd").partitionsToOffsetAndMetadata()
+                .get(30, TimeUnit.SECONDS).get(new TopicPartition("exd-in", 0));
+        assertEquals(1L, committed.offset(),
+                "the bootstrap resumed at the covered position plus one, and the fetch judged it");
+    }
+
+    /**
+     * A received partition an earlier execution never read from — bootstrapped at 0, so it
+     * covered nothing — resumes at 0 after its offset expires, never at the substrate's
+     * earliest (D115, corrected by the D115 review): the earliest position may have moved
+     * past records the process never read, and taking it would treat them as fed. Here
+     * retention has passed 0, so the resumed fetch refuses with POSITIONS_DISCARDED_UNREAD
+     * rather than silently absorbing the discarded records, and the bootstrap's commit is
+     * 0 under its stamp.
+     */
+    @Test
+    void aNeverFedReceivedPartitionResumesAtZeroAndRefusesWhereRetentionPassedIt() throws Exception {
+        createTopics(new NewTopic("nf-a", 1, (short) 1), new NewTopic("nf-b", 1, (short) 1));
+        Topic<String, String> a = Topic.of("nf-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("nf-b", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process p = Process.named("nf")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .receives(b, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("nf"), p)) {
+            produce("nf-a", null, "k", "a0");
+            await("the message on nf-a to deliver", () -> delivered.contains("a0"), Duration.ofSeconds(120));
+            awaitCommitted("nf-nf", "nf-a", 1);
+        }
+
+        await("the group's offsets to be deletable", () -> {
+            try {
+                admin.deleteConsumerGroupOffsets("nf-nf",
+                        Set.of(new TopicPartition("nf-a", 0), new TopicPartition("nf-b", 0)))
+                        .all().get(10, TimeUnit.SECONDS);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }, Duration.ofSeconds(60));
+        for (int i = 0; i < 4; i++) {
+            produce("nf-b", null, "k", "b" + i);
+        }
+        admin.deleteRecords(Map.of(new TopicPartition("nf-b", 0),
+                        org.apache.kafka.clients.admin.RecordsToDelete.beforeOffset(2)))
+                .all().get(30, TimeUnit.SECONDS);
+
+        Parsley parsley = Parsley.start(config("nf"), p);
+        try {
+            await("the fetch at the never-fed partition's resumed position to refuse", () -> {
+                var status = parsley.status().get("nf");
+                return status != null && status.refusalReason().isPresent();
+            }, Duration.ofSeconds(120));
+            assertEquals(FailClosedException.Reason.POSITIONS_DISCARDED_UNREAD,
+                    parsley.status().get("nf").refusalReason().orElseThrow(),
+                    "records the process never read were discarded: the fetch at 0 refuses");
+            assertEquals(List.of("a0"), List.copyOf(delivered),
+                    "nothing from nf-b delivers: b2 and b3 lie past positions never read");
+            var resumed = admin.listConsumerGroupOffsets("nf-nf").partitionsToOffsetAndMetadata()
+                    .get(30, TimeUnit.SECONDS).get(new TopicPartition("nf-b", 0));
+            assertEquals(0L, resumed.offset(),
+                    "the bootstrap resumed the never-fed partition at 0, not at the substrate's earliest of 2");
+            assertEquals(StreamsRuntime.BOOTSTRAP_OFFSET_STAMP, resumed.metadata(),
+                    "the position was committed by the bootstrap, under its stamp");
+        } finally {
+            parsley.close();
+        }
+    }
+
+    /**
+     * An expired committed position within retention resumes at the covered position plus
+     * one (D115): the bootstrap's own commit, read before Kafka Streams has anything to
+     * commit over it, is exactly coverage plus one under its stamp — the substrate's
+     * earliest, D36's old fallback, would be 0 — and the records produced after the resume
+     * deliver once each while nothing delivered before the stop delivers again. The
+     * declared initial position is not consulted: a process with prior state resumes, it
+     * does not start.
+     */
+    @Test
+    void expiredOffsetsWithinRetentionResumeAtTheCoveredPositionPlusOne() throws Exception {
+        createTopics(new NewTopic("exr-in", 1, (short) 1));
+        Topic<String, String> in = Topic.of("exr-in", Serdes.String(), Serdes.String())
+                .startingAt(Topic.InitialPosition.LATEST);
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process p = Process.named("exr")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("exr"), p)) {
+            produce("exr-in", null, "k", "m0");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+            awaitCommitted("exr-exr", "exr-in", 1);
+        }
+
+        await("the group's offsets to be deletable", () -> {
+            try {
+                admin.deleteConsumerGroupOffsets("exr-exr", Set.of(new TopicPartition("exr-in", 0)))
+                        .all().get(10, TimeUnit.SECONDS);
+                return true;
+            } catch (Exception e) {
+                return false;
+            }
+        }, Duration.ofSeconds(60));
+
+        try (Parsley parsley = Parsley.start(config("exr"), p)) {
+            // Nothing has been produced since the stop, so Streams has nothing to commit and
+            // the group's offset is the bootstrap's own: coverage (m0 at 0) plus one.
+            var resumed = admin.listConsumerGroupOffsets("exr-exr").partitionsToOffsetAndMetadata()
+                    .get(30, TimeUnit.SECONDS).get(new TopicPartition("exr-in", 0));
+            assertEquals(1L, resumed.offset(),
+                    "the bootstrap resumed at the covered position plus one, not the substrate's earliest");
+            assertEquals(StreamsRuntime.BOOTSTRAP_OFFSET_STAMP, resumed.metadata(),
+                    "the position was committed by the bootstrap, under its stamp");
+
+            produce("exr-in", null, "k", "m1");
+            produce("exr-in", null, "k", "m2");
+            await("the records produced after the resume to deliver",
+                    () -> delivered.contains("m2"), Duration.ofSeconds(60));
+            assertEquals(List.of("m0", "m1", "m2"), List.copyOf(delivered),
+                    "m0 once, m1 and m2 once each, and the declared LATEST never consulted");
+            assertTrue(parsley.healthy(), "a resume within retention is not a refusal");
+            awaitCommitted("exr-exr", "exr-in", 3);
+        }
+    }
+
+    /**
+     * Committed read positions stamped by a Kafka Streams execution, with no ordering
+     * changelog behind them, mean the state of the most recent committed step has been
+     * lost: resuming would rebuild an empty engine and silently under-express every cause
+     * delivered before the loss. The contradiction is locally detectable at start, so it
+     * must refuse (SPEC Host obligations preamble) rather than degrade. The shape assert
+     * also pins the refusal's second look being a fresh describe: a recheck fed the stale
+     * first view would misname this deleted topic as an emptied partition.
+     */
+    @Test
+    void lostOrderingChangelogWithSurvivingOffsetsRefusesToStart() throws Exception {
+        createTopics(new NewTopic("lost-in", 1, (short) 1));
+        Topic<String, String> in = Topic.of("lost-in", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process p = Process.named("lost")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("lost"), p)) {
+            produce("lost-in", null, "k", "m0");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+            awaitCommitted("lost-lost", "lost-in", 1);
+        }
+
+        String changelog = "lost-lost-__parsley.ordering-changelog";
+        admin.deleteTopics(List.of(changelog)).all().get(30, TimeUnit.SECONDS);
+        await("the changelog deletion to propagate", () -> {
+            try {
+                admin.describeTopics(List.of(changelog)).allTopicNames().get(10, TimeUnit.SECONDS);
+                return false;
+            } catch (Exception e) {
+                return e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
+            }
+        }, Duration.ofSeconds(30));
+
+        FailClosedException e = assertThrows(FailClosedException.class,
+                () -> Parsley.start(config("lost"), p),
+                "surviving Streams-stamped offsets without their changelog mean committed state was lost");
+        assertEquals(FailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertTrue(e.getMessage().contains("this process's ordering-store changelog does not exist"),
+                "the diagnosis names the missing-topic shape the recheck's fresh describe"
+                        + " corroborated, not the emptied shape a stale first view would report: "
+                        + e.getMessage());
+    }
+
+    /**
+     * The lost-state scan covers every group offset, not only the declared partitions: a
+     * declaration change alongside the changelog loss must not hide a formerly-received
+     * partition's Streams-stamped evidence. The shape assert also pins the refusal's
+     * second look being a fresh describe, as in the test above.
+     */
+    @Test
+    void lostChangelogWithOffsetsOnAFormerlyReceivedTopicRefusesToStart() throws Exception {
+        createTopics(new NewTopic("lostb-a", 1, (short) 1), new NewTopic("lostb-b", 1, (short) 1));
+        Topic<String, String> a = Topic.of("lostb-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("lostb-b", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process receivingA = Process.named("lostb")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("lostb"), receivingA)) {
+            produce("lostb-a", null, "k", "m0");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+            awaitCommitted("lostb-lostb", "lostb-a", 1);
+        }
+
+        String changelog = "lostb-lostb-__parsley.ordering-changelog";
+        admin.deleteTopics(List.of(changelog)).all().get(30, TimeUnit.SECONDS);
+        await("the changelog deletion to propagate", () -> {
+            try {
+                admin.describeTopics(List.of(changelog)).allTopicNames().get(10, TimeUnit.SECONDS);
+                return false;
+            } catch (Exception e) {
+                return e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
+            }
+        }, Duration.ofSeconds(30));
+
+        Process receivingB = Process.named("lostb")
+                .receives(b, (d, s) -> Effects.none())
+                .build();
+        FailClosedException e = assertThrows(FailClosedException.class,
+                () -> Parsley.start(config("lostb"), receivingB),
+                "the formerly-received partition's stamped offsets are the evidence of the loss");
+        assertEquals(FailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertTrue(e.getMessage().contains("this process's ordering-store changelog does not exist"),
+                "the diagnosis names the missing-topic shape the recheck's fresh describe"
+                        + " corroborated, not the emptied shape a stale first view would report: "
+                        + e.getMessage());
+    }
+
+    /**
+     * The changelog topic surviving with its records purged carries no more state than a
+     * deleted one: the version entry every committed step's transaction wrote is gone, so
+     * the surviving Streams-stamped offsets are evidence of a committed step whose state
+     * cannot be restored. Keying prior state on the topic's mere existence let this shape
+     * resume mid-log with an empty engine; it must refuse exactly like the deleted shape
+     * (D84), and the diagnosis must name the shape it found.
+     */
+    @Test
+    void emptiedChangelogWithSurvivingOffsetsRefusesToStart() throws Exception {
+        createTopics(new NewTopic("lostc-in", 1, (short) 1));
+        Topic<String, String> in = Topic.of("lostc-in", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process p = Process.named("lostc")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("lostc"), p)) {
+            produce("lostc-in", null, "k", "m0");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+            awaitCommitted("lostc-lostc", "lostc-in", 1);
+        }
+
+        String changelog = "lostc-lostc-__parsley.ordering-changelog";
+        TopicPartition tp = new TopicPartition(changelog, 0);
+        // The operator excursion the refusal guards against: compaction briefly turned
+        // off, records purged, the topic never stopping existing.
+        var resource = new org.apache.kafka.common.config.ConfigResource(
+                org.apache.kafka.common.config.ConfigResource.Type.TOPIC, changelog);
+        admin.incrementalAlterConfigs(Map.of(resource, List.of(new org.apache.kafka.clients.admin.AlterConfigOp(
+                        new org.apache.kafka.clients.admin.ConfigEntry("cleanup.policy", "delete"),
+                        org.apache.kafka.clients.admin.AlterConfigOp.OpType.SET))))
+                .all().get(30, TimeUnit.SECONDS);
+        long end = admin.listOffsets(Map.of(tp, org.apache.kafka.clients.admin.OffsetSpec.latest()))
+                .all().get(30, TimeUnit.SECONDS).get(tp).offset();
+        admin.deleteRecords(Map.of(tp, org.apache.kafka.clients.admin.RecordsToDelete.beforeOffset(end)))
+                .all().get(30, TimeUnit.SECONDS);
+
+        FailClosedException e = assertThrows(FailClosedException.class,
+                () -> Parsley.start(config("lostc"), p),
+                "surviving Streams-stamped offsets with a recordless changelog mean committed state was lost");
+        assertEquals(FailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertTrue(e.getMessage().contains("holds no ordering records"),
+                "the diagnosis names the emptied-changelog shape, not a missing topic");
+    }
+
+    /**
+     * The loss shape is per changelog partition: purging one partition's records while its
+     * siblings keep theirs must refuse exactly like the whole topic emptied — the purged
+     * task's state is gone however healthy the merged view looks (D88 tightens D84's
+     * whole-topic check, which this shape slipped past).
+     */
+    @Test
+    void emptiedChangelogPartitionWithSurvivingOffsetsRefusesToStart() throws Exception {
+        createTopics(new NewTopic("lostp-in", 2, (short) 1));
+        Topic<String, String> in = Topic.of("lostp-in", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process p = Process.named("lostp")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("lostp"), p)) {
+            produce("lostp-in", 0, "k0", "m0");
+            produce("lostp-in", 1, "k1", "m1");
+            await("both partitions' messages to deliver", () -> delivered.size() == 2, Duration.ofSeconds(120));
+            awaitCommitted("lostp-lostp", "lostp-in", 1);
+            await("partition 1's read position to commit", () -> {
+                try {
+                    var committed = admin.listConsumerGroupOffsets("lostp-lostp").partitionsToOffsetAndMetadata()
+                            .get(10, TimeUnit.SECONDS).get(new TopicPartition("lostp-in", 1));
+                    return committed != null && committed.offset() >= 1;
+                } catch (Exception e) {
+                    return false;
+                }
+            }, Duration.ofSeconds(60));
+        }
+
+        String changelog = "lostp-lostp-__parsley.ordering-changelog";
+        TopicPartition purged = new TopicPartition(changelog, 1);
+        var resource = new org.apache.kafka.common.config.ConfigResource(
+                org.apache.kafka.common.config.ConfigResource.Type.TOPIC, changelog);
+        admin.incrementalAlterConfigs(Map.of(resource, List.of(new org.apache.kafka.clients.admin.AlterConfigOp(
+                        new org.apache.kafka.clients.admin.ConfigEntry("cleanup.policy", "delete"),
+                        org.apache.kafka.clients.admin.AlterConfigOp.OpType.SET))))
+                .all().get(30, TimeUnit.SECONDS);
+        long end = admin.listOffsets(Map.of(purged, org.apache.kafka.clients.admin.OffsetSpec.latest()))
+                .all().get(30, TimeUnit.SECONDS).get(purged).offset();
+        admin.deleteRecords(Map.of(purged, org.apache.kafka.clients.admin.RecordsToDelete.beforeOffset(end)))
+                .all().get(30, TimeUnit.SECONDS);
+
+        FailClosedException e = assertThrows(FailClosedException.class,
+                () -> Parsley.start(config("lostp"), p),
+                "one purged changelog partition is the whole loss for its task and must refuse");
+        assertEquals(FailClosedException.Reason.ORDERING_STATE_LOST, e.reason());
+        assertTrue(e.getMessage().contains("partition 1"),
+                "the diagnosis names the emptied partition: " + e.getMessage());
+    }
+
+    /**
+     * The counterpart bound: a first-start bootstrap that crashed after committing initial
+     * positions also leaves offsets without a changelog, but its commits carry the
+     * bootstrap's own stamp where Kafka Streams overwrites every commit with its own.
+     * Recovery from that crash must start, not refuse.
+     */
+    @Test
+    void bootstrapCommittedOffsetsWithoutAChangelogStillStart() throws Exception {
+        createTopics(new NewTopic("boot-in", 1, (short) 1));
+        Map<String, Object> clientProps = new HashMap<>();
+        clientProps.put("bootstrap.servers", cluster.bootstrapServers());
+        try (GroupMembershipCommitter committer = new GroupMembershipCommitter(clientProps, "boot-boot")) {
+            committer.join(Set.of("boot-in"), Duration.ofSeconds(30));
+            committer.commit(Map.of(new TopicPartition("boot-in", 0),
+                    new OffsetAndMetadata(0, StreamsRuntime.BOOTSTRAP_OFFSET_STAMP)));
+        }
+
+        Topic<String, String> in = Topic.of("boot-in", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process p = Process.named("boot")
+                .receives(in, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+        try (Parsley parsley = Parsley.start(config("boot"), p)) {
+            produce("boot-in", null, "k", "m0");
+            await("the message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+        }
+    }
+
+    /**
+     * Catches the declared-topics resolution wrap being swapped for a bare rethrow: a
+     * declared topic that does not exist — parsley never auto-creates, and every
+     * hand-built consumer pins auto-create off (D82) — must refuse to start with the
+     * declared-topics-could-not-be-resolved diagnosis, keeping the broker's unknown-topic
+     * answer in the cause chain so the operator sees which lookup actually failed rather
+     * than a raw client exception with no verdict.
+     */
+    @Test
+    void aDeclaredTopicThatDoesNotExistRefusesToStartNamingTheResolutionFailure() {
+        Topic<String, String> in = Topic.of("nx-never-created", Serdes.String(), Serdes.String());
+        Process p = Process.named("nx")
+                .receives(in, (d, s) -> Effects.none())
+                .build();
+
+        IllegalStateException refusal = assertThrows(IllegalStateException.class,
+                () -> Parsley.start(config("nx"), p),
+                "a declared topic the broker does not know must refuse the start loudly");
+        assertTrue(refusal.getMessage().contains("declared topics could not be resolved; refusing to start"),
+                "the refusal must carry the resolution diagnosis, not a raw client exception: "
+                        + refusal.getMessage());
+        assertTrue(TestChains.chainContains(refusal,
+                        org.apache.kafka.common.errors.UnknownTopicOrPartitionException.class, null),
+                "the broker's unknown-topic answer must survive in the cause chain; the operator"
+                        + " has to see which lookup failed: " + refusal);
+    }
+
+    /** Stranded held messages refuse at start. */
+    @Test
+    void strandedHeldMessagesRefuseAtStart() throws Exception {
+        createTopics(new NewTopic("st-a", 1, (short) 1), new NewTopic("st-b", 1, (short) 1));
+        UUID aId = topicId("st-a");
+        Topic<String, String> a = Topic.of("st-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("st-b", Serdes.String(), Serdes.String());
+        Process both = Process.named("st")
+                .receives(a, (d, s) -> Effects.none())
+                .receives(b, (d, s) -> Effects.none())
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("st"), both)) {
+            produce("st-b", null, "k", "H", causesHeader(Map.of(new Channel(aId, 0), 9L)));
+            awaitCommitted("st-st", "st-b", 1);
+        }
+
+        Process withoutB = Process.named("st")
+                .receives(a, (d, s) -> Effects.none())
+                .build();
+        FailClosedException e = assertThrows(FailClosedException.class,
+                () -> Parsley.start(config("st"), withoutB));
+        assertEquals(FailClosedException.Reason.CHANNEL_REMOVED_WITH_HELD_MESSAGES, e.reason());
+    }
+
+    /** Width changing restart is refused with the accurate diagnosis. */
+    @Test
+    void widthChangingRestartIsRefusedWithTheAccurateDiagnosis() throws Exception {
+        createTopics(new NewTopic("mp-in", 3, (short) 1), new NewTopic("mp-single", 1, (short) 1));
+        Topic<String, String> wide = Topic.of("mp-in", Serdes.String(), Serdes.String());
+        Topic<String, String> narrow = Topic.of("mp-single", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process both = Process.named("mp")
+                .receives(wide, (d, s) -> {
+                    delivered.add("mp-in[" + d.partition() + "]=" + d.value());
+                    return Effects.none();
+                })
+                .receives(narrow, (d, s) -> {
+                    delivered.add("mp-single=" + d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        try (Parsley parsley = Parsley.start(config("mp"), both)) {
+            produce("mp-in", 0, "k", "w0");
+            produce("mp-in", 1, "k", "w1");
+            produce("mp-in", 2, "k", "w2");
+            produce("mp-single", 0, "k", "n0");
+            await("every task of every partition to deliver", () -> delivered.size() == 4, Duration.ofSeconds(90));
+            assertTrue(delivered.containsAll(List.of(
+                            "mp-in[0]=w0", "mp-in[1]=w1", "mp-in[2]=w2", "mp-single=n0")),
+                    "multi-task operation: each partition's task delivers its own channel");
+        }
+
+        Process narrowOnly = Process.named("mp")
+                .receives(narrow, (d, s) -> Effects.none())
+                .build();
+        FailClosedException e = assertThrows(FailClosedException.class,
+                () -> Parsley.start(config("mp"), narrowOnly));
+        assertEquals(FailClosedException.Reason.TASK_WIDTH_CHANGED, e.reason(),
+                "the width change is parsley's condition to name, with a remedy that does not destroy state");
+    }
+}

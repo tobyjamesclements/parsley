@@ -2,9 +2,38 @@
 
 Causal delivery order for Kafka Streams processors: if message A is a cause of message B,
 every process that delivers both delivers A first, across restarts and for the whole lifetime
-of a process. Where the guarantee cannot be upheld a process stops rather than weaken it. The
-documentation site is at <https://tobyjamesclements.github.io/parsley/>, built from `docs/`
-in this repository.
+of a process. Where the guarantee cannot be upheld a process stops rather than weaken it.
+
+## Getting it
+
+```xml
+<dependency>
+  <groupId>io.github.tobyjamesclements</groupId>
+  <artifactId>parsley</artifactId>
+  <version>0.2.0</version>
+</dependency>
+```
+
+Java 21 or newer. The runtime dependencies are `kafka-streams`, `kafka-clients` and
+`slf4j-api`. The 0.1.0 release is a different implementation whose API and wire format both
+differ from this one.
+
+## Documentation
+
+`SPEC.md` is the authority on correctness. `AGENTS.md` is the guide for anyone, or any
+agent, working on the code. The `docs/` directory has the rest:
+
+| Page | Subject |
+|---|---|
+| [Model](docs/model.md) | How the specification's terms map onto Kafka, and what the metadata expresses |
+| [Delivery](docs/delivery.md) | The settled frontier and the delivery decision |
+| [State](docs/state.md) | Ordering state, persistence and recovery |
+| [Failing closed](docs/failing-closed.md) | What stops a process, and why the blast radius is the process |
+| [Runtime](docs/runtime.md) | Wiring into Kafka Streams |
+| [Operations](docs/operations.md) | Names, prerequisites, scaling, resets and sizing |
+| [Runbooks](docs/runbooks.md) | What an operator does when a process stops or holds, reason by reason |
+| [Wire format](docs/wire-format.md) | The frozen on-wire definition of causal metadata |
+| [Verification](docs/verification.md) | How the guarantee is tested |
 
 ## Requirements
 
@@ -32,7 +61,7 @@ To package without running the tests:
 ./mvnw test
 ```
 
-The whole suite, roughly five minutes; the surefire summary prints the count. Integration
+The whole suite, roughly eleven minutes; the surefire summary prints the count. Integration
 tests start an embedded KRaft broker in the same JVM, so nothing external needs to be
 running.
 
@@ -54,12 +83,3 @@ seed reproduces the run exactly.
 
 Output lands in `target/reports/apidocs`.
 
-## Documentation site
-
-```
-./scripts/docs-build.sh
-```
-
-Builds the site to `site/`. The script creates its own `.venv` on first run and installs the
-MkDocs toolchain there. Pass `--serve` to serve it locally with live reload, or `--skip-api`
-to skip the Javadoc step.

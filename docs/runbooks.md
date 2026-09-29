@@ -16,18 +16,17 @@ deliver past a message.
 
 None of the following can be added once a process has stopped.
 
-**Log the status.** `Parsley.status()` is the diagnosis surface. Its per-task detail — what
-is held, which cause each head waits for, the frontier's width — is published by a task while
-it runs and retired when the task closes. After a stop, `status()` still carries the
-process's `refusalReason` and `failureDetail`, but no task detail: what was held at the
-moment of the stop is no longer readable from the process. Log the status on a timer while
+**Log the status.** `Parsley.status()` is the diagnosis surface: each process's state and,
+after a stop, its `refusalReason` and `failureDetail`. It says nothing about what a task
+holds; that is read from the ordering changelog
+([a message is held](#a-message-is-held-and-not-moving)). Log the status on a timer while
 the application runs, and once more when the wait ends:
 
 ```java
 try (Parsley parsley = Parsley.start(config, shipper)) {
     parsley.awaitStopped();
     parsley.status().forEach((name, status) -> log.error("{}: {} refusal={} detail={}",
-            name, status.state(), status.refusalReason(), status.failureDetail()));
+            name, status.lifecycle(), status.refusalReason(), status.failureDetail()));
 }
 ```
 
@@ -79,7 +78,7 @@ The start is all-or-nothing, so an exception from it means nothing is running.
 
 | Exception | Meaning | Action |
 |---|---|---|
-| `ParsleyFailClosedException` | A refusal the bootstrap could see: state, positions or a declaration that cannot be resumed against. The message names the reason and its remedy. | The reason's runbook below. |
+| `FailClosedException` | A refusal the bootstrap could see: state, positions or a declaration that cannot be resumed against. The message names the reason and its remedy. | The reason's runbook below. |
 | `IllegalStateException` ending "Retry this start." | A broker's metadata view lagged, or a sibling instance was mid-start. | Retry. |
 | Any other `IllegalStateException` | A prerequisite is missing or the cluster could not be queried: a declared topic does not exist, the changelog could not be read, positions could not be listed. | Create the topic, restore connectivity, check the ACLs; then retry. |
 | `IllegalArgumentException` | The declaration is wrong: a duplicate name, a reserved name, two stores composing one changelog name. | Fix the declaration. |
@@ -88,14 +87,14 @@ The start is all-or-nothing, so an exception from it means nothing is running.
 
 Read `status()` for the process. There are three shapes.
 
-1. `state` is `STOPPED` and `refusalReason` is present: a deliberate refusal.
+1. `lifecycle` is `STOPPED` and `refusalReason` is present: a deliberate refusal.
    `failureDetail` carries the diagnosis, which names the process, usually the topic,
    partition and position, and where one exists the remedy. Go to the reason's runbook.
-2. `state` is `STOPPED` and `refusalReason` is absent: an application failure or a substrate
+2. `lifecycle` is `STOPPED` and `refusalReason` is absent: an application failure or a substrate
    failure. `failureDetail` is the outermost exception's message; the host's wrapping names
    the task, topic, partition and offset of the record in flight. See
    [restart resolves it](#restart-resolves-it) and [a handler that throws](#a-handler-that-throws).
-3. `state` is `STOPPED` and nothing is recorded: the application closed the handle.
+3. `lifecycle` is `STOPPED` and nothing is recorded: the application closed the handle.
 
 The reasons, and what each asks for:
 
@@ -103,7 +102,7 @@ The reasons, and what each asks for:
 |---|---|---|---|
 | `COVERED_POSITION_FED` | Once; a recurrence is reported, not restarted | No | [Restart resolves it](#covered_position_fed) |
 | `HANDLER_RETURNED_NULL_EFFECTS` | After the code fix | No | [The application](#handler_returned_null_effects) |
-| `EMISSION_TO_UNDECLARED_CHANNEL` | After the declaration fix | No | [The application](#emission_to_undeclared_channel) |
+| `SEND_TO_UNDECLARED_TOPIC` | After the declaration fix | No | [The application](#send_to_undeclared_topic) |
 | `STATE_ACCESS_TO_UNDECLARED_STORE` | After the declaration fix | No | [The application](#state_access_to_undeclared_store) |
 | `RESERVED_HEADER_USED` | After the code fix | No | [The application](#reserved_header_used) |
 | `APPLICATION_PAYLOAD_UNSERIALIZABLE` | After the code fix | No | [The application](#application_payload_unserializable) |
@@ -131,8 +130,8 @@ What else is affected, in the order to check it.
   as evidence that the condition is confined.
 - **Downstream processes.** A stopped process sends nothing, so every process that receives
   from it waits for causes it cannot send while stopped. Those processes hold; they do not
-  fail. Their status names the stopped process's output topic as the blocker, with the
-  required position at or beyond that topic's end. Fix the upstream stop; never reset a
+  fail. Their held heads name the stopped process's output topic as a cause, at a position
+  at or beyond that topic's end. Fix the upstream stop; never reset a
   downstream process for it.
 - **The other processes in the handle.** Each declared process is its own Kafka Streams
   application, and a stop in one leaves the others running. `awaitStopped()` returns on
@@ -249,15 +248,15 @@ changes nothing`
 
 **Do.** Return `Effects.none()` from the branch that returned `null`. Deploy and restart.
 
-#### EMISSION_TO_UNDECLARED_CHANNEL
+#### SEND_TO_UNDECLARED_TOPIC
 
-**Shape.** `<process> emitted to undeclared channel <topic>`
+**Shape.** `<process> sent to undeclared topic <topic>`
 
 **What happened.** The handler sent to a topic outside the process's declared send set.
 Membership is by topic name.
 
-**Do.** Either the handler is wrong, or the declaration is: add the channel with
-`.sends(channel)` if the emission is intended. The topic must exist before the start. A send
+**Do.** Either the handler is wrong, or the declaration is: add the topic with
+`.sends(topic)` if the send is intended. The topic must exist before the start. A send
 set can change freely between executions; it touches no ordering state. Deploy and restart.
 
 #### STATE_ACCESS_TO_UNDECLARED_STORE
@@ -275,8 +274,8 @@ declaration gets its changelog created on the next start. Deploy and restart.
 
 **Shape.** `serializer for <topic> wrote reserved header '<name>'`
 
-**What happened.** A header on an emission began with Parsley's reserved prefix. The
-emission's own headers are checked as the handler built them; a serializer that adds
+**What happened.** A header on a send began with Parsley's reserved prefix. The
+send's own headers are checked as the handler built them; a serializer that adds
 headers of its own is the usual source.
 
 **Do.** Rename the application header, or configure the serializer not to write into the
@@ -288,7 +287,7 @@ reserved namespace. Deploy and restart.
 `<store> state write key serialized to null; the declared key serde could not encode it`,
 or `<store> state read key could not be serialized by the declared serde`.
 
-**What happened.** A declared serde threw, or returned `null` for a key. A `Channel` or
+**What happened.** A declared serde threw, or returned `null` for a key. A `Topic` or
 `Store` instance whose types differ from the declared one — a look-alike built with other
 serdes — is the common cause; the declared channel's serdes produce the bytes whatever
 instance carried the effect.
@@ -314,7 +313,7 @@ record with `kafka-console-consumer --topic <topic> --partition <p> --offset <po
 
 **Do.** For a delivered payload whose bytes are wrong: fix whatever produced them, and then
 get the process past the record. Parsley never skips a message, so the way past is a serde
-that decodes the bad bytes into a value the handler recognises and dead-letters — an emission
+that decodes the bad bytes into a value the handler recognises and dead-letters — a send
 to a declared channel, or a state write — rather than throwing. For a stored value: the bytes
 were written by an earlier version of the value serde, so the fix is a serde that reads both
 encodings. Never delete a store's changelog to clear a bad value; under exactly-once
@@ -330,7 +329,7 @@ exception, naming the task, topic, partition and offset.
 message again and fails again, because nothing is ever skipped.
 
 **Do.** Fix the bug, or catch the failure inside the handler and return effects that record
-it deterministically — a dead-letter emission or a state write — so the step commits. A
+it deterministically — a dead-letter send or a state write — so the step commits. A
 handler that calls out to a dependency is outside what the guarantee covers; if the failure
 came from such a call, restart once the dependency is back, and consider moving the call
 out of the handler. Nothing is reset.
@@ -341,30 +340,28 @@ out of the handler. Nothing is reset.
 
 **Shape.** One of three sites. On receipt: `<channel>@<position> carries <n> bytes of causal
 metadata; the configured budget is <b> bytes`. On merge: `the causal frontier reached <n>
-bytes (<k> channels)`. On emission: `expressing the causal frontier needs <n> bytes`.
+bytes (<k> channels)`. On send: `expressing the causal frontier needs <n> bytes`.
 
-**What happened.** The frontier every emission carries outgrew `metadataBudgetBytes`, 256 KiB
+**What happened.** The frontier every send carries outgrew `metadataBudgetBytes`, 256 KiB
 by default. Its steady-state size is the sum of partition counts over the transitive
 upstream closure of the process's inputs, at roughly 26 bytes for a topic's first partition
-and 9 for each further one ([Model](model.md#pruning-and-growth)). The 80% warning in the
-log is the early signal for this refusal. A receipt-site refusal names a message whose
-sender's frontier is already wider than this process's budget.
+and 9 for each further one ([Model](model.md#pruning-and-growth)). A receipt-site refusal
+names a message whose sender's frontier is already wider than this process's budget.
 
-**Check.** `frontierChannels` and `frontierBytes` from the logged status against the budget.
-Whether a new upstream topic, or a widened one, joined the closure. For a receipt-site
-refusal, whether the message came from a Parsley process or from a producer stamping
-`parsley.causes` itself — a gateway forwarding a session token, for instance, whose token
-may be over-broad ([Session consistency](session.md)).
+**Check.** The width the refusal names against the budget. Whether a new upstream topic, or
+a widened one, joined the closure. For a receipt-site refusal, whether the message came from
+a Parsley process or from a producer stamping `parsley.causes` itself, whose frontier may be
+over-broad.
 
 **Do.** Compute the closure's size and set `metadataBudgetBytes` above it with headroom, on
 this process and on every process the frontier reaches, since a frontier expressed by one
 process is received by the next. Then check the record limits: a held message is persisted
-with its causes, and an emission carries the frontier on the sent topic, so the ordering
+with its causes, and a send carries the frontier on the sent topic, so the ordering
 changelog's and every sent topic's `max.message.bytes`, and the producer's
 `max.request.size`, must cover the largest payload plus the budget
 ([Operations](operations.md#sizing)). Restart. The refused message is fed again and
 delivered. Never lower the budget below a running process's frontier: a restored frontier
-past a shrunken budget refuses at the next emission.
+past a shrunken budget refuses at the next send.
 
 #### SUBSTRATE_MISCONFIGURED
 
@@ -579,8 +576,8 @@ varint`, `topics not strictly ascending`, a zero topic id, a negative or reserve
 
 **What happened.** A record on a received topic carries a `parsley.causes` header that is
 not the wire format. A process on this version of the wire format cannot produce one, so
-the writer is something else: a producer on another version of the wire format, a gateway
-stamping a session token by hand, a foreign application using the reserved header name. The
+the writer is something else: a producer on another version of the wire format, a producer
+stamping the header by hand, a foreign application using the reserved header name. The
 message cannot be treated as having no causes, and everything received after it on that
 channel is held behind it.
 
@@ -611,89 +608,88 @@ identity. A topic id never returns once deleted, so the verdict was wrong; the c
 gave it is the suspect, and the refusal is durable. Reset, keep the logs from the
 initialisation that gave the verdict, and report it.
 
-### Reading a stopped process's state
-
-No runbook above can ask the stopped process what it holds. What can be read is its
-ordering changelog: `OrderingStateInspector` in the `core` package answers, from the
-changelog's latest value per key, which channels hold messages, how far each channel was
-covered, and which topic identity each name was bound to. Reading the changelog into that
-map is the operator's work; nothing in the library does it for a stopped process.
-
 ## A message is held and not moving
 
 A held message is not a failure. It is waiting for a cause, and the diagnosis is which
-cause and why it has not arrived. `status()` names both, once per status interval, for every
-task the instance runs ([Failing closed](failing-closed.md#diagnosis)).
+cause and why it has not arrived. Nothing in the running process reports a hold: the host
+commits read positions past records it buffers, so the group's offsets advance over a held
+message, and `status()` carries only the process's state and its refusal. What can be read
+is the ordering changelog and the held record itself.
 
 ### Confirm it is a hold
 
-`state` is `RUNNING`, `refusalReason` is empty, and a task's `heldMessages` is above zero
-and not falling. A `state` of `REBALANCING` that persists is the host, not a hold: a member
-that cannot join, or a task restoring a large changelog, which for a deep hold-back backlog
-takes time.
+`lifecycle` is `RUNNING`, `refusalReason` is empty, the group's offsets on the received
+partitions advance, and an expected output does not appear. A `lifecycle` of `REBALANCING` that
+persists is the host, not a hold: a member that cannot join, or a task restoring a large
+changelog, which for a deep hold-back backlog takes time.
 
-### Read the head's blockers
+The ordering changelog, `<app-id>-__parsley.ordering-changelog`, partition `p` for task
+`p`, holds one entry per held message, keyed by channel and position
+([State](state.md#ordering-state)). Read it to its end, keep the latest value per key, and
+the live held keys name the channels with held messages; the lowest position per channel
+is the head, the one the decision reads.
 
-For each held channel, the status carries the position of the head — the oldest held
-message, the one the decision reads — and every cause it still waits for, each with the
-position required and the position the cause's channel has settled to. The shape of the
-blocker says what to do.
+### Read the head's causes
 
-**No blockers.** The head is deliverable and goes on the next drain, which runs on the next
-record fed or the next status punctuation. A head that stays deliverable across status
-intervals means the task's thread is not running: check the thread.
+The head is a record on its topic. Read it with `kafka-console-consumer --topic <topic>
+--partition <p> --offset <position> --max-messages 1 --property print.headers=true
+--isolation-level read_committed` and decode its `parsley.causes` header
+([wire format](wire-format.md)): each pair names a topic id, a partition and the position
+required there. A cause on a topic this process does not receive never blocks. For each
+cause on a received topic, compare the required position with what the task has been fed on
+that channel: about the group's committed offset on the partition, less one, where the
+channel holds nothing, and the head's position less one where it holds. The shape says what
+to do.
 
-**Settled position empty.** The task starts that channel at position 0 and has received
-nothing on it yet, so nothing on it is settled. Check that the partition exists — the
-topic's partition count from `kafka-topics --describe` — and whether the group's offset on
-it is moving, from `kafka-consumer-groups --describe --group <app-id>`.
+**Nothing received on the channel yet.** The group has no committed offset on the partition
+beyond its start position. Check that the partition exists — the topic's partition count
+from `kafka-topics --describe` — and whether the group's offset on it is moving, from
+`kafka-consumer-groups --describe --group <app-id>`.
 
-**Settled below required, and the required position exists.** Compare the required position
-with the channel's end from `kafka-get-offsets --topic <topic> --partitions <p> --time
-latest`. Required at or below the end means the cause is on the channel and this task has not
-reached it. Two sub-cases:
+**The task has not reached the required position, and it exists.** Compare the required
+position with the channel's end from `kafka-get-offsets --topic <topic> --partitions <p>
+--time latest`. Required at or below the end means the cause is on the channel and this
+task has not reached it. Two sub-cases:
 
-- The cause's channel itself holds messages. Then its settled position is its own head less
-  one, and the hold is a chain: read that channel's head and its blockers, and follow the
-  chain until a blocker's channel holds nothing. That channel is the root.
+- The cause's channel itself holds messages. Then the hold is a chain: read that channel's
+  head and its causes, and follow the chain until a cause's channel holds nothing. That
+  channel is the root.
 - The cause's channel holds nothing. This task is behind on it. `kafka-consumer-groups
-  --describe --group <app-id>` shows the group's current offset and lag on the partition;
-  the task's settled position is what it has been fed, and lag is what closes it, so lag
-  here is throughput, a paused partition, or a thread that has stopped polling. An offset
-  already past the required position with settled still below it is the shape after next.
+  --describe --group <app-id>` shows the group's current offset and lag on the partition,
+  and lag is what closes the gap, so lag here is throughput, a paused partition, or a thread
+  that has stopped polling. An offset already past the required position with the hold
+  still in place is the shape after next.
 
-**Settled below required, and the required position does not exist yet.** Required beyond
-the channel's end means the cause has not been produced. Nothing a process expresses names
-an unassigned position, so this has two honest explanations. The position lies between the
-last stable offset and the end — inside a transaction still open on that channel — which
-resolves when the transaction commits or the broker aborts it at its timeout, ten seconds
-under the Kafka Streams defaults. Or the metadata is stale or forged: a token minted against
-another cluster, a hand-stamped header. Read the held record's header and find its producer.
+**The required position does not exist yet.** Required beyond the channel's end means the
+cause has not been produced. Nothing a process expresses names an unassigned position, so
+this has two honest explanations. The position lies between the last stable offset and the
+end — inside a transaction still open on that channel — which resolves when the transaction
+commits or the broker aborts it at its timeout, ten seconds under the Kafka Streams
+defaults. Or the metadata is stale or forged: a header minted against another cluster, a
+hand-stamped header. Find its producer.
 
 **Required at an offset no committed record occupies.** The group's offset on the partition
-stands past the required position with no lag, and settled still trails it. Two shapes
-share it. The cause names a position no `read_committed` reader is ever served: a
-transaction marker, an aborted batch's offset, the log-end offset at the moment of stamping.
-That is an out-of-contract cause ([wire format](wire-format.md#grammar), constraint 8): no
-receipt settles it, elapsed time never does, and the hold stays, visibly, until a later
-record on the channel arrives. A Parsley process never stamps one. Read the held record's
-header and find the producer of the stamp — a gateway minting a token from a producer's
-log-end offset is the natural mistake — and fix it; the next record on the channel releases
-the hold. Or the channel is a `cleanup.policy=compact` topic and the cause names a record the
-cleaner has since removed, together with the tombstone that superseded it, with nothing
-retained after it: an in-contract cause whose record this process started past. The hold
-lasts until anything follows on that channel. Produce a record on it, and keep received
-topics under time or size retention rather than compaction where holds must not wait on
-that.
+stands past the required position with no lag, and the hold stays. Two shapes share it. The
+cause names a position no `read_committed` reader is ever served: a transaction marker, an
+aborted batch's offset, the log-end offset at the moment of stamping. That is an
+out-of-contract cause ([wire format](wire-format.md#grammar), constraint 8): no receipt
+settles it, elapsed time never does, and the hold stays until a later record on the channel
+arrives. A Parsley process never stamps one. Find the producer of the stamp — a producer
+stamping its own log-end offset is the natural mistake — and fix it; the next record on the
+channel releases the hold. Or the channel is a `cleanup.policy=compact` topic and the cause
+names a record the cleaner has since removed, together with the tombstone that superseded
+it, with nothing retained after it: an in-contract cause whose record this process started
+past. The hold lasts until anything follows on that channel. Produce a record on it, and
+keep received topics under time or size retention rather than compaction where holds must
+not wait on that.
 
-**The blocker's channel's topic no longer exists.** `kafka-topics --describe` does not find
-the topic, or finds it under another id. A cause on a deleted channel is settled by the
-deletion, and a task learns of a deletion from the identity check at its next
-initialisation, never while it runs. On Kafka Streams the deletion of a received topic
-reaches the process within a minute or two — the commit times out and the host re-creates
-the task, or a rebalance stops the thread; a topic recreated under its name is stopped at
-once where the host meets it, and not at all until the next task re-creation where it does
-not (SPEC Assumption 17)
+**The cause's topic no longer exists.** `kafka-topics --describe` does not find the topic,
+or finds it under another id. A cause on a deleted channel is settled by the deletion, and a
+task learns of a deletion from the identity check at its next initialisation, never while
+it runs. On Kafka Streams the deletion of a received topic reaches the process within a
+minute or two — the commit times out and the host re-creates the task, or a rebalance stops
+the thread; a topic recreated under its name is stopped at once where the host meets it,
+and not at all until the next task re-creation where it does not (SPEC Assumption 17)
 ([runbook](#a-received-topic-went-missing-during-a-rebalance)) — and the check at that
 initialisation settles the channel to its end, sending the hold on at the next punctuation,
 provided the task holds nothing from that channel itself; a topic recreated under its name
@@ -703,25 +699,25 @@ topic is removed from the declaration, and a channel outside the received set no
 constrains this process. If the check could not be made, the log
 [says so](#the-identity-check-could-not-be-made).
 
-**The blocker's topic is another Parsley process's output.** Look at that process. If it has
+**The cause's topic is another Parsley process's output.** Look at that process. If it has
 stopped, its refusal is the root cause, and this hold clears when it is fixed. If it is
-holding, follow its blockers upstream. A stopped process stalls every process downstream of
-it, and the stall is visible in each downstream status as a blocker on the stopped process's
-output topic.
+holding, follow its held heads' causes upstream. A stopped process stalls every process
+downstream of it, and each downstream process's held head names the stopped process's
+output topic as a cause.
 
 ### The identity check could not be made
 
 Every task initialisation asks the cluster about every topic its state names — the received
 topics and every topic in the frontier — and settles or prunes the channels whose topics are
 confirmed gone. Three log lines say the asking failed. "topic identity could not be checked
-(...); continuing on the identities resolved at start, and asking again from the status
+(...); continuing on the identities resolved at start, and asking again from the
 punctuation" names a describe by id that failed in a way that is not the broker's
 unknown-topic answer — the admin client could not reach the cluster, or timed out — and
 "topic identity could not be corroborated for [...]; asking again" names a corroborating
 describe by name that timed out or failed. Either means the check could not be made for the
 ids named. The question stays pending and is
-asked again from the status punctuation until it is answered — backing off from one status
-interval to a minute, since each attempt can hold the stream thread for the describe's
+asked again from the punctuation until it is answered — backing off from one second to a
+minute, since each attempt can hold the stream thread for the describe's
 ten-second deadline, so the line repeats at that cadence — and the answer is then applied as
 the initialisation's would have been. "describe denied for topic '<name>' (<id>);
 treating as denied, not dead" means the application's principal lacks Describe on that
@@ -740,12 +736,12 @@ the task's committed read position on each received partition. When the log star
 that position the next fetch refuses with
 [`POSITIONS_DISCARDED_UNREAD`](#positions_discarded_unread), and the positions between are
 gone. The clock matters for a process that is stopped, or one that lags; a process that
-keeps up stays ahead of it. The status does not show how close it is. To see it:
+keeps up stays ahead of it. To see how close it is:
 
 1. `kafka-consumer-groups --describe --group <app-id>` gives the group's committed offset on
    the partition. After a stop long enough for the group's offsets to expire, the read
-   position is the ordering state's covered position plus one, which `OrderingStateInspector`
-   reads from the changelog.
+   position is the ordering state's covered position plus one, from the changelog's
+   fed-up-to entry for the channel ([State](state.md#ordering-state)).
 2. `kafka-get-offsets --topic <topic> --partitions <p> --time earliest` gives the log
    start. The distance between the two, in positions, is the headroom.
 3. `kafka-console-consumer --topic <topic> --partition <p> --offset <committed>
@@ -836,9 +832,9 @@ topics and resets offsets but leaves local state; use the steps above.
 ### After
 
 - The log carries `committed initial positions for [...]` for every received partition.
-- `status()` reports `RUNNING`, and each task's entry appears within a status interval.
-- Under `EARLIEST`, `heldMessages` rises and falls as the retained log is re-read; under
-  `LATEST` it stays near zero.
+- `status()` reports `RUNNING`.
+- Under `EARLIEST` the group's offsets on the received partitions advance from the log
+  start as it is re-read; under `LATEST` they begin at the end.
 - Downstream processes that were holding on this process's output clear as it sends. What
   they receive after the reset carries a frontier that names only positions this lifetime
   has seen.
@@ -856,13 +852,11 @@ Limits an operator should know before an incident, each the boundary of a runboo
   undecodable header is a reset.
 - **Reset from the API.** The reset is four commands across two tools and every instance's
   filesystem, and the order matters. Nothing in the library performs it or checks it.
-- **Report a hold's age or its retention headroom.** The status carries the head's position,
-  not its timestamp, and not the channel's committed offset, log start or end; the retention
-  clock and the lagging-or-not-produced distinction are computed from the Kafka tools.
+- **Report what a task holds, or why.** The status carries a process's state and its
+  refusal, never its held messages. A hold, its head and the cause it waits for are read
+  from the ordering changelog and the held record's own header, and the retention clock
+  from the Kafka tools.
 - **Push anything.** The status is pull-only: no metrics, no listener, no callback. A stop
   is observed through `awaitStopped()` or by polling `healthy()`.
 - **Separate an application failure from a substrate transient.** Both stop the process
   with no `refusalReason`; only `failureDetail` tells them apart.
-- **Say what a stopped process holds.** Task detail leaves the status when the task closes.
-  The changelog carries it, and `OrderingStateInspector` reads it, but reading the changelog
-  is the operator's work.

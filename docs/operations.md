@@ -62,11 +62,11 @@ to make before it, the steps in the order that matters, and what to verify after
 
 ## Sizing
 
-**Metadata budget.** Each emission carries the causal frontier: about 26 bytes for a topic's
+**Metadata budget.** Each send carries the causal frontier: about 26 bytes for a topic's
 first partition and 9 for each further partition, over the transitive upstream closure of
 the process's inputs, external producers that stamp causes included. Set
-`metadataBudgetBytes` comfortably above that sum; the default is 256 KiB, `status()` reports
-each task's current width, and a warning is logged once at 80%.
+`metadataBudgetBytes` comfortably above that sum; the default is 256 KiB, and the refusal
+names the width reached.
 
 **Record limits.** A held message is persisted to the ordering changelog with its payload,
 its application headers and its causes, so the changelog's `max.message.bytes` and the
@@ -85,9 +85,9 @@ that re-reads from `EARLIEST` should still find.
 
 ## Reading the status
 
-`Parsley.status()` reports each process's state, its refusal reason where it stopped
-deliberately, and per task what is held and which cause each hold waits for, with the
-frontier's size. A held message is not a failure: the diagnosis is the named cause. Every
-refusal recurs identically on restart, except `COVERED_POSITION_FED`, which has no known
-trigger and which a restart clears. What to do about each shape the status can show — a
-refusal, a stop without one, a hold that does not move — is in [Runbooks](runbooks.md).
+`Parsley.status()` reports each process's state and its refusal reason where it stopped
+deliberately. A held message is not a failure and is not reported there: the diagnosis is
+the cause it waits for, read from the ordering changelog and the held record's own header.
+Every refusal recurs identically on restart, except `COVERED_POSITION_FED`, which has no
+known trigger and which a restart clears. What to do about each shape — a refusal, a stop
+without one, a hold that does not move — is in [Runbooks](runbooks.md).

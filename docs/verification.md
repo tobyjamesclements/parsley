@@ -1,19 +1,13 @@
 # Verification
 
-The suite runs under `./mvnw verify` in roughly four minutes and requires no Docker.
+The suite runs under `./mvnw verify` in roughly eleven minutes and requires no Docker.
 
 ## Layers
 
-**Pure core.** Codec round-trip tests, decision-unit table tests, and engine unit tests. A
-purity scan — `PurityScan`, the one spelling of the fence — fails on any reference to a
-clock, randomness, the network, or the substrate in the `core` sources.
-
-**Session companion.** Unit tests over `CausalPast` in the same style: merge and coverage
-semantics, and a malformation battery drawn from the shared vector catalogue the codec's
-own tests also sweep, so both decoders stay exactly as strict with one spelling per
-vector. The purity scan runs again over the `session` sources, with the Kafka adapter and
-`api` packages additionally forbidden, pinning the companion to the core's public surface
-([Session consistency](session.md)).
+**Pure protocol.** Codec round-trip tests, decision-unit table tests, and engine unit
+tests. `ProtocolPurityTest` fails on any reference to a clock, randomness, the network or
+the substrate in a protocol source, on a protocol source naming a Kafka Streams runtime
+type, and on a main source belonging to neither list.
 
 **Simulation.** A simulated substrate and host honouring the host obligations drives many
 engines over randomised topologies, interleavings, gaps, aborted-transaction runs, crashes
@@ -54,7 +48,7 @@ step while receiving a dead incarnation whose name is bound to a live other id.
 
 **Streams wiring.** `TopologyTestDriver` tests for the header format on the wire, byte-exact
 key and value pass-through, Schema-Registry-format serdes, the identity report at task
-initialisation through an injected identity source, and the status punctuation.
+initialisation through an injected identity source, and the punctuation.
 
 **Integration.** Embedded KRaft broker tests for commit and abort behaviour under
 exactly-once semantics, restart with state restore, restart after a state-dir wipe with the
@@ -67,10 +61,8 @@ fetch, a held message retention discarded delivering from the changelog, and a p
 
 ## Standard of evidence
 
-`EVIDENCE.md` records, per specification criterion, what would catch a violation of it. Each
-cell names the test that fails when the behaviour breaks. A test that stays green when the
-behaviour breaks is treated as worse than an empty cell.
+Each test is meant to fail when the behaviour it pins breaks. A test that stays green when
+the behaviour breaks is treated as worse than no test.
 
 There is no mutation-testing gate. `Sabotage` is this project's mutation testing, with the
-mutations chosen against specification criteria rather than syntax. `DECISIONS.md` D67
-records that decision, and the gaps found before the gate was removed.
+mutations chosen against specification criteria rather than syntax (D67).
