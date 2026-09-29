@@ -406,8 +406,10 @@ class BootstrapIntegrationTest {
         }, Duration.ofSeconds(60));
 
         try (Parsley parsley = Parsley.start(config("exr"), p)) {
-            // Nothing has been produced since the stop, so Streams has nothing to commit and
-            // the group's offset is the bootstrap's own: coverage (m0 at 0) plus one.
+            /*
+             * Nothing has been produced since the stop, so Streams has nothing to commit and
+             * the group's offset is the bootstrap's own: coverage (m0 at 0) plus one.
+             */
             var resumed = admin.listConsumerGroupOffsets("exr-exr").partitionsToOffsetAndMetadata()
                     .get(30, TimeUnit.SECONDS).get(new TopicPartition("exr-in", 0));
             assertEquals(1L, resumed.offset(),
@@ -551,8 +553,10 @@ class BootstrapIntegrationTest {
 
         String changelog = "lostc-lostc-__parsley.ordering-changelog";
         TopicPartition tp = new TopicPartition(changelog, 0);
-        // The operator excursion the refusal guards against: compaction briefly turned
-        // off, records purged, the topic never stopping existing.
+        /*
+         * The operator excursion the refusal guards against: compaction briefly turned
+         * off, records purged, the topic never stopping existing.
+         */
         var resource = new org.apache.kafka.common.config.ConfigResource(
                 org.apache.kafka.common.config.ConfigResource.Type.TOPIC, changelog);
         admin.incrementalAlterConfigs(Map.of(resource, List.of(new org.apache.kafka.clients.admin.AlterConfigOp(

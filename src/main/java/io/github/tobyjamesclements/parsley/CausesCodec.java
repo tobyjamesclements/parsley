@@ -117,8 +117,10 @@ final class CausesCodec {
         ByteBuffer buffer = ByteBuffer.allocate(encodedSize(byChannel));
         buffer.put(FORMAT_VERSION);
         writeUnsignedVarint(buffer, topicCount(byChannel));
-        // One pass to size each topic's group, one to write it: the partition count
-        // precedes its pairs, and a sorted map yields each topic's partitions together.
+        /*
+         * One pass to size each topic's group, one to write it: the partition count
+         * precedes its pairs, and a sorted map yields each topic's partitions together.
+         */
         int[] groupSizes = new int[topicCount(byChannel)];
         int group = -1;
         UUID currentTopic = null;
@@ -216,10 +218,12 @@ final class CausesCodec {
         UUID previousTopic = null;
         for (int group = 0; group < topicCount; group++) {
             UUID topicId = new UUID(buffer.getLong(), buffer.getLong());
-            // The zero topic ID is reserved by the substrate and never assigned to a
-            // channel, so no genuine cause can carry it — and once merged it would sit in
-            // the frontier as an id no broker query can ever answer for. Refused here so it
-            // can never enter a frontier at all (wire-format.md constraint 5).
+            /*
+             * The zero topic ID is reserved by the substrate and never assigned to a
+             * channel, so no genuine cause can carry it — and once merged it would sit in
+             * the frontier as an id no broker query can ever answer for. Refused here so it
+             * can never enter a frontier at all (wire-format.md constraint 5).
+             */
             if (Channel.isZeroTopicId(topicId)) {
                 throw new UndecodableMetadataException("zero topic id at group " + group
                         + "; the substrate never assigns it to a channel");
@@ -245,10 +249,12 @@ final class CausesCodec {
                 if (position < 0) {
                     throw new UndecodableMetadataException("negative position " + position + " on " + channel);
                 }
-                // No log reaches 2^63 - 1 records, so no genuine cause can name it, and the
-                // engine keeps that value as its in-band fed-to-end marker: absorbed from a
-                // header it would masquerade as a channel's deletion once it reached fedUpTo
-                // (wire-format.md constraint 7).
+                /*
+                 * No log reaches 2^63 - 1 records, so no genuine cause can name it, and the
+                 * engine keeps that value as its in-band fed-to-end marker: absorbed from a
+                 * header it would masquerade as a channel's deletion once it reached fedUpTo
+                 * (wire-format.md constraint 7).
+                 */
                 if (position == Long.MAX_VALUE) {
                     throw new UndecodableMetadataException("position " + position + " on " + channel
                             + " is beyond any position a channel can assign");

@@ -122,9 +122,11 @@ public final class SimProcess {
         try {
             reportIdentity();
         } catch (FailClosedException e) {
-            // A refused initialisation leaves no running process behind it: the partial
-            // report's writes are rolled back with the open step, as the host's failed
-            // task initialisation leaves nothing committed.
+            /*
+             * A refused initialisation leaves no running process behind it: the partial
+             * report's writes are rolled back with the open step, as the host's failed
+             * task initialisation leaves nothing committed.
+             */
             crash();
             throw e;
         }
@@ -202,12 +204,14 @@ public final class SimProcess {
         oracle.commitStep(name, List.copyOf(stepAppends));
         stepAppends.clear();
         openTxn = null;
-        // SPEC Assumption 2, judged at the moment it is breached rather than at the end of
-        // the run: a step committed while a received channel is a dead incarnation whose
-        // name is bound to a live other id — the same judgement reportIdentity makes — is a
-        // step taken on the wrong log. An honest engine never gets here, since the identity
-        // report at its re-initialisation refuses; so every such commit is a catch, whatever
-        // the process does afterwards, and a fresh incarnation killed later on hides nothing.
+        /*
+         * SPEC Assumption 2, judged at the moment it is breached rather than at the end of
+         * the run: a step committed while a received channel is a dead incarnation whose
+         * name is bound to a live other id — the same judgement reportIdentity makes — is a
+         * step taken on the wrong log. An honest engine never gets here, since the identity
+         * report at its re-initialisation refuses; so every such commit is a catch, whatever
+         * the process does afterwards, and a fresh incarnation killed later on hides nothing.
+         */
         for (SimChannel channel : received.values()) {
             if (recreated(channel)) {
                 oracle.flag("Assumption 2: " + name + " committed a step while its received topic ("
@@ -341,9 +345,11 @@ public final class SimProcess {
         Set<Instance> trueCauses = oracle.causalPastSnapshot(name);
         Map<Channel, Long> upperBound = oracle.expressionUpperBound(name);
 
-        // Only a dead channel excuses an unexpressed cause (SPEC Structural 13, 15): nothing
-        // is dropped for retention any more, so a cause below its channel's log start must
-        // still be expressed.
+        /*
+         * Only a dead channel excuses an unexpressed cause (SPEC Structural 13, 15): nothing
+         * is dropped for retention any more, so a cause below its channel's log start must
+         * still be expressed.
+         */
         Set<Instance> excused = new java.util.HashSet<>();
         for (Instance cause : trueCauses) {
             SimChannel causeChannel = world.channel(cause.channel);

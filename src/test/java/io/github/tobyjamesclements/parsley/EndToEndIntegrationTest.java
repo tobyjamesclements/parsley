@@ -320,8 +320,10 @@ class EndToEndIntegrationTest {
             produce("gap-a", "k", "A0");
             await("A0 delivered", () -> delivered.contains("A0"), Duration.ofSeconds(120));
 
-            // Offset 1 is the aborted record, offset 2 its abort marker: no committed record
-            // will ever occupy either, so a cause naming 2 is out of contract.
+            /*
+             * Offset 1 is the aborted record, offset 2 its abort marker: no committed record
+             * will ever occupy either, so a cause naming 2 is out of contract.
+             */
             produceAborted("gap-a", "ghost");
             produce("gap-b", "k", "B", causesHeader(Map.of(new Channel(topicId("gap-a"), 0), 2L)));
 
@@ -333,10 +335,12 @@ class EndToEndIntegrationTest {
             produce("gap-a", "k", "A3");
             await("B to go once the record that settles the run below it is received",
                     () -> delivered.contains("B") && delivered.contains("A3"), Duration.ofSeconds(120));
-            // B and A3 are causally independent — B names gap-a@2, not A3 — so once gap-a@3
-            // is received both are deliverable and their relative order is the drain's, not
-            // causal order. What is pinned: B went only after that receipt (the 3 s pause
-            // above showed it held), and nothing was dropped or delivered twice.
+            /*
+             * B and A3 are causally independent — B names gap-a@2, not A3 — so once gap-a@3
+             * is received both are deliverable and their relative order is the drain's, not
+             * causal order. What is pinned: B went only after that receipt (the 3 s pause
+             * above showed it held), and nothing was dropped or delivered twice.
+             */
             assertEquals(3, delivered.size(), "each message delivers exactly once");
             assertEquals(java.util.Set.of("A0", "A3", "B"), java.util.Set.copyOf(delivered),
                     "gap-a@3 settles positions 1..2 as never yielding, and B is released by that receipt");

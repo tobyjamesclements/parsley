@@ -249,8 +249,10 @@ class ProcessorRevivalTest {
                 "the frontier keeps every cause: absence of an answer prunes nothing");
         assertEquals(askedAtRevival + 1, identity.asked.size(), "the punctuation asked again while unanswered");
 
-        // The status interval here is 100 ms: the second attempt waits one interval, the
-        // third two, and a punctuation inside the wait does not ask.
+        /*
+         * The status interval here is 100 ms: the second attempt waits one interval, the
+         * third two, and a punctuation inside the wait does not ask.
+         */
         punctuate(revived, clock + 50);
         assertEquals(askedAtRevival + 1, identity.asked.size(), "inside the backoff, nothing asks");
         punctuate(revived, clock + 100);

@@ -250,10 +250,12 @@ class SabotageMetaTest {
     /** Random sweep catches broken engines with margin. */
     @Test
     void randomSweepCatchesBrokenEnginesWithMargin() {
-        // Half of the catches measured over these 120 seeds once the harness retired the facts
-        // event, re-initialised a lost topic's receivers at the event, and stopped clamping
-        // rewinds to the log start: 74, 14, 83, 87, 83, 59, 19,
-        // 29 and 93.
+        /*
+         * Half of the catches measured over these 120 seeds once the harness retired the facts
+         * event, re-initialised a lost topic's receivers at the event, and stopped clamping
+         * rewinds to the log start: 74, 14, 83, 87, 83, 59, 19,
+         * 29 and 93.
+         */
         Map<SabotageMode, Integer> floors = new EnumMap<>(SabotageMode.class);
         floors.put(SabotageMode.IGNORE_CAUSES, 37);
         floors.put(SabotageMode.NO_FIFO, 7);
@@ -264,8 +266,10 @@ class SabotageMetaTest {
         floors.put(SabotageMode.IGNORE_REMOVED_CHANNELS, 9);
         floors.put(SabotageMode.SILENT_DROP, 14);
         floors.put(SabotageMode.OVEREXPRESS, 46);
-        // DELIVER_PAST_DEAD_HOLDS has no floor: calibration found 0 catches in 300 seeds. Its
-        // oracle evidence is deterministic.
+        /*
+         * DELIVER_PAST_DEAD_HOLDS has no floor: calibration found 0 catches in 300 seeds. Its
+         * oracle evidence is deterministic.
+         */
         floors.forEach((mode, floor) -> {
             long caught = LongStream.rangeClosed(1, 120)
                     .filter(seed -> !Scenario.run(seed, mode).clean())

@@ -62,9 +62,11 @@ class OrderingStateCodecCorruptionTest {
                 List.of(new Header("h", new byte[] {1})), Causes.of(Map.of(CH, 3L)));
     }
 
-    // Layout of validBlob(): version@0, timestamp@1, flags@9, keyLen@10, key@14,
-    // valueLen@15, value@19, headerCount@20, headerKeyLen@24, headerKey@28,
-    // headerValueLen@29, headerValue@33, causeCount@34, causeEntry@38.
+    /*
+     * Layout of validBlob(): version@0, timestamp@1, flags@9, keyLen@10, key@14,
+     * valueLen@15, value@19, headerCount@20, headerKeyLen@24, headerKey@28,
+     * headerValueLen@29, headerValue@33, causeCount@34, causeEntry@38.
+     */
     private static byte[] patched(int offset, int value) {
         byte[] blob = validBlob();
         ByteBuffer.wrap(blob).putInt(offset, value);
@@ -160,8 +162,10 @@ class OrderingStateCodecCorruptionTest {
     void nonSentinelNegativeHeaderValueLengthRaisesTheRefusal() {
         byte[] blob = OrderingStateCodec.encodeHeld(0L, null, new byte[0],
                 List.of(new Header("n", null)), Causes.of(Map.of()));
-        // version@0, timestamp@1, flags@9, valueLen@10, headerCount@14, headerKeyLen@18,
-        // key 'n'@22, headerValueLen@23 — the encoder's one null spelling.
+        /*
+         * version@0, timestamp@1, flags@9, valueLen@10, headerCount@14, headerKeyLen@18,
+         * key 'n'@22, headerValueLen@23 — the encoder's one null spelling.
+         */
         assertEquals(-1, ByteBuffer.wrap(blob).getInt(23), "the layout premise must hold");
         ByteBuffer.wrap(blob).putInt(23, -2);
         refusal(blob);

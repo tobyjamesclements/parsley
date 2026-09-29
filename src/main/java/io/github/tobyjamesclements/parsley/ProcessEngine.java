@@ -60,28 +60,34 @@ final class ProcessEngine {
     private final Map<Channel, Long> fedUpTo = new HashMap<>();
     private final TreeMap<Channel, Long> frontier = new TreeMap<>();
 
-    // The frontier's encoded width, maintained incrementally so the budget check in
-    // mergeFrontier stays O(1) now that size is a function of the frontier's shape rather
-    // than its entry count. frontierBodyBytes counts everything after the version
-    // byte and the topic-count varint; the per-topic partition counts supply the
-    // varint-width deltas as groups grow, shrink, appear and empty. Kept in step at the
-    // frontier's three mutation sites — restore, merge, prune; positions update in place
-    // without changing size — and pinned against CausesCodec.encode by ProcessEngineTest.
+    /*
+     * The frontier's encoded width, maintained incrementally so the budget check in
+     * mergeFrontier stays O(1) now that size is a function of the frontier's shape rather
+     * than its entry count. frontierBodyBytes counts everything after the version
+     * byte and the topic-count varint; the per-topic partition counts supply the
+     * varint-width deltas as groups grow, shrink, appear and empty. Kept in step at the
+     * frontier's three mutation sites — restore, merge, prune; positions update in place
+     * without changing size — and pinned against CausesCodec.encode by ProcessEngineTest.
+     */
     private final Map<UUID, Integer> frontierTopicPartitions = new HashMap<>();
     private int frontierBodyBytes;
 
     private final Map<Channel, Long> deliveredPast = new HashMap<>();
     private final Map<Channel, ArrayDeque<Hold>> held = new HashMap<>();
 
-    // Holds taken in since the last flush, in receipt order. A flush persists exactly these,
-    // so its cost follows the holds added since the previous flush rather than the depth of
-    // every buffer, which is what keeps a deep hold-back buffer from taxing every later
-    // receipt.
+    /*
+     * Holds taken in since the last flush, in receipt order. A flush persists exactly these,
+     * so its cost follows the holds added since the previous flush rather than the depth of
+     * every buffer, which is what keeps a deep hold-back buffer from taxing every later
+     * receipt.
+     */
     private final ArrayDeque<Hold> unpersisted = new ArrayDeque<>();
 
-    // The frontier's encoded form, built on first use and dropped at the frontier's
-    // mutation sites, so a step that sends several messages encodes once and a step that
-    // sends none never encodes.
+    /*
+     * The frontier's encoded form, built on first use and dropped at the frontier's
+     * mutation sites, so a step that sends several messages encodes once and a step that
+     * sends none never encodes.
+     */
     private byte[] encodedFrontier;
 
     private final Map<Channel, Long> sessionFloor;
@@ -218,11 +224,13 @@ final class ProcessEngine {
                 (key, value) -> fedUpTo.put(OrderingStateCodec.channelOfEntryKey(key), OrderingStateCodec.decodeLong(value)));
         store.scanPrefix(OrderingStateCodec.tagPrefix(OrderingStateCodec.TAG_FRONTIER), (key, value) -> {
             Channel channel = OrderingStateCodec.channelOfEntryKey(key);
-            // The reserved zero topic id can only have entered a frontier through a forged
-            // header absorbed before wire-format constraint 5 refused it at receipt: no
-            // substrate query can ever answer for it, so restoring it would re-express and
-            // re-persist untrustworthy state forever. Stored state that cannot be trusted
-            // is a reason to stop.
+            /*
+             * The reserved zero topic id can only have entered a frontier through a forged
+             * header absorbed before wire-format constraint 5 refused it at receipt: no
+             * substrate query can ever answer for it, so restoring it would re-express and
+             * re-persist untrustworthy state forever. Stored state that cannot be trusted
+             * is a reason to stop.
+             */
             if (Channel.isZeroTopicId(channel.topicId())) {
                 throw new FailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                         "process " + processName + ": restored frontier names the reserved zero topic id;"
@@ -246,13 +254,17 @@ final class ProcessEngine {
                         "process " + processName + ": held message at " + channel + "@" + position
                                 + " but the channel is no longer in the declared received-channel set");
             }
-            // Decoded here to refuse a corrupt blob at start rather than at delivery; only
-            // the skeleton is retained, the decoded form is reloaded when the hold reaches
-            // the head of its buffer.
+            /*
+             * Decoded here to refuse a corrupt blob at start rather than at delivery; only
+             * the skeleton is retained, the decoded form is reloaded when the hold reaches
+             * the head of its buffer.
+             */
             OrderingStateCodec.HeldBlob blob = OrderingStateCodec.decodeHeld(value);
 
-            // Everything downstream treats the deque head as the minimum held position, so
-            // the scan order the store promises is verified rather than assumed.
+            /*
+             * Everything downstream treats the deque head as the minimum held position, so
+             * the scan order the store promises is verified rather than assumed.
+             */
             ArrayDeque<Hold> buffer = held.computeIfAbsent(channel, c -> new ArrayDeque<>());
             Hold last = buffer.peekLast();
             if (last != null && last.position >= position) {
@@ -270,12 +282,14 @@ final class ProcessEngine {
                 advanceFedUpTo(channel, past);
             }
         }
-        // The host's start position is the one position it reports (Host obligation 2):
-        // everything below it was fed and committed by an earlier execution, or was skipped
-        // by the initial position the process was started at. Raising coverage to just
-        // below it is Structural 12's baseline, taken here so that it lies within the
-        // session floor: a feed below the start position is the host re-feeding a
-        // committed past, a replay to drop, never a contradiction.
+        /*
+         * The host's start position is the one position it reports (Host obligation 2):
+         * everything below it was fed and committed by an earlier execution, or was skipped
+         * by the initial position the process was started at. Raising coverage to just
+         * below it is Structural 12's baseline, taken here so that it lies within the
+         * session floor: a feed below the start position is the host re-feeding a
+         * committed past, a replay to drop, never a contradiction.
+         */
         startPositions.forEach((channel, start) -> {
             if (this.receivedChannels.contains(channel) && start > 0) {
                 advanceFedUpTo(channel, start - 1);
@@ -410,12 +424,14 @@ final class ProcessEngine {
             }
             Long floor = sessionFloor.get(channel);
             if (floor == null || message.position() > floor) {
-                // Not a feed-order violation: in-execution order is checked against
-                // fedThisExecution above. Coverage above the session floor is only ever
-                // raised by this execution's own receipts, which fedThisExecution already
-                // guards, so this branch is an invariant guard with no known trigger:
-                // it is kept so that a contradiction between the host's feed and the
-                // engine's record can never fall through to a silent drop or a delivery.
+                /*
+                 * Not a feed-order violation: in-execution order is checked against
+                 * fedThisExecution above. Coverage above the session floor is only ever
+                 * raised by this execution's own receipts, which fedThisExecution already
+                 * guards, so this branch is an invariant guard with no known trigger:
+                 * it is kept so that a contradiction between the host's feed and the
+                 * engine's record can never fall through to a silent drop or a delivery.
+                 */
                 throw new FailClosedException(Reason.COVERED_POSITION_FED,
                         "process " + processName + ": fed " + channel + "@" + message.position()
                                 + " which this execution's own coverage already records as fed or never"
@@ -739,8 +755,10 @@ final class ProcessEngine {
             }
         }
         if (delivered != null) {
-            // Its causes are needed below, and they may live only in the store: read them
-            // before the entry goes.
+            /*
+             * Its causes are needed below, and they may live only in the store: read them
+             * before the entry goes.
+             */
             load(delivered);
             delivered.removed = true;
         }
@@ -787,8 +805,10 @@ final class ProcessEngine {
                             + metadataBudgetBytes + " bytes. The frontier's growth law is documented in"
                             + " docs/model.md.");
         }
-        // A copy per send: the cached bytes are this engine's, and a header handed to a
-        // host is the host's to keep or alter.
+        /*
+         * A copy per send: the cached bytes are this engine's, and a header handed to a
+         * host is the host's to keep or alter.
+         */
         return encoded.clone();
     }
 
@@ -845,16 +865,20 @@ final class ProcessEngine {
         Hold hold;
         while ((hold = unpersisted.pollFirst()) != null) {
             if (hold.removed) {
-                // Delivered within the step that received it: it was never in the store
-                // and must not enter it now.
+                /*
+                 * Delivered within the step that received it: it was never in the store
+                 * and must not enter it now.
+                 */
                 continue;
             }
             store.put(OrderingStateCodec.heldKey(hold.channel, hold.position),
                     OrderingStateCodec.encodeHeld(hold.timestamp, hold.key, hold.value, hold.headers, hold.causes));
             hold.persisted = true;
             if (held.get(hold.channel).peekFirst() != hold) {
-                // Only the head is read before it is delivered; everything behind it waits
-                // in the store and is decoded again on reaching the head.
+                /*
+                 * Only the head is read before it is delivered; everything behind it waits
+                 * in the store and is decoded again on reaching the head.
+                 */
                 hold.key = null;
                 hold.value = null;
                 hold.headers = null;

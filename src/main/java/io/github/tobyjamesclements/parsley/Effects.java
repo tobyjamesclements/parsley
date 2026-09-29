@@ -73,9 +73,11 @@ public final class Effects {
                 throw new IllegalArgumentException(topic.name() + ": timestamp must be non-negative: "
                         + timestamp.getAsLong());
             }
-            // One snapshot, one pass: checking the caller's mutable list and then copying
-            // it separately would let a mutation between the passes surface as List.copyOf's
-            // bare NPE instead of the refusals documented here.
+            /*
+             * One snapshot, one pass: checking the caller's mutable list and then copying
+             * it separately would let a mutation between the passes surface as List.copyOf's
+             * bare NPE instead of the refusals documented here.
+             */
             Header[] snapshot = headers.toArray(new Header[0]);
             for (Header header : snapshot) {
                 if (header == null) {

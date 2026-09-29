@@ -104,8 +104,10 @@ class AdminTopicIdentitySource implements TopicIdentitySource {
         for (UUID id : unknown) {
             String name = namesById.get(id);
             if (name == null) {
-                // No name to corroborate against: a denial would look exactly like this,
-                // and absence of evidence is never evidence of deletion.
+                /*
+                 * No name to corroborate against: a denial would look exactly like this,
+                 * and absence of evidence is never evidence of deletion.
+                 */
                 LOG.debug("{}: topic id {} unknown by id and never named; keeping its causes", applicationId, id);
             } else {
                 nameOf.put(id, name);
@@ -115,11 +117,13 @@ class AdminTopicIdentitySource implements TopicIdentitySource {
             return TopicIdentityVerdicts.NONE;
         }
 
-        // Every id here starts as a dead candidate; any keep-alive answer removes it. Both
-        // NAME_GONE and RECREATED say the id asked about is dead, so a run that mixes them
-        // still confirms death — and one that ever resolved the name elsewhere is a
-        // recreation, whether the new incarnation appeared before the first answer or
-        // between two of them.
+        /*
+         * Every id here starts as a dead candidate; any keep-alive answer removes it. Both
+         * NAME_GONE and RECREATED say the id asked about is dead, so a run that mixes them
+         * still confirms death — and one that ever resolved the name elsewhere is a
+         * recreation, whether the new incarnation appeared before the first answer or
+         * between two of them.
+         */
         Set<UUID> dead = new HashSet<>(nameOf.keySet());
         Set<UUID> resolvedElsewhere = new HashSet<>();
         Set<UUID> unanswered = new HashSet<>();
@@ -145,8 +149,10 @@ class AdminTopicIdentitySource implements TopicIdentitySource {
                     }
                     case SAME_ID -> dead.remove(id);
                     case UNAVAILABLE -> {
-                        // No answer is not an answer: the id is neither convicted nor
-                        // acquitted, and the asker will put the question again.
+                        /*
+                         * No answer is not an answer: the id is neither convicted nor
+                         * acquitted, and the asker will put the question again.
+                         */
                         dead.remove(id);
                         unanswered.add(id);
                     }
@@ -197,8 +203,10 @@ class AdminTopicIdentitySource implements TopicIdentitySource {
                 alive.add(id);
                 namesById.put(id, description.name());
             } catch (ExecutionException e) {
-                // InvalidTopicException is the client's own answer for an id it deems
-                // unrepresentable (the reserved zero id), tolerated like unknown.
+                /*
+                 * InvalidTopicException is the client's own answer for an id it deems
+                 * unrepresentable (the reserved zero id), tolerated like unknown.
+                 */
                 if (e.getCause() instanceof UnknownTopicIdException
                         || e.getCause() instanceof UnknownTopicOrPartitionException
                         || e.getCause() instanceof InvalidTopicException) {

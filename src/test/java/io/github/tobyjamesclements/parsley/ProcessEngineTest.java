@@ -253,9 +253,11 @@ class ProcessEngineTest {
         assertEquals(engine.causesHeaderForSend().length, engine.frontierBytes(),
                 "after pruning a mid-group partition");
 
-        // One topic wide enough to push its partition count from one varint byte to two,
-        // and enough distinct topics to do the same to the topic count: 3 in the frontier
-        // already, plus this group and 124 singles makes exactly 128.
+        /*
+         * One topic wide enough to push its partition count from one varint byte to two,
+         * and enough distinct topics to do the same to the topic count: 3 in the frontier
+         * already, plus this group and 124 singles makes exactly 128.
+         */
         java.util.TreeMap<Channel, Long> wide = new java.util.TreeMap<>();
         for (int partition = 0; partition < 130; partition++) {
             wide.put(new Channel(new UUID(41, 1), partition), 1L);
@@ -664,8 +666,10 @@ class ProcessEngineTest {
         generous.flushHolds();
         store.commit();
 
-        // Neither the restore path nor the identity report checks the budget, so both must
-        // pass here and the stop below is attributable to the send check alone.
+        /*
+         * Neither the restore path nor the identity report checks the budget, so both must
+         * pass here and the stop below is attributable to the send check alone.
+         */
         ProcessEngine constricted = new ProcessEngine("p", BOTH, store, 64);
         constricted.onIdentityReport(IdentityReport.NONE);
         assertEquals(11, constricted.frontierSize(), "staging: the wide frontier was restored intact");

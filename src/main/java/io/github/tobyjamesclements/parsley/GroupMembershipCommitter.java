@@ -50,24 +50,30 @@ final class GroupMembershipCommitter implements AutoCloseable {
         props.put(ConsumerConfig.CLIENT_ID_CONFIG, CLIENT_ID_PREFIX + java.util.UUID.randomUUID());
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "none");
-        // The member's subscription must never create a missing received topic: every
-        // received topic was resolved by start() moments before this join, so a deletion
-        // racing the bootstrap must surface as this join's failure, not be papered over by
-        // the metadata request auto-creating an empty impostor.
+        /*
+         * The member's subscription must never create a missing received topic: every
+         * received topic was resolved by start() moments before this join, so a deletion
+         * racing the bootstrap must surface as this join's failure, not be papered over by
+         * the metadata request auto-creating an empty impostor.
+         */
         props.put(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false);
-        // committed() is a transaction-stable offset fetch regardless of configuration:
-        // the consumer sets requireStable on every OffsetFetch it sends (verified in
-        // kafka-clients 4.3.1, ConsumerCoordinator#sendOffsetFetchRequest), retrying
-        // while a pending transactional commit is deciding. Nothing here needs an
-        // isolation.level — this member never fetches a record.
+        /*
+         * committed() is a transaction-stable offset fetch regardless of configuration:
+         * the consumer sets requireStable on every OffsetFetch it sends (verified in
+         * kafka-clients 4.3.1, ConsumerCoordinator#sendOffsetFetchRequest), retrying
+         * while a pending transactional commit is deciding. Nothing here needs an
+         * isolation.level — this member never fetches a record.
+         */
 
-        // This member must vacate the group the moment it closes — the Streams start that
-        // follows joins the same group under a different protocol. A static member sends no
-        // LeaveGroup on close, so an inherited instance id would hold the group for the full
-        // session timeout; membership here is always dynamic, and the graceful close's
-        // LeaveGroup is what vacates the group. The session timeout matters only for an
-        // ungraceful exit: it defaults short, but an explicitly configured value is kept,
-        // because brokers may enforce a minimum above the default.
+        /*
+         * This member must vacate the group the moment it closes — the Streams start that
+         * follows joins the same group under a different protocol. A static member sends no
+         * LeaveGroup on close, so an inherited instance id would hold the group for the full
+         * session timeout; membership here is always dynamic, and the graceful close's
+         * LeaveGroup is what vacates the group. The session timeout matters only for an
+         * ungraceful exit: it defaults short, but an explicitly configured value is kept,
+         * because brokers may enforce a minimum above the default.
+         */
         if (props.remove(ConsumerConfig.GROUP_INSTANCE_ID_CONFIG) != null) {
             LOG.warn("{}: ignoring configured group.instance.id for the bootstrap member; static membership"
                     + " would hold the group past close and fail the Streams start that follows", groupId);
@@ -76,9 +82,11 @@ final class GroupMembershipCommitter implements AutoCloseable {
         if (sessionTimeout.isEmpty()) {
             props.put(ConsumerConfig.SESSION_TIMEOUT_MS_CONFIG, 10_000);
         } else {
-            // Resolved across the Streams spellings too: a broker may enforce a minimum
-            // above the default, and a timeout configured the idiomatic prefixed way must
-            // reach this plain consumer or the join is rejected outright.
+            /*
+             * Resolved across the Streams spellings too: a broker may enforce a minimum
+             * above the default, and a timeout configured the idiomatic prefixed way must
+             * reach this plain consumer or the join is rejected outright.
+             */
             long millis = sessionTimeout.getAsLong();
             if (millis < 1) {
                 throw new IllegalArgumentException("session.timeout.ms value " + millis

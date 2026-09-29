@@ -88,10 +88,12 @@ final class CausesMalformationVectors {
         zeroPartitions.put((byte) 1);
         zeroPartitions.putLong(1).putLong(1).put((byte) 0);
 
-        // Count miscounts mutate real encoder output, so the vectors cannot drift from the
-        // grammar. At these values every count is a one-byte varint: the topic count at
-        // offset 1, the first group's partition count at offset 18. An overstated count
-        // runs the decoder off the end (truncation); an understated one leaves bytes over.
+        /*
+         * Count miscounts mutate real encoder output, so the vectors cannot drift from the
+         * grammar. At these values every count is a one-byte varint: the topic count at
+         * offset 1, the first group's partition count at offset 18. An overstated count
+         * runs the decoder off the end (truncation); an understated one leaves bytes over.
+         */
         byte[] oneTopic = CausesCodec.encode(Causes.of(Map.of(CH_A, 1L)));
         byte[] topicsOverstated = oneTopic.clone();
         topicsOverstated[1] = 2;
@@ -126,11 +128,13 @@ final class CausesMalformationVectors {
                     buffer.array(), "exceeds the non-negative int range");
         }
 
-        // Snapshot-era flat-grammar shapes: version byte 1 hardcoded, not
-        // FORMAT_VERSION, because these bytes are historical constants — the retired flat
-        // layout was version, a fixed 4-byte big-endian entry count, then 28-byte entries.
-        // Under the grouped grammar the count's leading zero byte reads as a zero topic
-        // count, so both shapes must refuse as trailing bytes, never decode as empty.
+        /*
+         * Snapshot-era flat-grammar shapes: version byte 1 hardcoded, not
+         * FORMAT_VERSION, because these bytes are historical constants — the retired flat
+         * layout was version, a fixed 4-byte big-endian entry count, then 28-byte entries.
+         * Under the grouped grammar the count's leading zero byte reads as a zero topic
+         * count, so both shapes must refuse as trailing bytes, never decode as empty.
+         */
         ByteBuffer flatOneEntry = ByteBuffer.allocate(1 + 4 + 28);
         flatOneEntry.put((byte) 1).putInt(1);
         flatOneEntry.putLong(1).putLong(1).putInt(0).putLong(7);

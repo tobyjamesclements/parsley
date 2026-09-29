@@ -34,15 +34,20 @@ public final class ParsleyConfig {
             "production.exception.handler",
             "interceptor.classes",
             "default.timestamp.extractor",
-            // The group membership protocol selects the fencing semantics the initial-position
-            // bootstrap's safety argument is built on; swapping it is a guarantee-bearing change.
+            /*
+             * The group membership protocol selects the fencing semantics the
+             * initial-position bootstrap's safety argument is built on; swapping it is a
+             * guarantee-bearing change.
+             */
             "group.protocol",
             "group.remote.assignor",
-            // Streams pins the plain spelling from its own config but applies prefixed
-            // consumer overrides on top without re-pinning (unlike its producer path), so a
-            // main.consumer./restore.consumer./global.consumer. spelling would point a
-            // consumer at a different cluster than the one start() resolved identities
-            // against.
+            /*
+             * Streams pins the plain spelling from its own config but applies prefixed
+             * consumer overrides on top without re-pinning (unlike its producer path), so a
+             * main.consumer./restore.consumer./global.consumer. spelling would point a
+             * consumer at a different cluster than the one start() resolved identities
+             * against.
+             */
             "bootstrap.servers");
 
     private final String bootstrapServers;

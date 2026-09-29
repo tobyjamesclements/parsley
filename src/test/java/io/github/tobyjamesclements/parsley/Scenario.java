@@ -195,11 +195,13 @@ public final class Scenario {
                 if (channel.dead) {
                     continue;
                 }
-                // Judged from world truth the host cannot launder: every committed record
-                // between where this process first read the channel and where it has
-                // committed reading to must have been fed to it. A host that reset its read
-                // position past discarded records (auto.offset.reset=earliest where the runtime pins
-                // none) skipped records it owed, whatever its read position says now.
+                /*
+                 * Judged from world truth the host cannot launder: every committed record
+                 * between where this process first read the channel and where it has
+                 * committed reading to must have been fed to it. A host that reset its read
+                 * position past discarded records (auto.offset.reset=earliest where the runtime pins
+                 * none) skipped records it owed, whatever its read position says now.
+                 */
                 for (long q = p.initialNextRead(channel); q < p.committedNextRead(channel); q++) {
                     if (world.slot(channel, q) instanceof SimWorld.MessageSlot slot
                             && !oracle.committedFeedOf(p.name, slot.instance())) {
@@ -221,9 +223,11 @@ public final class Scenario {
             }
         }
 
-        // SPEC Assumption 2 is judged at each commit (SimProcess.commitStep), and quiesce
-        // commits a step for every running process before this point, so nothing is left
-        // to judge here.
+        /*
+         * SPEC Assumption 2 is judged at each commit (SimProcess.commitStep), and quiesce
+         * commits a step for every running process before this point, so nothing is left
+         * to judge here.
+         */
         return new Result(List.copyOf(violations), oracle, null, List.copyOf(journal));
     }
 
@@ -261,10 +265,12 @@ public final class Scenario {
 
     private static void truncateEvent(SimWorld world, List<SimProcess> processes, List<SimChannel> channels,
                                       Random rng, List<String> journal, RefusalLedger ledger) {
-        // Biased toward channels some running process holds messages from, as killEvent is:
-        // retention crossing a held message is the shape the engine once refused and now delivers
-        // from the hold-back buffer in order, and an unbiased pick reached it in a handful
-        // of seeds.
+        /*
+         * Biased toward channels some running process holds messages from, as killEvent is:
+         * retention crossing a held message is the shape the engine once refused and now delivers
+         * from the hold-back buffer in order, and an unbiased pick reached it in a handful
+         * of seeds.
+         */
         List<SimChannel> heldFrom = channels.stream()
                 .filter(c -> !c.dead && processes.stream().anyMatch(p ->
                         p.isRunning() && p.engine().receivedChannelSet().contains(c.id())
@@ -283,8 +289,10 @@ public final class Scenario {
 
             target = reader.committedNextRead(channel) + (shape == 0 ? 0 : 1);
         } else if (shape == 4 && !readers.isEmpty()) {
-            // Exactly one past a reader's oldest held message: the smallest retention that
-            // discards the copy of a message a process still holds.
+            /*
+             * Exactly one past a reader's oldest held message: the smallest retention that
+             * discards the copy of a message a process still holds.
+             */
             SimProcess reader = readers.get(rng.nextInt(readers.size()));
             java.util.OptionalLong head = reader.isRunning()
                     ? reader.engine().headPosition(channel.id()) : java.util.OptionalLong.empty();

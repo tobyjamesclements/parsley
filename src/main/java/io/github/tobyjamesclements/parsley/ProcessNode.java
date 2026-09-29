@@ -133,9 +133,11 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
      */
     @Override
     public void init(ProcessorContext<byte[], byte[]> context) {
-        // A revived task runs close() and then init() on this same instance against restored
-        // state; both cancel the previous incarnation's punctuator, so a lifecycle that
-        // re-initialises without closing is covered too.
+        /*
+         * A revived task runs close() and then init() on this same instance against restored
+         * state; both cancel the previous incarnation's punctuator, so a lifecycle that
+         * re-initialises without closing is covered too.
+         */
         if (punctuator != null) {
             punctuator.cancel();
             punctuator = null;
@@ -168,8 +170,10 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
         serdeTopicByStore.clear();
         for (Store<?, ?> store : definition.stores()) {
             appStores.put(store.name(), context.getStateStore(store.name()));
-            // Composed once per store: the same name start() validated, recomposing it per
-            // state access would be a dead length check on the hot path.
+            /*
+             * Composed once per store: the same name start() validated, recomposing it per
+             * state access would be a dead length check on the hot path.
+             */
             serdeTopicByStore.put(store.name(),
                     ProcessTopology.changelogName(context.applicationId(), store.name()));
         }
@@ -200,8 +204,10 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
      * is never a verdict).
      */
     private void checkIdentity() {
-        // Every channel this task's state names, defined once: the received channels and
-        // the restored frontier.
+        /*
+         * Every channel this task's state names, defined once: the received channels and
+         * the restored frontier.
+         */
         Set<Channel> known = new HashSet<>(engine.frontierSnapshot().byChannel().keySet());
         known.addAll(engine.receivedChannelSet());
         Set<UUID> topicIds = new HashSet<>();
@@ -295,16 +301,20 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
     }
 
     private <K, V> void deliver(Process.Input<K, V> input, DeliverableMessage message) {
-        // Checked at entry, never blanket-reset mid-frame: a reset placed after any
-        // application code would erase what that code latched. The delivered payload's
-        // own deserializers are application code and run before the handler, so a refusal
-        // they latch through a captured reader must fail this step, not vanish.
+        /*
+         * Checked at entry, never blanket-reset mid-frame: a reset placed after any
+         * application code would erase what that code latched. The delivered payload's
+         * own deserializers are application code and run before the handler, so a refusal
+         * they latch through a captured reader must fail this step, not vanish.
+         */
         rethrowSeamViolation();
         Topic<K, V> declared = input.topic();
         String topic = declared.name();
-        // Reserved transport headers are parsley's own carriage, invisible to application
-        // logic in both directions: deserializers see exactly the headers the
-        // application sent, the same view Delivery presents one frame later.
+        /*
+         * Reserved transport headers are parsley's own carriage, invisible to application
+         * logic in both directions: deserializers see exactly the headers the
+         * application sent, the same view Delivery presents one frame later.
+         */
         List<Header> applicationHeaders = withoutReservedHeaders(message.headers());
         RecordHeaders receivedHeaders = toKafkaHeaders(applicationHeaders);
         K key;
@@ -315,9 +325,11 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
             value = message.value() == null
                     ? null : declared.valueSerde().deserializer().deserialize(topic, receivedHeaders, message.value());
         } catch (RuntimeException e) {
-            // A reader refusal thrown through the deserializer keeps its own reason: the
-            // latch identifies it, and wrapping it as a payload failure would mislabel
-            // the stop for status().
+            /*
+             * A reader refusal thrown through the deserializer keeps its own reason: the
+             * latch identifies it, and wrapping it as a payload failure would mislabel
+             * the stop for status().
+             */
             rethrowSeamViolation();
             throw new FailClosedException(
                     FailClosedException.Reason.APPLICATION_PAYLOAD_UNDECODABLE,
@@ -328,25 +340,31 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
         Delivery<K, V> delivery = Delivery.of(declared, message.channel(), message.position(),
                 message.timestamp(), key, value, applicationHeaders);
         Effects effects = input.handler().handle(delivery, state);
-        // The reader's refusal was thrown inside the handler's own frame, where an
-        // application catch can swallow it; the latch makes the step fail regardless,
-        // as docs/failing-closed.md promises for every fail-closed event.
+        /*
+         * The reader's refusal was thrown inside the handler's own frame, where an
+         * application catch can swallow it; the latch makes the step fail regardless,
+         * as docs/failing-closed.md promises for every fail-closed event.
+         */
         rethrowSeamViolation();
         if (effects == null) {
-            // A deliberate refusal that recurs identically on restart, so it carries its
-            // own reason and reaches status() rather than an empty refusalReason.
+            /*
+             * A deliberate refusal that recurs identically on restart, so it carries its
+             * own reason and reaches status() rather than an empty refusalReason.
+             */
             throw new FailClosedException(
                     FailClosedException.Reason.HANDLER_RETURNED_NULL_EFFECTS,
                     definition.name() + ": handler for " + topic + " returned null effects; return"
                             + " Effects.none() for a step that changes nothing");
         }
-        // Plan, then apply: resolving every effect's declared target and serializing every
-        // payload is a pure function of the definition and the returned Effects, so every
-        // refusal that can be raised here — undeclared target, unserializable payload,
-        // reserved header, exceeded metadata budget — fires before the first write reaches
-        // RocksDB or the first record is forwarded, never relying on the EOS abort alone to
-        // unwind a half-applied step. Apply then consumes the plan, so an effect cannot
-        // reach a store or a sink without having been planned.
+        /*
+         * Plan, then apply: resolving every effect's declared target and serializing every
+         * payload is a pure function of the definition and the returned Effects, so every
+         * refusal that can be raised here — undeclared target, unserializable payload,
+         * reserved header, exceeded metadata budget — fires before the first write reaches
+         * RocksDB or the first record is forwarded, never relying on the EOS abort alone to
+         * unwind a half-applied step. Apply then consumes the plan, so an effect cannot
+         * reach a store or a sink without having been planned.
+         */
         List<PlannedWrite> writes = new ArrayList<>(effects.writes().size());
         for (Effects.Write<?, ?> write : effects.writes()) {
             writes.add(planWrite(write));
@@ -365,9 +383,11 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
         for (PlannedSend send : sends) {
             context.forward(send.record(), send.sinkName());
         }
-        // Application code can still run after the post-handler check — a serializer
-        // invoked during planning may hold the reader and latch a refusal there. The
-        // step's effects have applied, but the EOS abort unwinds them.
+        /*
+         * Application code can still run after the post-handler check — a serializer
+         * invoked during planning may hold the reader and latch a refusal there. The
+         * step's effects have applied, but the EOS abort unwinds them.
+         */
         rethrowSeamViolation();
     }
 
@@ -422,9 +442,11 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
         String serdeTopic = serdeTopicByStore.get(declared.name());
         byte[] keyBytes = serialize(declared.keySerde(), serdeTopic, null, write.key());
         if (keyBytes == null) {
-            // The Serializer contract permits signalling failure by returning null; a
-            // null store key cannot address an entry, so it must fail the plan with its
-            // reason rather than surface as the store's bare NPE during apply.
+            /*
+             * The Serializer contract permits signalling failure by returning null; a
+             * null store key cannot address an entry, so it must fail the plan with its
+             * reason rather than surface as the store's bare NPE during apply.
+             */
             throw new FailClosedException(
                     FailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
                     definition.name() + ": " + declared.name() + " state write key serialized to null;"
@@ -444,16 +466,20 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
                     definition.name() + " sent to undeclared topic " + topic);
         }
         RecordHeaders headers = toKafkaHeaders(send.headers());
-        // The declared topic's serdes produce the bytes, the way the store seam writes
-        // with its declared store: name resolution decides the codec, so a second Topic
-        // instance for a declared topic has no serdes to smuggle past sends(...).
+        /*
+         * The declared topic's serdes produce the bytes, the way the store seam writes
+         * with its declared store: name resolution decides the codec, so a second Topic
+         * instance for a declared topic has no serdes to smuggle past sends(...).
+         */
         byte[] keyBytes = send.key() == null
                 ? null : serialize(declared.keySerde(), topic, headers, send.key());
         byte[] valueBytes = send.value() == null
                 ? null : serialize(declared.valueSerde(), topic, headers, send.value());
-        // The send's own headers were checked at construction, but the serializers were
-        // just handed the mutable collection; re-check before the genuine stamp goes on, so
-        // a header-writing serializer fails here instead of poisoning every receiver.
+        /*
+         * The send's own headers were checked at construction, but the serializers were
+         * just handed the mutable collection; re-check before the genuine stamp goes on, so
+         * a header-writing serializer fails here instead of poisoning every receiver.
+         */
         for (org.apache.kafka.common.header.Header header : headers) {
             if (header.key().startsWith(CausesCodec.RESERVED_HEADER_PREFIX)) {
                 throw new FailClosedException(
@@ -481,8 +507,10 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
                     ? serializer.serialize(topic, data)
                     : serializer.serialize(topic, headers, data);
         } catch (RuntimeException e) {
-            // A reader refusal thrown through the serializer keeps its own reason rather
-            // than being relabeled as a payload failure.
+            /*
+             * A reader refusal thrown through the serializer keeps its own reason rather
+             * than being relabeled as a payload failure.
+             */
             rethrowSeamViolation();
             throw new FailClosedException(
                     FailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
@@ -521,9 +549,11 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
                                 + " by the declared serde", e));
             }
             if (keyBytes == null) {
-                // The Serializer contract permits signalling failure by returning null;
-                // without this guard that shape surfaces as the store's bare NPE inside
-                // the handler's frame, unlatched and swallowable.
+                /*
+                 * The Serializer contract permits signalling failure by returning null;
+                 * without this guard that shape surfaces as the store's bare NPE inside
+                 * the handler's frame, unlatched and swallowable.
+                 */
                 throw latched(new FailClosedException(
                         FailClosedException.Reason.APPLICATION_PAYLOAD_UNSERIALIZABLE,
                         definition.name() + ": " + store.name() + " state read key serialized to null;"

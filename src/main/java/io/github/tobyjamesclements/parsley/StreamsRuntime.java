@@ -55,9 +55,11 @@ final class StreamsRuntime implements AutoCloseable {
     static final java.time.Duration CORROBORATION_BACKOFF = java.time.Duration.ofMillis(500);
 
     private final Admin admin;
-    // Populated by start() and read by status()/healthy()/close() from monitoring threads,
-    // so these are concurrent like failuresByProcess; insertion order is preserved for
-    // status reporting.
+    /*
+     * Populated by start() and read by status()/healthy()/close() from monitoring threads,
+     * so these are concurrent like failuresByProcess; insertion order is preserved for
+     * status reporting.
+     */
     private final Map<String, KafkaStreams> streamsByProcess =
             java.util.Collections.synchronizedMap(new LinkedHashMap<>());
     private final java.util.concurrent.ConcurrentHashMap<String, Throwable> failuresByProcess =
@@ -66,9 +68,11 @@ final class StreamsRuntime implements AutoCloseable {
     /** Counted down when any process stops or this runtime closes. */
     private final java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(1);
 
-    // Package-private for RecordFailureDiagnosticsTest, which drives recordFailure and
-    // reads the merge's outcome directly — the failure path never touches the admin
-    // client, so the test passes none. Production construction stays inside start().
+    /*
+     * Package-private for RecordFailureDiagnosticsTest, which drives recordFailure and
+     * reads the merge's outcome directly — the failure path never touches the admin
+     * client, so the test passes none. Production construction stays inside start().
+     */
     StreamsRuntime(Admin admin) {
         this.admin = admin;
     }
@@ -108,13 +112,15 @@ final class StreamsRuntime implements AutoCloseable {
                                 changelog.get().partitions().size())
                         : ChangelogView.ABSENT;
                 Map<byte[], byte[]> orderingState = orderingView.latest();
-                // Prior state means committed ordering records, not the topic's mere
-                // existence: a task's first committed step wrote the store's version entry,
-                // which compaction retains, so any committed execution leaves records — a
-                // changelog emptied of them (deleteRecords, a cleanup-policy excursion) is
-                // the same loss shape as a deleted one and must run the same refusal
-                // (per partition). The width refusal still keys on the
-                // topic, whose partition count outlives its records.
+                /*
+                 * Prior state means committed ordering records, not the topic's mere
+                 * existence: a task's first committed step wrote the store's version entry,
+                 * which compaction retains, so any committed execution leaves records — a
+                 * changelog emptied of them (deleteRecords, a cleanup-policy excursion) is
+                 * the same loss shape as a deleted one and must run the same refusal
+                 * (per partition). The width refusal still keys on the
+                 * topic, whose partition count outlives its records.
+                 */
                 boolean priorState = !orderingState.isEmpty();
                 runtime.refuseStrandedHeldMessages(applicationId, definition, topics, priorState, orderingState);
                 runtime.refuseWidthChange(applicationId, definition, topics, changelog);
@@ -123,9 +129,11 @@ final class StreamsRuntime implements AutoCloseable {
                 Map<UUID, String> namesById = new HashMap<>();
                 topics.forEach((name, info) -> namesById.put(info.topicId(), name));
 
-                // The declared names are what let a task's initialisation tell a deleted
-                // received topic from a denied describe; names of upstream topics are
-                // learned as tasks initialise.
+                /*
+                 * The declared names are what let a task's initialisation tell a deleted
+                 * received topic from a denied describe; names of upstream topics are
+                 * learned as tasks initialise.
+                 */
                 AdminTopicIdentitySource identitySource = new AdminTopicIdentitySource(admin, applicationId,
                         namesById, CORROBORATION_BACKOFF);
                 KafkaStreams kafkaStreams = new KafkaStreams(
@@ -133,19 +141,23 @@ final class StreamsRuntime implements AutoCloseable {
                                 ProcessNode.PUNCTUATION_INTERVAL, config.metadataBudgetBytes()),
                         streamsProperties(config, applicationId));
                 java.time.Duration memberBound = sessionTimeout(clientProps, java.time.Duration.ofSeconds(10));
-                // A refused join is replaced only while another instance's bootstrap member can
-                // still be lingering: twice its session timeout from here covers the pre-start
-                // wait below and one ungraceful exit. Past that, a member speaking another
-                // protocol under this application id is persistent, and the client stops with
-                // that diagnosis rather than replacing its thread forever.
+                /*
+                 * A refused join is replaced only while another instance's bootstrap member can
+                 * still be lingering: twice its session timeout from here covers the pre-start
+                 * wait below and one ungraceful exit. Past that, a member speaking another
+                 * protocol under this application id is persistent, and the client stops with
+                 * that diagnosis rather than replacing its thread forever.
+                 */
                 long collisionDeadline = System.nanoTime() + 2 * memberBound.toNanos();
                 kafkaStreams.setUncaughtExceptionHandler(exception -> {
                     if (shouldReplaceThread(exception, System.nanoTime(), collisionDeadline)) {
-                        // Another instance's bootstrap member is still in the group under the
-                        // consumer protocol, so this thread's join was refused. That member
-                        // leaves within milliseconds of committing; a replacement thread joins
-                        // after it, and nothing this thread did needs undoing — it never held a
-                        // task.
+                        /*
+                         * Another instance's bootstrap member is still in the group under the
+                         * consumer protocol, so this thread's join was refused. That member
+                         * leaves within milliseconds of committing; a replacement thread
+                         * joins after it, and nothing this thread did needs undoing — it
+                         * never held a task.
+                         */
                         LOG.warn("process {}: the group join met another instance's bootstrap member;"
                                 + " replacing the stream thread to join again", definition.name());
                         return StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse.REPLACE_THREAD;
@@ -361,13 +373,17 @@ final class StreamsRuntime implements AutoCloseable {
                 && FailClosedException.findIn(latest) != null ? latest : existing;
     }
 
-    // Package-private so RecordFailureDiagnosticsTest can pin the merge wiring and the
-    // per-diagnosis log lines directly; production reaches it only through the uncaught
-    // exception handler start() installs.
+    /*
+     * Package-private so RecordFailureDiagnosticsTest can pin the merge wiring and the
+     * per-diagnosis log lines directly; production reaches it only through the uncaught
+     * exception handler start() installs.
+     */
     void recordFailure(String process, Throwable exception) {
-        // A stop the substrate detected but that recurs identically on restart carries its
-        // reason into status() like an engine refusal (Operational 1): a supervisor
-        // keyed on refusalReason must not read it as a transient and restart forever.
+        /*
+         * A stop the substrate detected but that recurs identically on restart carries its
+         * reason into status() like an engine refusal (Operational 1): a supervisor
+         * keyed on refusalReason must not read it as a transient and restart forever.
+         */
         FailureDiagnosis diagnosis = classifyFailure(exception);
         Throwable recorded = switch (diagnosis) {
             case POSITIONS_DISCARDED_UNREAD -> new FailClosedException(
@@ -459,11 +475,13 @@ final class StreamsRuntime implements AutoCloseable {
     }
 
     private static void refuseReservedTopicNames(ParsleyConfig config, List<Process> definitions) {
-        // Composed changelog names must be distinct across every process: process names
-        // are distinct, but composition can still collide ("app-orders" + "audit-log" and
-        // "app-orders-audit" + "log" both give app-orders-audit-log-changelog), and a
-        // silently deduped collision would have two Streams applications sharing one
-        // changelog, each restoring the other's records.
+        /*
+         * Composed changelog names must be distinct across every process: process names
+         * are distinct, but composition can still collide ("app-orders" + "audit-log" and
+         * "app-orders-audit" + "log" both give app-orders-audit-log-changelog), and a
+         * silently deduped collision would have two Streams applications sharing one
+         * changelog, each restoring the other's records.
+         */
         Map<String, String> ownerByChangelog = new HashMap<>();
         for (Process definition : definitions) {
             String applicationId = config.applicationIdPrefix() + "-" + definition.name();
@@ -476,9 +494,11 @@ final class StreamsRuntime implements AutoCloseable {
                         definition.name());
             }
         }
-        // Reserved-namespace containment is not re-checked here: every declared topic came
-        // through Topic's constructor, which refuses it, so a runtime re-check would be
-        // unreachable and unpinnable. Only the composed-name collision can arise at start.
+        /*
+         * Reserved-namespace containment is not re-checked here: every declared topic came
+         * through Topic's constructor, which refuses it, so a runtime re-check would be
+         * unreachable and unpinnable. Only the composed-name collision can arise at start.
+         */
         for (String topic : declaredTopics(definitions)) {
             if (ownerByChangelog.containsKey(topic)) {
                 throw new IllegalArgumentException("topic '" + topic + "' collides with parsley's internal"
@@ -748,10 +768,12 @@ final class StreamsRuntime implements AutoCloseable {
             } else {
                 stallDeadline = System.nanoTime() + stallTimeout.toNanos();
                 polled.forEach(record -> {
-                    // A held message's body is never read here — the view answers which
-                    // channels hold something, not what — so it is kept as a presence
-                    // marker, and a tombstone still clears it. Retaining every blob
-                    // put the whole hold-back backlog on the heap at every start.
+                    /*
+                     * A held message's body is never read here — the view answers which
+                     * channels hold something, not what — so it is kept as a presence
+                     * marker, and a tombstone still clears it. Retaining every blob
+                     * put the whole hold-back backlog on the heap at every start.
+                     */
                     byte[] value = record.value();
                     latest.put(record.key(), value != null
                             && OrderingStateCodec.isHeldKey(record.key())
@@ -759,10 +781,12 @@ final class StreamsRuntime implements AutoCloseable {
                     partitionsWithRecords.add(record.partition());
                 });
             }
-            // A partition that reached its snapshot end stops feeding the loop:
-            // records past the snapshot would otherwise keep resetting the stall
-            // deadline forever while another partition sits pinned below its end,
-            // turning the promised loud stall into an indefinite hang.
+            /*
+             * A partition that reached its snapshot end stops feeding the loop:
+             * records past the snapshot would otherwise keep resetting the stall
+             * deadline forever while another partition sits pinned below its end,
+             * turning the promised loud stall into an indefinite hang.
+             */
             for (TopicPartition tp : parts) {
                 if (consumer.position(tp) >= ends.get(tp) && !consumer.paused().contains(tp)) {
                     consumer.pause(List.of(tp));
@@ -931,12 +955,14 @@ final class StreamsRuntime implements AutoCloseable {
             committer.join(Set.copyOf(ProcessTopology.inputTopics(definition)),
                     sessionTimeout(clientProps, java.time.Duration.ofSeconds(45)).multipliedBy(2));
             Map<TopicPartition, OffsetAndMetadata> committed = committer.committed(received);
-            // Re-checked against the member's fetch: the admin listing above silently
-            // omits any partition whose offset has a pending transactional commit
-            // (partition-level UNSTABLE_OFFSET_COMMIT is skipped, not failed, by the
-            // admin client), so a lost-state stamp could hide from the pre-check. The
-            // member's committed() is a stable fetch that retries until the transaction
-            // resolves, so what it returns is authoritative.
+            /*
+             * Re-checked against the member's fetch: the admin listing above silently
+             * omits any partition whose offset has a pending transactional commit
+             * (partition-level UNSTABLE_OFFSET_COMMIT is skipped, not failed, by the
+             * admin client), so a lost-state stamp could hide from the pre-check. The
+             * member's committed() is a stable fetch that retries until the transaction
+             * resolves, so what it returns is authoritative.
+             */
             refuseLostOrderingState(applicationId, orderingView, committed, recheck);
             Map<Channel, Long> covered =
                     OrderingStateCodec.coveredPositions(orderingView.latest());
@@ -975,9 +1001,11 @@ final class StreamsRuntime implements AutoCloseable {
             LOG.info("{}: committed initial positions for {}", applicationId, toCommit.keySet());
             return startPositions(received, committed, toCommit);
         } catch (FailClosedException | RetryableStartException e) {
-            // The retryable transient keeps its own diagnosis: wrapping it in the terminal
-            // "could not be established" shape would send the operator to a remedy the
-            // next attempt makes destructive.
+            /*
+             * The retryable transient keeps its own diagnosis: wrapping it in the terminal
+             * "could not be established" shape would send the operator to a remedy the
+             * next attempt makes destructive.
+             */
             throw e;
         } catch (Exception e) {
             throw new IllegalStateException(
