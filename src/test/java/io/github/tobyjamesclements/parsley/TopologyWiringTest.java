@@ -81,7 +81,7 @@ class TopologyWiringTest {
 
     /**
      * A send carries the delivered message's timestamp unless given one of its own
-     * (D15, D111): a message sent long after the one it answers may otherwise carry a
+     *: a message sent long after the one it answers may otherwise carry a
      * timestamp old enough for time-based retention to discard it on the next segment roll.
      */
     @Test
@@ -115,7 +115,7 @@ class TopologyWiringTest {
     /**
      * A first initialisation asks the identity source about the received topics — the
      * frontier is empty until something is received — and, once answered, nothing runs
-     * between deliveries: no punctuation asks again (D115). The frontier half of the
+     * between deliveries: no punctuation asks again. The frontier half of the
      * question is pinned where a restored frontier exists,
      * {@code ProcessorRevivalTest#everyInitialisationAsksAboutReceivedAndFrontierTopicsAndNothingElseAsks}.
      */
@@ -286,7 +286,7 @@ class TopologyWiringTest {
 
     /**
      * A cause naming a position no record has reached is held and visible, and nothing but
-     * a record at or past that position releases it (D115): the punctuation neither
+     * a record at or past that position releases it: the punctuation neither
      * settles nor delivers on its own, however many times it runs. The hand-built header
      * here is exactly what an out-of-contract stamper produces (wire-format constraint 8);
      * once records reach in1@5 the hold goes, because receipt of a position asserts
@@ -482,7 +482,7 @@ class TopologyWiringTest {
      * The delivered payload's own deserializers are application code running before the
      * handler: one holding a reader captured on an earlier delivery must not have its
      * latched refusal erased by a frame reset. The step fails even when the deserializer
-     * swallows the thrown exception (D87) — previously the reset ran after the
+     * swallows the thrown exception — previously the reset ran after the
      * deserializers and silently discarded exactly this refusal.
      */
     @Test
@@ -524,7 +524,7 @@ class TopologyWiringTest {
     /**
      * A reader refusal that propagates out of a deserializer unswallowed keeps its own
      * reason: relabeling it as an undecodable payload would point the operator at codecs
-     * when the condition is an undeclared-store access (D88).
+     * when the condition is an undeclared-store access.
      */
     @Test
     void unswallowedReaderRefusalInADeserializerKeepsItsReason() {
@@ -601,7 +601,7 @@ class TopologyWiringTest {
 
     /**
      * The read seam hides parsley's transport header from application deserializers — the
-     * mirror of the write seam serializing before the stamp goes on (D56): a header-aware
+     * mirror of the write seam serializing before the stamp goes on: a header-aware
      * codec sees the same header set on both sides of the wire, and application logic has
      * no way to observe the causal metadata.
      */
@@ -668,7 +668,7 @@ class TopologyWiringTest {
 
     /**
      * A stored value the declared serde can no longer decode is the state-read shape of
-     * D13's payload rule: it fails the step with its own reason, and an application catch
+     * the payload rule: it fails the step with its own reason, and an application catch
      * around the read cannot swallow it — the reader latches the refusal.
      */
     @Test
@@ -737,7 +737,7 @@ class TopologyWiringTest {
     /**
      * The write-side twin of the null-returning read key above: the Serializer contract
      * permits signalling failure by returning null, and a null store key cannot address an
-     * entry, so {@code planWrite} must fail the plan with its own reason (D81's taxonomy)
+     * entry, so {@code planWrite} must fail the plan with its own reason
      * before any write applies — not surface as the store's bare NPE during apply, after a
      * sibling write already landed. The null-KEY-at-Effects-construction refusal is a
      * different site: this key is non-null and the declared serde encodes it to null.
@@ -779,7 +779,7 @@ class TopologyWiringTest {
      * The read-key serializer that throws, as opposed to returning null (pinned two tests
      * up): the reader must wrap the failure with its own reason and latch it before
      * throwing, so a handler that catches and swallows its read's failure cannot commit
-     * the step (D87's latch-past-catch promise, D81's taxonomy). Without the wrap the bare
+     * the step (the latch-past-catch promise). Without the wrap the bare
      * RuntimeException lands in the application catch, unlatched, and the step commits
      * with its refused read swallowed.
      */

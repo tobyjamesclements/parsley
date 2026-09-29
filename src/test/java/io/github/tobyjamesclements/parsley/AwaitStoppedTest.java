@@ -8,7 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Establishes the wait an application blocks on (D111): {@code awaitStopped} returns when
+ * Establishes the wait an application blocks on: {@code awaitStopped} returns when
  * a process fails, whatever the failure, or when the runtime closes, and not before. The
  * documented shape {@code try (Parsley p = Parsley.start(...)) { p.awaitStopped(); }} is
  * what this pins; without the wait the same block closed every process as soon as it had

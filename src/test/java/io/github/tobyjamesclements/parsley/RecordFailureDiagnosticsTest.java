@@ -23,11 +23,11 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Establishes how a stream thread's uncaught failure is diagnosed and retained.
  *
  * <p>{@code recordFailure} is the runtime's last diagnostic seam: whatever it names is all
- * the operator gets for a mid-run stop (Operational 1/6, D81's taxonomy). Kafka Streams
+ * the operator gets for a mid-run stop (Operational 1/6). Kafka Streams
  * wraps the triggering exception in layers of {@link StreamsException}/{@link KafkaException},
  * so the classification must walk the cause chain — bounded, because a cyclic chain must
  * not hang the uncaught-exception handler — and the failure {@code status()} later unwraps
- * is chosen by a merge whose precedence keeps the fail-closed refusal (D55) over any
+ * is chosen by a merge whose precedence keeps the fail-closed refusal over any
  * follow-on transient.
  */
 class RecordFailureDiagnosticsTest {
@@ -50,7 +50,7 @@ class RecordFailureDiagnosticsTest {
     /**
      * Catches the diagnosis regressing to the generic fallback for the loud half of
      * Safety 8's guard: retention passing surviving committed offsets must be named
-     * POSITIONS_DISCARDED_UNREAD with its deliberate-reset remedy (D81), however deep
+     * POSITIONS_DISCARDED_UNREAD with its deliberate-reset remedy, however deep
      * Streams buries the {@link OffsetOutOfRangeException}.
      */
     @Test
@@ -62,7 +62,7 @@ class RecordFailureDiagnosticsTest {
     }
 
     /**
-     * Catches the missing-source-topic diagnosis regressing to the generic fallback (D115):
+     * Catches the missing-source-topic diagnosis regressing to the generic fallback:
      * a received topic deleted, or deleted and recreated, while the process ran surfaces
      * at the host's next rebalance as {@link MissingSourceTopicException}, by type when the
      * exception survives Streams' wrapping and by its message when only the text does. It
@@ -87,7 +87,7 @@ class RecordFailureDiagnosticsTest {
 
     /**
      * Catches the no-offset diagnosis collapsing back into the partition-shape message it
-     * was split from: D81 separates a received partition with no committed position (a
+     * was split from: the taxonomy separates a received partition with no committed position (a
      * partition added mid-run, or offsets removed mid-run) into its own named condition.
      */
     @Test
@@ -101,8 +101,7 @@ class RecordFailureDiagnosticsTest {
     /**
      * Catches the oversized-record diagnosis regressing to the generic fallback: a held
      * message whose persisted form outgrew the changelog's max.message.bytes needs the
-     * raise-and-restart remedy named, because the metadata budget alone does not bound it
-     * (D87).
+     * raise-and-restart remedy named, because the metadata budget alone does not bound it.
      */
     @Test
     void wrappedRecordTooLargeNamesTheSizeLimit() {
@@ -115,7 +114,7 @@ class RecordFailureDiagnosticsTest {
     /**
      * Catches the message probe for the mid-run partition-shape change being dropped or
      * narrowed: Streams reports the assignor's refusal only as text, so the width-change
-     * diagnosis (D59) keys on the "invalid partitions" substring — and only on it, so an
+     * diagnosis keys on the "invalid partitions" substring — and only on it, so an
      * unrelated failure must still fall through to the generic log.
      */
     @Test
@@ -124,7 +123,7 @@ class RecordFailureDiagnosticsTest {
                 StreamsRuntime.classifyFailure(streamsWrapped(
                         new IllegalStateException("assignment failed: invalid partitions for task 0_1"))),
                 "an otherwise-generic failure whose message reports invalid partitions must be"
-                        + " named as a mid-run partition-shape change (D59)");
+                        + " named as a mid-run partition-shape change");
         assertEquals(StreamsRuntime.FailureDiagnosis.UNRECOGNISED,
                 StreamsRuntime.classifyFailure(streamsWrapped(
                         new IllegalStateException("assignment failed: something unrelated"))),
@@ -178,7 +177,7 @@ class RecordFailureDiagnosticsTest {
 
     /**
      * Catches the retained failure regressing to last-writer-wins in either direction:
-     * {@code status()} unwraps the fail-closed refusal for the operator (D55), so a
+     * {@code status()} unwraps the fail-closed refusal for the operator, so a
      * follow-on transient must never bury an already-recorded refusal, and a refusal
      * arriving after a transient must displace it.
      */
@@ -193,7 +192,7 @@ class RecordFailureDiagnosticsTest {
                         + " no refusalReason for a deliberate stop");
         assertSame(refusal, StreamsRuntime.preferFailClosedDiagnosis(refusal, transientFailure),
                 "a transient arriving after a refusal must never bury it: the refusal is what"
-                        + " status() unwraps for the operator (D55)");
+                        + " status() unwraps for the operator");
     }
 
     /**
@@ -220,7 +219,7 @@ class RecordFailureDiagnosticsTest {
     /**
      * Catches {@code recordFailure} bypassing the precedence merge — regressing to a
      * plain last-writer-wins put: the retained failure must be chosen by
-     * {@code preferFailClosedDiagnosis}, so the refusal {@code status()} unwraps (D55)
+     * {@code preferFailClosedDiagnosis}, so the refusal {@code status()} unwraps
      * survives a follow-on transient recorded after it. This is the wiring leg the
      * merge-precedence pins above cannot see; the runtime is built without an Admin,
      * which the failure path never touches.
@@ -288,22 +287,22 @@ class RecordFailureDiagnosticsTest {
         String noPosition = lineNaming(logged, "process p-noposition");
         assertTrue(noPosition.contains("a received partition has no committed read position")
                         && noPosition.contains("Restart the application"),
-                "the missing-position failure must log D81's split condition and the restart"
+                "the missing-position failure must log its split condition and the restart"
                         + " remedy on its own process's line: " + noPosition);
         String tooLarge = lineNaming(logged, "process p-toolarge");
         assertTrue(tooLarge.contains("a record exceeded a size limit")
                         && tooLarge.contains("Raise max.message.bytes"),
-                "the oversized-record failure must log D87's condition and the"
+                "the oversized-record failure must log its condition and the"
                         + " max.message.bytes remedy on its own process's line: " + tooLarge);
         String shape = lineNaming(logged, "process p-shape");
         assertTrue(shape.contains("the partition shape of its topics changed while it ran")
                         && shape.contains("Restart the application"),
-                "the shape-change failure must log D59's condition and the restart remedy on"
+                "the shape-change failure must log its condition and the restart remedy on"
                         + " its own process's line: " + shape);
         String missing = lineNaming(logged, "process p-missing");
         assertTrue(missing.contains("a received topic was missing when the host rebalanced")
                         && missing.contains("CHANNEL_IDENTITY_CHANGED"),
-                "the missing-source-topic failure must log D115's condition and what a restart"
+                "the missing-source-topic failure must log its condition and what a restart"
                         + " diagnoses on its own process's line: " + missing);
         assertTrue(lineNaming(logged, "process p-generic")
                         .contains("failed; shutting its application down (failing closed)"),

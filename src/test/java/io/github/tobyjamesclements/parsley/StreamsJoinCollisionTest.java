@@ -17,8 +17,8 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Pins the two mechanisms behind a concurrent cold start (D48's residual S1, closed by
- * D108) over their seams, deterministically: the pre-start wait for other instances'
+ * Pins the two mechanisms behind a concurrent cold start
+ * over their seams, deterministically: the pre-start wait for other instances'
  * bootstrap members, and the decision to replace a stream thread whose join a lingering
  * member refused. {@code ConcurrentColdStartIntegrationTest} corroborates both on a real
  * broker, where the collision window is probabilistic.
@@ -54,7 +54,7 @@ class StreamsJoinCollisionTest {
      * The wait for other instances' bootstrap members polls until they leave, gives up at
      * its bound with the member still present, treats a failed describe as no evidence, and
      * ends on an interrupted sleep; the sleeps between polls are the hundred milliseconds
-     * D108 records.
+     * the runtime specifies.
      */
     @Test
     void theBootstrapMemberWaitEndsWhenTheMemberLeavesAndGivesUpAtTheBound() {

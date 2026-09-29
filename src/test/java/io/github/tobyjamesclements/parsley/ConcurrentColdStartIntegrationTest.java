@@ -22,8 +22,8 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Establishes that several instances of one application can cold-start together (D48's
- * residual S1, closed by D108). Each finds offsets missing and joins the group as a
+ * Establishes that several instances of one application can cold-start together. Each
+ * finds offsets missing and joins the group as a
  * bootstrap member; a Streams join that meets another instance's still-open member is
  * refused as a protocol conflict, which the consumer treats as fatal. The runtime now waits
  * for other instances' members to leave before starting Streams and replaces a refused
@@ -62,7 +62,7 @@ class ConcurrentColdStartIntegrationTest {
 
     /**
      * {@code Parsley.start} returns once each process's host has been started, without
-     * waiting for it to run (D109): the state read immediately after is the host's
+     * waiting for it to run: the state read immediately after is the host's
      * rebalance or, after a fast join, already running, and never a stop. How long the
      * rebalance takes is the host's to decide, so the pin is what {@code start} promises
      * rather than the transient state one particular join leaves behind.
@@ -83,7 +83,7 @@ class ConcurrentColdStartIntegrationTest {
     /**
      * Eight concurrent cold starts of two instances each. The collision window is the
      * milliseconds between one instance's member leaving and the other's Streams join, so
-     * it is probabilistic: before D108 it killed one instance's client in three of eight
+     * it is probabilistic: before the pre-start wait it killed one instance's client in three of eight
      * rounds here. Every instance must now come up running; a start that hangs or a client
      * still rebalancing when the settle window closes counts as a failure of that round.
      */

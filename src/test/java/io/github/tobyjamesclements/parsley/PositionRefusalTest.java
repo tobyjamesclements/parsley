@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Pins the value-object floor under every position the protocol handles: a negative or
  * null position is refused at construction with the one-taxonomy
- * {@code IllegalArgumentException} (D73), before any engine, store or codec logic can
+ * {@code IllegalArgumentException}, before any engine, store or codec logic can
  * consume it. Positions are log offsets; a negative one describes no record and would
  * poison every comparison the deliverability decision makes.
  *

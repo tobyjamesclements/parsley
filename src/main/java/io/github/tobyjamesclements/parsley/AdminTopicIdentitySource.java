@@ -28,31 +28,31 @@ import java.util.concurrent.TimeUnit;
  * <p>Every id a task's state names is described by id. One that still resolves is alive, and
  * its name is learned. One that does not is not yet dead: a Describe denial masks a live
  * topic as unknown by id, and a broker's metadata view can lag. So an unknown id is judged
- * by its last-known name — declared at start, or learned at an earlier initialisation of
- * this process — and only from three consistent answers half a second apart, the evidence
- * standard the start path applies to the changelog and the declared topics (D84, D113).
+ * by its last-known name, declared at start or learned at an earlier initialisation of
+ * this process, and only from three consistent answers half a second apart, the evidence
+ * standard the start path applies to the changelog and the declared topics.
  * Two answers say the id asked about is dead: the name unknown, and the name resolving to
- * another id. Three of those in a row confirm it, and the id is reported recreated if any
- * of the three resolved the name elsewhere — a recreation completing between two answers is
- * still a recreation — and deleted otherwise. A denial or the name resolving to the very id
- * asked about (the by-id answer was stale) keeps the id alive. A describe that times out or
- * fails is no answer at all: the id is reported unanswered, and the asker keeps its question
- * pending and asks again, exactly as it does when the by-id describe fails. An id whose name
- * was never learned is never confirmed dead at all (D75); it lingers in the frontier,
- * costing expression size and never safety.
+ * another id. Three of those in a row confirm it. The id is reported recreated if any of
+ * the three resolved the name elsewhere, since a recreation completing between two answers
+ * is still a recreation, and deleted otherwise. A denial or the name resolving to the very
+ * id asked about (the by-id answer was stale) keeps the id alive. A describe that times out
+ * or fails is no answer at all: the id is reported unanswered, and the asker keeps its
+ * question pending and asks again, exactly as it does when the by-id describe fails. An id
+ * whose name was never learned is never confirmed dead at all. It lingers in the
+ * frontier, costing expression size and never safety.
  *
  * <p>Every describe a resolve makes shares one deadline, {@link #TIMEOUT_SECONDS} from the
  * first, so a call on the stream thread is bounded whatever the number of ids.
  *
  * <p>One instance serves every task of a process, so a name learned by one task's
- * initialisation serves the next; the map is concurrent because tasks initialise on their
+ * initialisation serves the next. The map is concurrent because tasks initialise on their
  * own stream threads.
  */
 class AdminTopicIdentitySource implements TopicIdentitySource {
     private static final Logger LOG = LoggerFactory.getLogger(AdminTopicIdentitySource.class);
     private static final long TIMEOUT_SECONDS = 10;
     /**
-     * The evidence standard for concluding a topic gone (D84, D113): this many consistent
+     * The evidence standard for concluding a topic gone: this many consistent
      * unknown-topic answers, each {@link StreamsRuntime#CORROBORATION_BACKOFF} after the
      * last. One spelling for the declared topics, the ordering changelog and the identity
      * check at task initialisation.
@@ -105,7 +105,7 @@ class AdminTopicIdentitySource implements TopicIdentitySource {
             String name = namesById.get(id);
             if (name == null) {
                 // No name to corroborate against: a denial would look exactly like this,
-                // and absence of evidence is never evidence of deletion (D75).
+                // and absence of evidence is never evidence of deletion.
                 LOG.debug("{}: topic id {} unknown by id and never named; keeping its causes", applicationId, id);
             } else {
                 nameOf.put(id, name);
@@ -198,7 +198,7 @@ class AdminTopicIdentitySource implements TopicIdentitySource {
                 namesById.put(id, description.name());
             } catch (ExecutionException e) {
                 // InvalidTopicException is the client's own answer for an id it deems
-                // unrepresentable (the reserved zero id), tolerated like unknown (D83).
+                // unrepresentable (the reserved zero id), tolerated like unknown.
                 if (e.getCause() instanceof UnknownTopicIdException
                         || e.getCause() instanceof UnknownTopicOrPartitionException
                         || e.getCause() instanceof InvalidTopicException) {

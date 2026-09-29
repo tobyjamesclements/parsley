@@ -28,7 +28,7 @@ final class GroupMembershipCommitter implements AutoCloseable {
     /**
      * The client id every bootstrap member carries, so a starting instance can see another
      * instance's member in the group description and wait for it to leave before its own
-     * Kafka Streams joins (D108).
+     * Kafka Streams joins.
      */
     static final String CLIENT_ID_PREFIX = "parsley-bootstrap-";
 
@@ -53,7 +53,7 @@ final class GroupMembershipCommitter implements AutoCloseable {
         // The member's subscription must never create a missing received topic: every
         // received topic was resolved by start() moments before this join, so a deletion
         // racing the bootstrap must surface as this join's failure, not be papered over by
-        // the metadata request auto-creating an empty impostor (D82).
+        // the metadata request auto-creating an empty impostor.
         props.put(ConsumerConfig.ALLOW_AUTO_CREATE_TOPICS_CONFIG, false);
         // committed() is a transaction-stable offset fetch regardless of configuration:
         // the consumer sets requireStable on every OffsetFetch it sends (verified in
@@ -94,10 +94,10 @@ final class GroupMembershipCommitter implements AutoCloseable {
 
     /**
      * Resolves a configured session timeout across the Streams spellings, accepting
-     * exactly what Kafka's own config parser accepts for an INT config — an Integer, or a
-     * trimmed string holding one — so a value every other client in this process runs on
-     * cannot fail only inside the bootstrap, and a value the clients would reject
-     * post-bootstrap fails here, first and naming its property (D87, tightened by D88: a
+     * exactly what Kafka's own config parser accepts for an INT config, an Integer or a
+     * trimmed string holding one. A value every other client in this process runs on
+     * therefore cannot fail only inside the bootstrap, and a value the clients would reject
+     * post-bootstrap fails here, first and naming its property (a
      * laxer parse would let the bootstrap succeed on a value StreamsConfig then rejects).
      */
     static java.util.OptionalLong configuredSessionTimeoutMillis(Map<String, Object> props) {
@@ -149,21 +149,21 @@ final class GroupMembershipCommitter implements AutoCloseable {
         awaitAssignment(consumer, timeout, CONFLICT_BACKOFF);
     }
 
-    /** How long a poll that hit the protocol conflict backs off before asking again (D48). */
+    /** How long a poll that hit the protocol conflict backs off before asking again. */
     private static final Duration CONFLICT_BACKOFF = Duration.ofMillis(500);
 
     /**
-     * The join wait, extracted so the deadline and its diagnoses are pinnable over a
-     * consumer double: polls until the coordinator assigns, backing off on the protocol
-     * conflict a live Kafka Streams member provokes (D48), and ends loudly — at the
+     * Waits for the join, extracted so the deadline and its diagnoses are pinnable over a
+     * consumer double. Polls until the coordinator assigns, backing off on the protocol
+     * conflict a live Kafka Streams member provokes, and ends loudly, either at the
      * deadline, naming the conflict when one was seen, or on an interrupt during the
      * backoff. This deadline is what turns a contested or unreachable group into a
      * diagnosed bootstrap failure instead of an infinite hang (Operational 2).
      *
      * @param consumer        a subscribed consumer whose assignment is awaited
      * @param timeout         how long to wait for the assignment
-     * @param conflictBackoff how long to back off after a protocol-conflict poll —
-     *                        {@link #CONFLICT_BACKOFF} in production, tiny in tests so
+     * @param conflictBackoff how long to back off after a protocol-conflict poll,
+     *                        {@link #CONFLICT_BACKOFF} in production and tiny in tests so
      *                        the conflict-path pins do not spend real wall-clock time
      */
     static void awaitAssignment(org.apache.kafka.clients.consumer.Consumer<byte[], byte[]> consumer,

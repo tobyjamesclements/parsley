@@ -16,7 +16,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>The bootstrap parses the value itself, so a divergence from Kafka's parsing rules
  * would refuse a configuration every other client in the process runs happily on — and a
  * genuinely bad value used to surface as a bare NumberFormatException wrapped in a message
- * pointing nowhere near the property (D87).
+ * pointing nowhere near the property.
  */
 class SessionTimeoutInheritanceTest {
 
@@ -55,7 +55,7 @@ class SessionTimeoutInheritanceTest {
     /**
      * A Long-typed value is refused exactly as Kafka's INT parser refuses it: a laxer
      * parse here would let the bootstrap succeed on a value StreamsConfig then rejects
-     * post-bootstrap, after initial positions were already committed (D88).
+     * post-bootstrap, after initial positions were already committed.
      */
     @Test
     void longTypedValueIsRefusedLikeKafkasOwnParser() {

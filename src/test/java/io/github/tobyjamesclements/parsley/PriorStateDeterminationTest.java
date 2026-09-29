@@ -22,12 +22,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>{@code describeChangelogCorroborated} is the retry loop behind the bootstrap's
  * ordering-changelog describe. One unknown-topic answer is not proof of absence — a
  * describe is served from a single broker's possibly lagging metadata view — so absence is
- * concluded only from three consistent unknown answers (D84). Anything other than an
+ * concluded only from three consistent unknown answers. Anything other than an
  * unknown-topic answer proves nothing about absence at all: a generic failure — a timeout,
  * a broker outage — that concluded "absent" would resume a process with prior state as a
  * first start, silently under-expressing every cause its lost state carried, so it must
  * refuse instead. The scripted-answer seam follows the {@code readToEnds} /
- * {@code ScriptedFacts} precedent (D92).
+ * {@code ScriptedFacts} precedent.
  */
 @Timeout(value = 10)
 class PriorStateDeterminationTest {
@@ -39,7 +39,7 @@ class PriorStateDeterminationTest {
      * Catches the generic-failure arm being deleted or falling through to "absent"
      * (SAFETY): a persistent failure that is not an unknown-topic answer — here a broker
      * timeout — carries no evidence of absence, and concluding "absent" from it would
-     * resume a process with prior state as a first start (D84). The refusal must come
+     * resume a process with prior state as a first start. The refusal must come
      * immediately, name the could-not-determine diagnosis, and keep the failure as its
      * cause for the operator.
      */
@@ -69,7 +69,7 @@ class PriorStateDeterminationTest {
 
     /**
      * Catches the corroboration being weakened to a single answer — the exact
-     * single-answer trust D84 removed: absence must be concluded only after three
+     * single-answer trust the corroboration exists to remove: absence must be concluded only after three
      * consistent unknown-topic answers, so one stale broker view cannot misdiagnose a
      * healthy sibling's state as ORDERING_STATE_LOST, whose printed remedy deletes
      * offsets.
@@ -84,17 +84,17 @@ class PriorStateDeterminationTest {
         }, NO_BACKOFF);
 
         assertTrue(verdict.isEmpty(),
-                "three consistent unknown answers are the corroborated evidence of absence (D84)");
+                "three consistent unknown answers are the corroborated evidence of absence");
         assertEquals(3, describes.get(),
                 "absence must cost exactly three consistent unknown answers — fewer is the"
-                        + " single-answer trust D84 removed, more starves the start budget");
+                        + " single-answer trust the corroboration exists to remove, more starves the start budget");
     }
 
     /**
      * Catches the transient arm breaking: one unknown answer from a lagging broker
      * followed by a successful describe must return the description — the changelog
      * exists, prior state is real — not conclude absence from the first stale answer
-     * (D84's misdiagnosis shape) and not refuse a start that just corroborated itself.
+     * (the misdiagnosis shape) and not refuse a start that just corroborated itself.
      */
     @Test
     void aTransientUnknownFollowedBySuccessReturnsTheDescription() {

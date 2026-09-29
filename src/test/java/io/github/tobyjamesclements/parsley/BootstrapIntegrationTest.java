@@ -187,8 +187,8 @@ class BootstrapIntegrationTest {
     }
 
     /**
-     * Expired offsets resume from the ordering state's coverage, never the declared LATEST
-     * (D36 as D115 narrows it): a process with prior state resumes at the covered position
+     * Expired offsets resume from the ordering state's coverage, never the declared LATEST:
+     * a process with prior state resumes at the covered position
      * plus one, so the record produced while it was stopped delivers, history the first
      * execution skipped stays skipped, and what it delivered is not delivered again.
      */
@@ -235,12 +235,12 @@ class BootstrapIntegrationTest {
     }
 
     /**
-     * An expired committed position past retention refuses at the fetch (D115): the
+     * An expired committed position past retention refuses at the fetch: the
      * bootstrap resumes the partition at the ordering state's covered position plus one,
      * Kafka Streams' first fetch of it finds the position below the log start, and
      * {@code auto.offset.reset=none} stops the process with POSITIONS_DISCARDED_UNREAD in
-     * {@code status()} rather than skipping the gap (SPEC Safety 8, D9/D81/D109). Nothing
-     * past the discarded positions is delivered. D74's start-time comparison against the
+     * {@code status()} rather than skipping the gap (SPEC Safety 8). Nothing
+     * past the discarded positions is delivered. A start-time comparison against the
      * log start used to refuse this from {@code start()} itself; the fetch is now the one
      * judge of retention, and there is no other.
      */
@@ -299,7 +299,7 @@ class BootstrapIntegrationTest {
     /**
      * A received partition an earlier execution never read from — bootstrapped at 0, so it
      * covered nothing — resumes at 0 after its offset expires, never at the substrate's
-     * earliest (D115, corrected by the D115 review): the earliest position may have moved
+     * earliest: the earliest position may have moved
      * past records the process never read, and taking it would treat them as fed. Here
      * retention has passed 0, so the resumed fetch refuses with POSITIONS_DISCARDED_UNREAD
      * rather than silently absorbing the discarded records, and the bootstrap's commit is
@@ -369,9 +369,9 @@ class BootstrapIntegrationTest {
 
     /**
      * An expired committed position within retention resumes at the covered position plus
-     * one (D115): the bootstrap's own commit, read before Kafka Streams has anything to
+     * one: the bootstrap's own commit, read before Kafka Streams has anything to
      * commit over it, is exactly coverage plus one under its stamp — the substrate's
-     * earliest, D36's old fallback, would be 0 — and the records produced after the resume
+     * earliest, the old fallback, would be 0 — and the records produced after the resume
      * deliver once each while nothing delivered before the stop delivers again. The
      * declared initial position is not consulted: a process with prior state resumes, it
      * does not start.
@@ -528,8 +528,8 @@ class BootstrapIntegrationTest {
      * deleted one: the version entry every committed step's transaction wrote is gone, so
      * the surviving Streams-stamped offsets are evidence of a committed step whose state
      * cannot be restored. Keying prior state on the topic's mere existence let this shape
-     * resume mid-log with an empty engine; it must refuse exactly like the deleted shape
-     * (D84), and the diagnosis must name the shape it found.
+     * resume mid-log with an empty engine; it must refuse exactly like the deleted shape,
+     * and the diagnosis must name the shape it found.
      */
     @Test
     void emptiedChangelogWithSurvivingOffsetsRefusesToStart() throws Exception {
@@ -575,8 +575,8 @@ class BootstrapIntegrationTest {
     /**
      * The loss shape is per changelog partition: purging one partition's records while its
      * siblings keep theirs must refuse exactly like the whole topic emptied — the purged
-     * task's state is gone however healthy the merged view looks (D88 tightens D84's
-     * whole-topic check, which this shape slipped past).
+     * task's state is gone however healthy the merged view looks (the older
+     * whole-topic check let this shape slip past).
      */
     @Test
     void emptiedChangelogPartitionWithSurvivingOffsetsRefusesToStart() throws Exception {
@@ -661,7 +661,7 @@ class BootstrapIntegrationTest {
     /**
      * Catches the declared-topics resolution wrap being swapped for a bare rethrow: a
      * declared topic that does not exist — parsley never auto-creates, and every
-     * hand-built consumer pins auto-create off (D82) — must refuse to start with the
+     * hand-built consumer pins auto-create off — must refuse to start with the
      * declared-topics-could-not-be-resolved diagnosis, keeping the broker's unknown-topic
      * answer in the cause chain so the operator sees which lookup actually failed rather
      * than a raw client exception with no verdict.

@@ -31,10 +31,11 @@ final class ProcessTopology {
     }
 
     /**
-     * The one composition of a store's changelog topic name. Every site that needs the
-     * name — validation and description at start, the held-message scan, and the serde
-     * topic the processor hands to serializers — composes it here, so the spelling cannot
-     * drift: a diverging serde topic would silently change schema-registry subjects.
+     * Composes a store's changelog topic name, the one spelling of it. Every site that
+     * needs the name composes it here, so the spelling cannot drift: validation and
+     * description at start, the held-message scan, and the serde topic the processor hands
+     * to serializers. A diverging serde topic would silently change schema-registry
+     * subjects.
      *
      * @param applicationId the process's Kafka application id
      * @param storeName     a declared store name, or {@link #ORDERING_STORE}
@@ -45,13 +46,13 @@ final class ProcessTopology {
     }
 
     /**
-     * The ordering store's builder: persistent, changelogged with compaction (D57), and
-     * cached (D110). Every received record merges its whole frontier — one write per
-     * channel whose position advanced — and every delivery merges the same channels into
+     * Builds the ordering store: persistent, changelogged with compaction, and
+     * cached. Every received record merges its whole frontier, one write per
+     * channel whose position advanced, and every delivery merges the same channels into
      * the delivered past, so without the cache a record cost about two writes per
      * frontier channel to RocksDB and to the changelog. The cache holds the latest value
      * per key and writes it through at commit, so the writes per commit interval are
-     * bounded by the keys touched rather than by records times channels; under
+     * bounded by the keys touched rather than by records times channels. Under
      * exactly-once the flush precedes the commit, so what a step persists is unchanged.
      *
      * @return the store builder

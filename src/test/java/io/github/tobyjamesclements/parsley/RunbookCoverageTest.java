@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>{@code docs/runbooks.md} promises one runbook per reason and a row per reason in its
  * triage table, and {@code docs/failing-closed.md} a trigger row per reason. A reason added
  * to {@link Reason} without them would stop a process with a diagnosis nothing tells the
- * operator what to do about (D114). The scan is over the Markdown sources, so it needs no
+ * operator what to do about. The scan is over the Markdown sources, so it needs no
  * docs toolchain.
  */
 class RunbookCoverageTest {

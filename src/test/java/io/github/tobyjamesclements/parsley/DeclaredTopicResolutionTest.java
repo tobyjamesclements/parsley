@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Pins the corroboration behind declared-topic resolution (D113). A describe is served
+ * Pins the corroboration behind declared-topic resolution. A describe is served
  * from one broker's metadata view, which can lag a topic created moments before the
  * start; a single stale unknown-topic answer used to refuse the start for a topic that
  * existed. Absence is now concluded from three consistent unknown answers, and every

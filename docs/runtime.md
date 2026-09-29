@@ -15,7 +15,7 @@ initialisation on the host's threads surfaces through `Parsley.status()`.
    — expired during a long stop — it pre-commits the ordering state's covered position plus
    one, the next position the previous execution would have read. Whether retention still
    holds it is decided at the first fetch: `auto.offset.reset=none` refuses a position below
-   the log start, and the process stops with `POSITIONS_DISCARDED_UNREAD` (D115). Without
+   the log start, and the process stops with `POSITIONS_DISCARDED_UNREAD`. Without
    prior state it pre-commits the declared initial position through one `listOffsets`, taking
    earliest as the log start and latest as the end. The commit goes through a
    generation-fenced group membership rather than an admin alteration, so a stale paused
@@ -56,7 +56,7 @@ operation runs the topology without exactly-once semantics.
 ## Identity at task initialisation
 
 Nothing is asked of the broker between deliveries; the periodic round that once gathered
-committed positions, log starts and topic identity is gone (D115). A cause names the offset
+committed positions, log starts and topic identity is gone. A cause names the offset
 of a committed record, so receiving that record is what satisfies it, and the positions
 between records that yield no message are settled by receipt of the next record on the
 channel. The one question a task puts to the substrate is asked at its initialisation —
@@ -86,9 +86,9 @@ The engine takes the verdicts through `ProcessEngine.onIdentityReport`. A receiv
 whose topic was recreated under its name refuses `CHANNEL_IDENTITY_CHANGED`: records fed
 under the old identity can no longer be trusted. A received channel whose topic was deleted
 while messages from it remain held refuses `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES`, since
-their place in causal order can no longer be preserved (D46); with nothing held it is settled
-to the end of the channel (D21), and a hold waiting on it goes on the next punctuation or
-record — nothing is delivered from initialisation itself (D34). Dead and recreated channels
+their place in causal order can no longer be preserved; with nothing held it is settled
+to the end of the channel, and a hold waiting on it goes on the next punctuation or
+record — nothing is delivered from initialisation itself. Dead and recreated channels
 are pruned from the frontier and the delivered past; that is the only pruning, and retention
 never prunes. The runtime keeps no verdict windows, no eviction and no rescission.
 
@@ -110,7 +110,7 @@ still-missing one at resolution, and resumes where a broker's metadata merely la
 
 Each task schedules one wall-clock punctuation, every second. It drains what receipt, or the
 initialisation's identity report, already released; flushes holds to the ordering store, so
-a message held at the moment of a crash is still held after the restart (D102); and asks the
+a message held at the moment of a crash is still held after the restart; and asks the
 identity question again where an initialisation's went unanswered. It touches no broker and
 ingests nothing.
 
@@ -131,7 +131,7 @@ Effects handle(Delivery<K, V> delivery, State state)
 
 `Delivery` carries the delivered message. `State` is a read-only typed view over the
 process's declared stores. Effects return through the return value: typed sends, statically
-typed per channel, and state writes.
+typed per topic, and state writes.
 
 The logic receives no other capability. Sending never blocks on the deliverability of the
 message sent. Sends are stamped with the current frontier and forwarded within the step.
@@ -150,11 +150,11 @@ put it on *p*. Two topics received by one process must therefore be partitioned 
 their keys are meant to meet, and producers outside Parsley must partition by the same rule
 — Kafka's default, unless every writer agrees on another. To keep state about a different
 attribute than the delivered key, send a message keyed by that attribute to a topic this or
-another process receives; a channel a process both sends to and receives from is a
+another process receives; a topic a process both sends to and receives from is a
 repartition. Received topics may have unequal partition counts; a task beyond a topic's width
 receives nothing from it.
 
 A handler that throws fails its step. The process stops, and on restart is fed the same
 message and fails again: Parsley never skips a message. To continue past an application
 failure, catch it and return effects that record it deterministically — a send to a
-declared dead-letter channel, or a state write — rather than throwing.
+declared dead-letter topic, or a state write — rather than throwing.

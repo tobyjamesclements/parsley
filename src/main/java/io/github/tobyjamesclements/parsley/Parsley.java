@@ -32,10 +32,10 @@ public final class Parsley implements AutoCloseable {
      * Validates every process, resolves every received and sent topic, establishes each
      * process's initial read positions, then starts every process and returns.
      *
-     * <p>Every declared topic must already exist; nothing is created. The start is
+     * <p>Every declared topic must already exist. Nothing is created. The start is
      * all-or-nothing: a refusal for any process leaves nothing running and is thrown. The
      * call returns once each process's Kafka Streams application has been started, which is
-     * the beginning of its first rebalance, not the end of it — poll {@link #status()} or
+     * the beginning of its first rebalance, not the end of it. Poll {@link #status()} or
      * wait with {@link #awaitStopped()}. A refusal raised inside task initialisation on the
      * host's threads surfaces through {@link #status()}.
      *
@@ -92,9 +92,9 @@ public final class Parsley implements AutoCloseable {
      *
      * <p>{@link #start} returns as soon as every process has been started, so an application
      * whose work is its processes has nothing else to do but wait here. The wait ends when
-     * any process stops — deliberately, to preserve the guarantee, or otherwise — which is
-     * the moment to read {@link #status()} and act, or when another thread calls
-     * {@link #close()}. The wait ends as soon as the stop is known; the host's own shutdown
+     * any process stops, whether to preserve the guarantee or for any other reason, which is
+     * the moment to read {@link #status()} and act. It also ends when another thread calls
+     * {@link #close()}. The wait ends as soon as the stop is known. The host's own shutdown
      * may still be completing, so {@link #status()} can report the process as running for a
      * moment longer before it settles on the stopped state and its reason.
      *

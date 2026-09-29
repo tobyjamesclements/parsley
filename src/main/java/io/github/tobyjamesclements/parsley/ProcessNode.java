@@ -36,8 +36,8 @@ import java.util.UUID;
  *
  * <p>Nothing is asked of the broker between deliveries. A cause names the position of a
  * message that was sent, so receiving that message is what satisfies it (wire-format
- * constraint 8, D115). Task initialisation asks the substrate one question — which of the
- * topics its state names still exist — and settles or refuses on the answer; a wall-clock
+ * constraint 8). Task initialisation asks the substrate one question, which of the
+ * topics its state names still exist, and settles or refuses on the answer. A wall-clock
  * punctuation then only drains what receipt already released, flushes holds, and asks the
  * identity question again where it went unanswered.
  *
@@ -60,8 +60,8 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
     /**
      * True from an initialisation until its identity question has been answered. A source
      * that could not answer at initialisation is asked again from the punctuation, so the
-     * check is event-driven and eventual, never periodic (D115) — and, since each attempt
-     * can block the stream thread for the describe's timeout, not before
+     * check is event-driven and eventual, never periodic. Since each attempt can
+     * block the stream thread for the describe's timeout, it is not asked again before
      * {@link #identityRetryNotBefore}, which backs off exponentially from one punctuation
      * interval to {@link #IDENTITY_RETRY_CAP} while the substrate keeps not answering.
      */
@@ -80,22 +80,24 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
     private State state;
     /**
      * A fail-closed refusal raised by the {@link State} inside application code. The state
-     * latches it here before throwing, and {@code deliver} rethrows at every seam boundary
-     * — frame entry, after the delivered payload's deserializers, after the handler, and
-     * after the planned effects apply — so an application catch cannot commit a step whose
-     * reads were refused, wherever in the frame the read ran. Volatile because the reader
-     * is an object application code can hold: a latch written from an application thread
-     * must be visible to the stream thread's next check.
+     * latches it here before throwing, and {@code deliver} rethrows at every seam boundary,
+     * so an application catch cannot commit a step whose reads were refused, wherever in
+     * the frame the read ran. The boundaries are frame entry, after the delivered payload's
+     * deserializers, after the handler, and after the planned effects apply. Volatile
+     * because the reader is an object application code can hold: a latch written from an
+     * application thread must be visible to the stream thread's next check.
      */
     private volatile FailClosedException swallowedSeamViolation;
 
     /**
+     * Creates the processor for one task of a process.
+     *
      * @param definition          the process this instance runs
      * @param topics              resolved identity and width for every topic it uses
      * @param identitySource      where topic identity is checked at task initialisation
      * @param startPositions      per received partition, the position the host feeds first,
      *                            as the bootstrap established it (SPEC Host obligation 2). A
-     *                            task re-created mid-run is handed the same map; its restored
+     *                            task re-created mid-run is handed the same map. Its restored
      *                            coverage is already at or past it, and coverage is never
      *                            lowered, so the position matters only to a task with no
      *                            state behind it
@@ -119,8 +121,8 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
      *
      * <p>Runs on every initialisation of the task on this thread: a first assignment, a
      * migration, and the host's own re-creation of a task whose source topic went missing.
-     * That is what makes the identity check event-driven rather than periodic (D115).
-     * Nothing is delivered from here (D34): a hold the identity report releases goes on the
+     * That is what makes the identity check event-driven rather than periodic.
+     * Nothing is delivered from here: a hold the identity report releases goes on the
      * next punctuation or record.
      *
      * @param context the task context
@@ -190,12 +192,12 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
     }
 
     /**
-     * Asks the identity source about every topic this task's state names — the received
-     * topics at the identity resolved at start, and every topic in the restored frontier —
+     * Asks the identity source about every topic this task's state names, the received
+     * topics at the identity resolved at start and every topic in the restored frontier,
      * and hands the engine what was confirmed gone. A source that cannot answer is not
      * evidence: the causes stay expressed, nothing settles, and the question stays pending,
-     * to be asked again at the next punctuation until it is answered (D44's rule, kept:
-     * absence of an answer is never a verdict).
+     * to be asked again at the next punctuation until it is answered (absence of an answer
+     * is never a verdict).
      */
     private void checkIdentity() {
         // Every channel this task's state names, defined once: the received channels and
@@ -301,7 +303,7 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
         Topic<K, V> declared = input.topic();
         String topic = declared.name();
         // Reserved transport headers are parsley's own carriage, invisible to application
-        // logic in both directions (D56): deserializers see exactly the headers the
+        // logic in both directions: deserializers see exactly the headers the
         // application sent, the same view Delivery presents one frame later.
         List<Header> applicationHeaders = withoutReservedHeaders(message.headers());
         RecordHeaders receivedHeaders = toKafkaHeaders(applicationHeaders);
@@ -467,9 +469,9 @@ final class ProcessNode implements Processor<byte[], byte[], byte[], byte[]> {
     /**
      * Serializes through the declared serde. A type-level mismatch between a look-alike
      * effect instance and the declared one lands in the unchecked cast's
-     * {@code ClassCastException}, wrapped with a reason here so the stop is diagnosable —
-     * though a declared serde typed loosely enough to accept any object serializes a
-     * mismatched payload as-is (D73's Cost records this).
+     * {@code ClassCastException}, wrapped with a reason here so the stop is diagnosable.
+     * A declared serde typed loosely enough to accept any object serializes a mismatched
+     * payload as-is.
      */
     @SuppressWarnings("unchecked")
     private byte[] serialize(Serde<?> serde, String topic, RecordHeaders headers, Object data) {

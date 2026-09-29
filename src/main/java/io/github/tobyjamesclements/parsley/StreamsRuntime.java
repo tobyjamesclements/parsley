@@ -46,7 +46,7 @@ final class StreamsRuntime implements AutoCloseable {
      * The metadata stamp on every offset the bootstrap commits. Kafka Streams overwrites
      * offset metadata with its own stamp on every commit, so with no prior state any
      * committed offset carrying anything other than this stamp proves the offset was not
-     * left by a crashed bootstrap — a prior execution's, or external tooling's — and the
+     * left by a crashed bootstrap but by a prior execution or external tooling, and the
      * ordering state that must have accompanied it is gone. Keying the refusal on our own
      * stamp rather than on Streams' stamp being non-empty fails closed by construction if
      * a future Streams version ever commits empty metadata.
@@ -63,7 +63,7 @@ final class StreamsRuntime implements AutoCloseable {
     private final java.util.concurrent.ConcurrentHashMap<String, Throwable> failuresByProcess =
             new java.util.concurrent.ConcurrentHashMap<>();
     private final List<KafkaStreams> streams = new java.util.concurrent.CopyOnWriteArrayList<>();
-    /** Counted down when any process stops or this runtime closes (D111). */
+    /** Counted down when any process stops or this runtime closes. */
     private final java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(1);
 
     // Package-private for RecordFailureDiagnosticsTest, which drives recordFailure and
@@ -76,11 +76,11 @@ final class StreamsRuntime implements AutoCloseable {
     /**
      * Resolves topics, builds a topology per process, and starts each one.
      *
-     * <p>Returns once every process's Kafka Streams application has been started; the
+     * <p>Returns once every process's Kafka Streams application has been started. The
      * host then rebalances and initialises tasks on its own threads, so a refusal raised
-     * inside task initialisation — restored state that cannot be trusted, a channel gone
-     * while messages remain held — surfaces through {@link #status()} rather than from
-     * this call, which throws only for what the bootstrap itself can see.
+     * inside task initialisation, such as restored state that cannot be trusted or a
+     * channel gone while messages remain held, surfaces through {@link #status()} rather
+     * than from this call, which throws only for what the bootstrap itself can see.
      *
      * @param config      broker connection, identity and metadata budget
      * @param definitions the processes to run, with distinct names
@@ -113,7 +113,7 @@ final class StreamsRuntime implements AutoCloseable {
                 // which compaction retains, so any committed execution leaves records — a
                 // changelog emptied of them (deleteRecords, a cleanup-policy excursion) is
                 // the same loss shape as a deleted one and must run the same refusal
-                // (D84, per partition since D88). The width refusal still keys on the
+                // (per partition). The width refusal still keys on the
                 // topic, whose partition count outlives its records.
                 boolean priorState = !orderingState.isEmpty();
                 runtime.refuseStrandedHeldMessages(applicationId, definition, topics, priorState, orderingState);
@@ -124,8 +124,8 @@ final class StreamsRuntime implements AutoCloseable {
                 topics.forEach((name, info) -> namesById.put(info.topicId(), name));
 
                 // The declared names are what let a task's initialisation tell a deleted
-                // received topic from a denied describe (D75); names of upstream topics are
-                // learned as tasks initialise (D115).
+                // received topic from a denied describe; names of upstream topics are
+                // learned as tasks initialise.
                 AdminTopicIdentitySource identitySource = new AdminTopicIdentitySource(admin, applicationId,
                         namesById, CORROBORATION_BACKOFF);
                 KafkaStreams kafkaStreams = new KafkaStreams(
@@ -137,7 +137,7 @@ final class StreamsRuntime implements AutoCloseable {
                 // still be lingering: twice its session timeout from here covers the pre-start
                 // wait below and one ungraceful exit. Past that, a member speaking another
                 // protocol under this application id is persistent, and the client stops with
-                // that diagnosis rather than replacing its thread forever (D108).
+                // that diagnosis rather than replacing its thread forever.
                 long collisionDeadline = System.nanoTime() + 2 * memberBound.toNanos();
                 kafkaStreams.setUncaughtExceptionHandler(exception -> {
                     if (shouldReplaceThread(exception, System.nanoTime(), collisionDeadline)) {
@@ -145,7 +145,7 @@ final class StreamsRuntime implements AutoCloseable {
                         // consumer protocol, so this thread's join was refused. That member
                         // leaves within milliseconds of committing; a replacement thread joins
                         // after it, and nothing this thread did needs undoing — it never held a
-                        // task (D108).
+                        // task.
                         LOG.warn("process {}: the group join met another instance's bootstrap member;"
                                 + " replacing the stream thread to join again", definition.name());
                         return StreamsUncaughtExceptionHandler.StreamThreadExceptionResponse.REPLACE_THREAD;
@@ -180,7 +180,7 @@ final class StreamsRuntime implements AutoCloseable {
 
     /**
      * Whether a stream thread's failure is the group-protocol collision a concurrent
-     * bootstrap of another instance provokes (D48's residual S1, closed by D108): the
+     * bootstrap of another instance provokes: the
      * consumer refuses to join a group whose members speak another protocol, and treats
      * that as fatal.
      */
@@ -197,7 +197,7 @@ final class StreamsRuntime implements AutoCloseable {
     /**
      * Whether a stream thread's failure is a collision worth replacing the thread for: the
      * protocol conflict of {@link #isBootstrapMemberCollision}, seen before the deadline by
-     * which every other instance's bootstrap member must have left (D108). A conflict past
+     * which every other instance's bootstrap member must have left. A conflict past
      * the deadline is persistent, and the client stops with its diagnosis instead.
      */
     static boolean shouldReplaceThread(Throwable exception, long nowNanos, long deadlineNanos) {
@@ -207,9 +207,9 @@ final class StreamsRuntime implements AutoCloseable {
     /**
      * The diagnosis for a group join still refused as a protocol conflict once no bootstrap
      * member of another instance can remain: a member speaking another group protocol sits
-     * in the group under this application id — a foreign consumer configured with it, or a
-     * bootstrap member of an instance that never left — and the substrate, not the process,
-     * must be corrected (D108).
+     * in the group under this application id, a foreign consumer configured with it or a
+     * bootstrap member of an instance that never left, and the substrate, not the process,
+     * must be corrected.
      */
     static FailClosedException persistentProtocolConflict(String applicationId, java.time.Duration window,
                                                                  Throwable cause) {
@@ -224,9 +224,9 @@ final class StreamsRuntime implements AutoCloseable {
      * The configured consumer session timeout in any Streams spelling, else {@code fallback}.
      *
      * <p>Two callers want different fallbacks. The bootstrap member joins with the
-     * committer's ten-second default (D48), and an ungraceful bootstrap exit holds the group
+     * committer's ten-second default, and an ungraceful bootstrap exit holds the group
      * for exactly that long, which is what bounds both the pre-start wait and the window in
-     * which a refused join is replaced (D108). The join wait uses Kafka Streams' own
+     * which a refused join is replaced. The join wait uses Kafka Streams' own
      * forty-five-second default, since that is what a stream thread's membership expires on.
      *
      * @param clientProps the resolved client properties
@@ -241,11 +241,11 @@ final class StreamsRuntime implements AutoCloseable {
 
     /**
      * Waits, bounded, until no bootstrap member of another instance sits in the group
-     * before this instance's Kafka Streams joins it (D108). Two instances cold-starting
-     * together each join as a bootstrap member to commit initial positions; a Streams join
-     * arriving while the other's member is still present is refused as a protocol
+     * before this instance's Kafka Streams joins it. Two instances cold-starting
+     * together each join as a bootstrap member to commit initial positions, and a Streams
+     * join arriving while the other's member is still present is refused as a protocol
      * conflict. Members leave within milliseconds of committing, so the wait is usually
-     * nothing; an ungraceful exit holds its membership for the session timeout, which
+     * nothing. An ungraceful exit holds its membership for the session timeout, which
      * bounds this wait, after which the join proceeds and a refused thread is replaced.
      */
     private void awaitBootstrapMembersGone(String applicationId, java.time.Duration bound) {
@@ -271,11 +271,12 @@ final class StreamsRuntime implements AutoCloseable {
     }
 
     /**
-     * The wait of {@link #awaitBootstrapMembersGone} over its seams: polls {@code memberPresent}
-     * every hundred milliseconds until it answers false, and returns true; returns false once
-     * {@code nanoTime} passes {@code deadlineNanos} with the member still present. A describe
-     * that fails is not evidence either way, and an interrupted sleep ends the wait; both
-     * return true, since the join itself is guarded by the thread replacement.
+     * The wait of {@link #awaitBootstrapMembersGone} over its seams. Polls
+     * {@code memberPresent} every hundred milliseconds until it answers false, and returns
+     * true. Returns false once {@code nanoTime} passes {@code deadlineNanos} with the member
+     * still present. A describe that fails is not evidence either way, and an interrupted
+     * sleep ends the wait. Both return true, since the join itself is guarded by the thread
+     * replacement.
      */
     static boolean awaitMembersGone(java.util.concurrent.Callable<Boolean> memberPresent, long deadlineNanos,
                                     java.util.function.LongSupplier nanoTime,
@@ -301,18 +302,18 @@ final class StreamsRuntime implements AutoCloseable {
 
     /**
      * The named condition a stream thread's uncaught failure evidences, driving the
-     * diagnosis {@link #recordFailure} logs (D59/D81/D87).
+     * diagnosis {@link #recordFailure} logs.
      */
     enum FailureDiagnosis {
         /** Retention discarded committed read positions before they were read (SPEC Safety 8). */
         POSITIONS_DISCARDED_UNREAD,
-        /** A received partition has no committed read position (D81 splits the causes). */
+        /** A received partition has no committed read position. */
         NO_COMMITTED_POSITION,
-        /** A record exceeded a size limit, typically the changelog's max.message.bytes (D87). */
+        /** A record exceeded a size limit, typically the changelog's max.message.bytes. */
         RECORD_TOO_LARGE,
-        /** The partition shape of the process's topics changed while it ran (D59). */
+        /** The partition shape of the process's topics changed while it ran. */
         PARTITION_SHAPE_CHANGED,
-        /** A received topic was missing when the host rebalanced: deleted, or deleted and recreated (D115). */
+        /** A received topic was missing when the host rebalanced: deleted, or deleted and recreated. */
         SOURCE_TOPIC_MISSING,
         /** No named condition; the failure is logged as-is. */
         UNRECOGNISED
@@ -351,7 +352,7 @@ final class StreamsRuntime implements AutoCloseable {
     /**
      * The failure {@code status()} keeps when a process fails more than once: the first
      * recorded failure stands, unless it lacks a fail-closed diagnosis a later failure
-     * carries — the refusal is what {@code status()} unwraps for the operator (D55), so a
+     * carries. The refusal is what {@code status()} unwraps for the operator, so a
      * follow-on transient must never bury it, and the first refusal is never displaced by
      * a second.
      */
@@ -365,7 +366,7 @@ final class StreamsRuntime implements AutoCloseable {
     // exception handler start() installs.
     void recordFailure(String process, Throwable exception) {
         // A stop the substrate detected but that recurs identically on restart carries its
-        // reason into status() like an engine refusal (D109, Operational 1): a supervisor
+        // reason into status() like an engine refusal (Operational 1): a supervisor
         // keyed on refusalReason must not read it as a transient and restart forever.
         FailureDiagnosis diagnosis = classifyFailure(exception);
         Throwable recorded = switch (diagnosis) {
@@ -424,8 +425,8 @@ final class StreamsRuntime implements AutoCloseable {
     }
 
     /**
-     * The failure {@link #recordFailure}'s merge retained for {@code process} — the read
-     * side of the merge wiring, for tests: {@code status()} surfaces failures only for
+     * Returns the failure {@link #recordFailure}'s merge retained for {@code process}, the
+     * read side of the merge wiring, for tests. {@code status()} surfaces failures only for
      * processes that also have a streams instance, which a direct recordFailure pin does
      * not build.
      */
@@ -521,9 +522,9 @@ final class StreamsRuntime implements AutoCloseable {
      * cannot provide channel identity.
      *
      * <p>The substrate reserves {@link org.apache.kafka.common.Uuid#ZERO_UUID} and never
-     * assigns it, so a description carrying it means the broker predates topic IDs — below
+     * assigns it, so a description carrying it means the broker predates topic IDs. Below
      * the supported 3.7.0 floor, channel identity does not exist (SPEC Substrate 1,
-     * Assumption 2), and D83's whole identity machinery relies on this refusal keeping the
+     * Assumption 2), and the whole identity machinery relies on this refusal keeping the
      * zero id out of every resolved view.
      */
     static ResolvedTopic requireTopicId(String name, TopicDescription description) {
@@ -551,11 +552,11 @@ final class StreamsRuntime implements AutoCloseable {
 
     /**
      * Resolves the declared topics, concluding that one does not exist only from three
-     * consistent unknown-topic answers half a second apart (D113): a describe is served from
+     * consistent unknown-topic answers half a second apart: a describe is served from
      * one broker's metadata view, which can lag a topic created moments before the start,
      * and a start that trusted a single stale answer refused a topic that existed. Any other
      * failure refuses at once, since nothing about it is a matter of corroboration. The same
-     * evidence standard D84 applies to the ordering changelog's describe.
+     * evidence standard applies to the ordering changelog's describe.
      */
     static Map<String, ResolvedTopic> resolveTopicsCorroborated(TopicsDescribe describe, java.time.Duration backoff) {
         for (int attempt = 0; ; attempt++) {
@@ -587,11 +588,11 @@ final class StreamsRuntime implements AutoCloseable {
      * <p>One unknown-topic answer is not proof of absence: a describe is served from a
      * single broker's metadata view, which can lag a recent creation, and a start that
      * trusted one stale answer would misdiagnose a healthy sibling's state as
-     * ORDERING_STATE_LOST — with a remedy that deletes that sibling's offsets. Absence is
+     * ORDERING_STATE_LOST, with a remedy that deletes that sibling's offsets. Absence is
      * concluded only after three consistent unknown answers spaced half a second apart,
-     * the evidence standard every deletion verdict in this runtime takes (D44/D75, D84,
-     * D115's identity check at task initialisation). A genuine first start pays the extra
-     * describes once.
+     * the evidence standard every deletion verdict in this runtime takes, the identity
+     * check at task initialisation included. A genuine first start pays the extra describes
+     * once.
      */
     private java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelog(String applicationId) {
         String changelog = ProcessTopology.changelogName(applicationId, ProcessTopology.ORDERING_STORE);
@@ -600,23 +601,22 @@ final class StreamsRuntime implements AutoCloseable {
                 CORROBORATION_BACKOFF);
     }
 
-    /** One describe of the ordering changelog, as the substrate answers it — the seam the
-     * corroboration loop retries through, so tests can script the answer sequence. */
+    /** One describe of the ordering changelog, as the substrate answers it. This is the seam
+     * the corroboration loop retries through, so tests can script the answer sequence. */
     @FunctionalInterface
     interface ChangelogDescribe {
         TopicDescription describe() throws Exception;
     }
 
     /**
-     * The corroboration loop behind {@link #describeChangelog}: absence is concluded only
-     * from three consistent unknown-topic answers; any other failure refuses the start
-     * rather than concluding anything (D84). Letting a transient generic failure — a
-     * timeout, a broker outage — fall through to "absent" would resume a process with
-     * prior state as a first start, the exact single-answer trust D84 removed.
+     * The corroboration loop behind {@link #describeChangelog}. Absence is concluded only
+     * from three consistent unknown-topic answers, and any other failure refuses the start
+     * rather than concluding anything. Letting a transient generic failure, a
+     * timeout or a broker outage, fall through to "absent" would resume a process with
+     * prior state as a first start, the exact single-answer trust this loop exists to remove.
      *
-     * <p>Production passes the half-second spacing between answers (D84's evidence
-     * standard); tests pass ~zero so the loop's decisions are pinned without paying the
-     * real backoffs.
+     * <p>Production passes the half-second spacing between answers. Tests pass ~zero so
+     * the loop's decisions are pinned without paying the real backoffs.
      */
     static java.util.Optional<org.apache.kafka.clients.admin.TopicDescription> describeChangelogCorroborated(
             String applicationId, ChangelogDescribe describe, java.time.Duration backoff) {
@@ -677,8 +677,8 @@ final class StreamsRuntime implements AutoCloseable {
 
     /**
      * What one end-to-end read of the ordering changelog saw: the latest value per key
-     * across every partition, and which partitions held at least one record — the loss
-     * shape is per changelog partition, since each task's state lives in its own (D88).
+     * across every partition, and which partitions held at least one record. The loss
+     * shape is per changelog partition, since each task's state lives in its own.
      */
     record ChangelogView(Map<byte[], byte[]> latest, java.util.Set<Integer> partitionsWithRecords) {
         static final ChangelogView ABSENT = new ChangelogView(Map.of(), java.util.Set.of());
@@ -694,12 +694,11 @@ final class StreamsRuntime implements AutoCloseable {
      * is false because the reader's metadata requests must never create the very changelog
      * whose record content start() keys prior state on: against a broker with auto-create
      * enabled, a deletion racing the start would otherwise be resurrected as an empty
-     * impostor that passes every prior-state refusal (D82); with the pin, the reader's
+     * impostor that passes every prior-state refusal. With the pin, the reader's
      * metadata answer omits the topic and the scan's partition-count check refuses loudly
-     * (D88 corrects D82's claimed mechanism — the unknown answer is immediate, not a
-     * timeout). {@code auto.offset.reset} is none so a log start advancing mid-scan fails
-     * the scan loudly instead of silently resetting to the end and truncating the
-     * restored view those refusals read.
+     * (the unknown answer is immediate, not a timeout). {@code auto.offset.reset} is none
+     * so a log start advancing mid-scan fails the scan loudly instead of silently resetting
+     * to the end and truncating the restored view those refusals read.
      */
     static Map<String, Object> changelogReaderProperties(Map<String, Object> clientProps) {
         Map<String, Object> props = new HashMap<>(clientProps);
@@ -718,7 +717,7 @@ final class StreamsRuntime implements AutoCloseable {
      * bound must be the log's true end, where the sibling listOffsets in
      * commitInitialPositions deliberately asks for the read-committed view. Stopping at
      * the last stable offset would silently hide committed tail records sitting above a
-     * superseded execution's open transaction (D79).
+     * superseded execution's open transaction.
      */
     static ListOffsetsOptions changelogEndOffsetIsolation() {
         return new ListOffsetsOptions(IsolationLevel.READ_UNCOMMITTED);
@@ -729,7 +728,7 @@ final class StreamsRuntime implements AutoCloseable {
      * compacting to the latest value per key and tracking which partitions held records.
      *
      * <p>No progress for {@code stallTimeout} fails the read loudly rather than hanging
-     * the start (D79); a partition at its snapshot end is paused — the pause loop's
+     * the start. A partition at its snapshot end is paused, and the pause loop's
      * comment carries the rationale. Production passes the 30s deadline that outlasts
      * the default producer transaction timeout.
      */
@@ -751,7 +750,7 @@ final class StreamsRuntime implements AutoCloseable {
                 polled.forEach(record -> {
                     // A held message's body is never read here — the view answers which
                     // channels hold something, not what — so it is kept as a presence
-                    // marker, and a tombstone still clears it (D110). Retaining every blob
+                    // marker, and a tombstone still clears it. Retaining every blob
                     // put the whole hold-back backlog on the heap at every start.
                     byte[] value = record.value();
                     latest.put(record.key(), value != null
@@ -775,7 +774,7 @@ final class StreamsRuntime implements AutoCloseable {
 
     /**
      * Renders a deadline for the stall diagnosis: whole seconds as "30s" (production's
-     * value, byte-for-byte as before), anything finer as "40ms" — {@code toSeconds()}
+     * value, byte-for-byte as before), anything finer as "40ms". {@code toSeconds()}
      * alone printed a sub-second deadline as the meaningless "0s".
      */
     private static String renderDeadline(java.time.Duration deadline) {
@@ -793,15 +792,15 @@ final class StreamsRuntime implements AutoCloseable {
      * successor committed, and stopping at the stable offset would silently hide those
      * committed tail records from the checks this view feeds. An open transaction resolves
      * within the producer's transaction timeout, which the stall deadline outlasts at the
-     * defaults; a transaction configured to outlive the deadline fails the start loudly
+     * defaults. A transaction configured to outlive the deadline fails the start loudly
      * rather than truncating the view.
      *
      * <p>The reader's own metadata answer is corroborated against the describe this read
      * was keyed on: with auto-create pinned off, a broker whose metadata lags the
-     * changelog's creation answers an empty partition list immediately — no retry, no
-     * timeout — and trusting it would flip prior state off one stale view, the exact
-     * single-answer trust D84 removed from the describe path. A partition-count mismatch
-     * refuses as a retryable transient instead of scanning vacuously (D88).
+     * changelog's creation answers an empty partition list immediately, with no retry and
+     * no timeout, and trusting it would flip prior state off one stale view, the exact
+     * single-answer trust the describe path refuses. A partition-count mismatch
+     * refuses as a retryable transient instead of scanning vacuously.
      */
     private ChangelogView readOrderingChangelog(String applicationId, Map<String, Object> clientProps,
                                                 int expectedPartitions) {
@@ -839,9 +838,9 @@ final class StreamsRuntime implements AutoCloseable {
      * read was keyed on, refusing a disagreement as a retryable transient.
      *
      * <p>With auto-create pinned off, a broker whose metadata lags the changelog's
-     * creation answers an empty partition list immediately — no retry, no timeout — and
-     * trusting it would flip prior state off one stale view, the exact single-answer
-     * trust D84 removed from the describe path (D88). The refusal must stay retryable:
+     * creation answers an empty partition list immediately, with no retry and no timeout,
+     * and trusting it would flip prior state off one stale view, the exact single-answer
+     * trust the describe path refuses. The refusal must stay retryable:
      * dressing it as a terminal diagnosis would hand the operator a destructive remedy
      * for a broker that merely needs a moment.
      */
@@ -894,21 +893,21 @@ final class StreamsRuntime implements AutoCloseable {
      * returns it: the group's committed position where one exists, else the one the
      * bootstrap commits here.
      *
-     * <p>With prior state, a partition whose committed position is missing — expired during
-     * a long stop — resumes at the ordering state's covered position plus one (D115): every
+     * <p>With prior state, a partition whose committed position is missing, expired during
+     * a long stop, resumes at the ordering state's covered position plus one: every
      * position at or below the covered one was fed or will never arrive, so that is exactly
      * where the previous execution would have read next. A received partition the ordering
-     * state names but never covered — received by an earlier execution that started it at
-     * 0 and was never fed from it — resumes at 0, the only position it can show it read
-     * from; the substrate's earliest, which may have moved past positions it never read, is
-     * not a position it covered. Whether retention still holds the resumed position is the
+     * state names but never covered, because an earlier execution started it at 0 and was
+     * never fed from it, resumes at 0, the only position it can show it read from. The
+     * substrate's earliest, which may have moved past positions it never read, is not a
+     * position it covered. Whether retention still holds the resumed position is the
      * substrate's to decide at the first fetch: under {@code auto.offset.reset=none} a
      * position below the log start refuses the fetch, and {@link #classifyFailure} names it
-     * {@code POSITIONS_DISCARDED_UNREAD} (SPEC Safety 8, D9/D81/D109). A channel the state
-     * has never named — a genuinely first start, a channel joining the received set, or a
-     * bootstrap that crashed before Streams ever ran — takes the substrate's earliest or
+     * {@code POSITIONS_DISCARDED_UNREAD} (SPEC Safety 8). A channel the state
+     * has never named, on a genuinely first start, a channel joining the received set, or a
+     * bootstrap that crashed before Streams ever ran, takes the substrate's earliest or
      * latest position instead, a one-off query: the declared initial position on a first
-     * start, earliest wherever prior state exists (D36).
+     * start, earliest wherever prior state exists.
      *
      * @return per received partition, the position the host feeds first
      */
@@ -990,8 +989,8 @@ final class StreamsRuntime implements AutoCloseable {
      * The position a partition with an expired committed offset resumes at, from the
      * ordering state's coverage of it: the covered position plus one, the next position the
      * previous execution would have read. A partition the state names as received but never
-     * covered — started at 0 and never fed, or a pre-D115 execution that recorded coverage
-     * of -1 for it — resumes at 0, the one position it can show it read from. Empty where
+     * covered, whether started at 0 and never fed or recorded at coverage -1 by an earlier
+     * build, resumes at 0, the one position it can show it read from. Empty where
      * the state never named the topic (the substrate's earliest or latest position is taken
      * instead) and where the coverage is the engine's fed-to-end sentinel, which a channel
      * settled on its topic's deletion carries and which no offset can follow.
@@ -1041,13 +1040,13 @@ final class StreamsRuntime implements AutoCloseable {
      *
      * <p>Every committed step writes ordering state and read positions atomically (SPEC
      * Host obligation 3), and a task's first committed step wrote the store's version
-     * entry into its own changelog partition, which compaction retains — so a
+     * entry into its own changelog partition, which compaction retains, so a
      * non-bootstrap-stamped offset on partition p with no records in changelog partition
      * p means the state of task p's most recent committed step has been lost (Host
      * obligation 5): resuming would rebuild an empty engine and silently under-express
-     * every cause delivered before the loss. The check is per partition (D88 tightens
-     * D84): a one-partition record purge is the same loss for its task however healthy
-     * the sibling partitions look, and the whole-topic shapes — absent, or emptied — fall
+     * every cause delivered before the loss. The check is per partition: a
+     * one-partition record purge is the same loss for its task however healthy
+     * the sibling partitions look, and the whole-topic shapes, absent or emptied, fall
      * out as every partition failing. A first-start bootstrap that crashed after
      * committing initial positions leaves offsets with no records anywhere, but its
      * commits carry {@link #BOOTSTRAP_OFFSET_STAMP}, so bootstrap crash recovery still
@@ -1058,10 +1057,10 @@ final class StreamsRuntime implements AutoCloseable {
      * <p>Before refusing, the changelog is looked at again: the view was read before the
      * offsets were listed, and a pause of arbitrary duration lands between any two
      * statements (SPEC Fault model 2), so a concurrent lifetime of this process can have
-     * created records — and committed — in the window. That shape refuses as a retryable
+     * created and committed records in the window. That shape refuses as a retryable
      * transient, not as state loss: a state-loss diagnosis here would tell the operator
      * to delete offsets a healthy sibling just wrote. The recheck is a seam so the
-     * decision — which answer shapes refuse, and as what — is testable without a broker.
+     * decision, which answer shapes refuse and as what, is testable without a broker.
      */
     static void refuseLostOrderingState(String applicationId, ChangelogView view,
                                         Map<TopicPartition, OffsetAndMetadata> committed,
@@ -1119,7 +1118,7 @@ final class StreamsRuntime implements AutoCloseable {
         }
     }
 
-    /** One stable listing of the group's committed read positions — the seam every
+    /** One stable listing of the group's committed read positions. This is the seam every
      * pre-check listing goes through, first look and retries alike, so tests can
      * script the whole answer sequence. */
     @FunctionalInterface
@@ -1139,13 +1138,13 @@ final class StreamsRuntime implements AutoCloseable {
      * the start into the group join, which can only grind against the sibling's
      * protocol until the join deadline and then refuse a legitimate scale-out.
      * Pending commits resolve within the transaction timeout, so a partial listing is
-     * retried briefly; one that stays partial past {@code retryBudget} falls through to
-     * the join, which remains authoritative (D86). A first start lists nothing for the
+     * retried briefly. One that stays partial past {@code retryBudget} falls through to
+     * the join, which remains authoritative. A first start lists nothing for the
      * received set and skips the wait entirely.
      *
-     * <p>Every listing — the first included — goes through the one {@code listing} seam,
+     * <p>Every listing, the first included, goes through the one {@code listing} seam,
      * so tests script the whole sequence a start sees. Production passes the 200ms
-     * backoff and 5s budget that wait out one EOS commit interval; tests pass ~zero.
+     * backoff and 5s budget that wait out one EOS commit interval. Tests pass ~zero.
      */
     static Map<TopicPartition, OffsetAndMetadata> awaitStablePreCheck(String applicationId,
                                                                       java.util.Set<TopicPartition> received,
@@ -1172,8 +1171,9 @@ final class StreamsRuntime implements AutoCloseable {
      * missing.
      *
      * <p>Partial coverage of the received set is the shape a pending transactional commit
-     * produces — the stable listing skips, rather than fails, an unstable partition — where
-     * a genuine first start lists nothing for the received set at all, and must not wait.
+     * produces, since the stable listing skips rather than fails an unstable partition,
+     * where a genuine first start lists nothing for the received set at all, and must not
+     * wait.
      */
     static boolean preCheckLooksUnstable(java.util.Set<TopicPartition> received,
                                          java.util.Set<TopicPartition> listed) {

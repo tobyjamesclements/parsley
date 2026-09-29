@@ -38,7 +38,7 @@ public final class Oracle {
         // Mirrors the engine's persisted delivered-past clamp: delivered positions merged
         // with each delivered message's *expressed* frontier — coarser than trueCauses, and
         // deliberately so, because the engine's sanctioned drops are judged by expression.
-        // Kept apart from committedPastMax, whose trueCauses semantics D41 depends on.
+        // Kept apart from committedPastMax, whose trueCauses semantics must stay intact.
         final Map<Channel, Long> committedEnginePast = new HashMap<>();
         final Map<Channel, Long> deltaEnginePast = new HashMap<>();
         final Set<Instance> committedDeliveredSet = new HashSet<>();
@@ -77,7 +77,7 @@ public final class Oracle {
     /**
      * Records a delivery, first checking it was legal at this very moment: every true cause
      * must already be delivered here, settled by evidence the world corroborates, or lie
-     * within the delivered past the engine is entitled to drop behind (D31/D41). The
+     * within the delivered past the engine is entitled to drop behind. The
      * end-of-run Safety 1 check compares delivered pairs only, so a premature delivery whose
      * cause never delivers — dropped later by the clamp this very delivery advanced — is
      * visible only here, at delivery time.

@@ -18,11 +18,11 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Boundary pins over the pure core from a line-by-line review (D106): the equal-position
+ * Boundary pins over the pure core from a line-by-line review: the equal-position
  * re-feed of a held message, holds spanning flush boundaries, the {@code nextRead = 0}
  * coverage floor, the inclusive budget boundary, byte-exact send headers after every
  * frontier mutation kind, and the reserved maximum position refused before it can reach
- * the fed-to-end sentinel (D105).
+ * the fed-to-end sentinel.
  */
 class EngineBoundaryTest {
     private static final Channel C1 = new Channel(new UUID(9, 1), 0);
@@ -36,7 +36,7 @@ class EngineBoundaryTest {
     }
 
     /**
-     * D67 gap 3: the {@code position <= fedBefore} boundary in {@code onReceive}. Feeding the
+     * The {@code position <= fedBefore} boundary in {@code onReceive}. Feeding the
      * same position twice within one execution while the first copy is still held (not
      * delivered) must refuse as a feed-order breach. Weakened to {@code <}, the second feed
      * falls through to the covered-position branch and refuses with
@@ -64,7 +64,7 @@ class EngineBoundaryTest {
     /**
      * Holds accumulate across several flushes before a restart: a flush persists exactly the
      * holds received since the previous flush, a hold delivered before any flush never
-     * touches the store (D17), and a restart restores every survivor in position order with
+     * touches the store, and a restart restores every survivor in position order with
      * its body intact. This is the invariant any flush that stops scanning the whole buffer
      * must keep: unpersisted holds are a suffix of each channel's buffer.
      */
@@ -79,7 +79,7 @@ class EngineBoundaryTest {
         }
         engine.flushHolds();
         assertNull(store.get(OrderingStateCodec.heldKey(C1, 0)),
-                "a message delivered in the step it arrived must never be written as a hold (D17)");
+                "a message delivered in the step it arrived must never be written as a hold");
         for (long position = 0; position < 3; position++) {
             assertTrue(store.get(OrderingStateCodec.heldKey(C2, position)) != null, "flushed hold " + position);
         }
@@ -131,8 +131,8 @@ class EngineBoundaryTest {
     }
 
     /**
-     * Every budget gate is inclusive at exactly the budget (strict {@code >}, D98's cost
-     * note): a header whose length equals the budget is accepted, a frontier whose encoded
+     * Every budget gate is inclusive at exactly the budget (strict {@code >}):
+     * a header whose length equals the budget is accepted, a frontier whose encoded
      * width equals the budget is expressed, and one byte more refuses at each gate.
      */
     @Test
@@ -212,11 +212,11 @@ class EngineBoundaryTest {
     /**
      * A header position of {@code Long.MAX_VALUE} is the engine's own fed-to-end sentinel.
      * Absorbed from a header and delivered while its channel is outside the received set, it
-     * would enter the delivered past; when that channel later joined, the D31 clamp would
+     * would enter the delivered past; when that channel later joined, the join clamp would
      * copy it into {@code fedUpTo}, where it reads as "this channel no longer exists", and
      * every feed on the live channel would be refused as a dead-channel breach, recurring on
      * every restart. Receipt therefore refuses the pair as undecodable (wire-format
-     * constraint 7, D105), and a restore refuses state that absorbed one before the refusal
+     * constraint 7), and a restore refuses state that absorbed one before the refusal
      * existed.
      */
     @Test
@@ -254,7 +254,7 @@ class EngineBoundaryTest {
      * A negative position in a restored frontier row is refused at restore, before it can
      * be re-expressed. Receipt has always refused negative positions, so such a row can only
      * be corrupt store state; and since the send path encodes the engine's frontier map
-     * directly (D102), restore is the one point between the store and the wire where the
+     * directly, restore is the one point between the store and the wire where the
      * value is checked — left in place, every send would carry a header downstream
      * readers refuse as undecodable, blaming the sender's metadata for this process's state.
      */

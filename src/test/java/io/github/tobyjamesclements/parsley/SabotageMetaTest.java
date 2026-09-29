@@ -25,13 +25,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  */
 class SabotageMetaTest {
     /**
-     * A seed the sweep catches IGNORE_RECREATION on under the current generator (D43's
-     * rule). Assumption 2 is judged at the moment a process commits a step while receiving
+     * A seed the sweep catches IGNORE_RECREATION on under the current generator.
+     * Assumption 2 is judged at the moment a process commits a step while receiving
      * a dead incarnation whose name is bound to a live other id — the same judgement the
      * host's identity report makes — rather than at the end of the run, where a process
      * that later failed closed for another reason, or whose fresh incarnation was itself
      * killed, used to be excused: 177 of 300 seeds catch the mode this way, against 5 of
-     * 300 judged at the end (D115).
+     * 300 judged at the end.
      */
     static final long RECREATION_SEED = 1;
     /** Half of the recreation catches measured over 300 seeds under the current generator (177). */
@@ -120,10 +120,10 @@ class SabotageMetaTest {
 
     /**
      * A host that resets a read position past discarded positions — {@code auto.offset.reset=earliest}
-     * where D9 pins {@code none} — is caught by the harness's Safety 8 obligation, judged
+     * where the runtime pins {@code none} — is caught by the harness's Safety 8 obligation, judged
      * from world truth the host cannot launder: a committed record between where the process
      * first read the channel and where it committed reading to that was never fed to it. The
-     * engine no longer checks retention (D115), so the fault is the host's: the simulated
+     * engine no longer checks retention, so the fault is the host's: the simulated
      * host's fetch refusal is disarmed, the process reads on past the gap, and the scenario
      * flags the records it skipped — whether or not a message depending on one of them is
      * later delivered, which is the only shape the delivery-time Safety 1 check sees.
@@ -250,9 +250,9 @@ class SabotageMetaTest {
     /** Random sweep catches broken engines with margin. */
     @Test
     void randomSweepCatchesBrokenEnginesWithMargin() {
-        // Half of the catches measured over these 120 seeds after D115 retired the facts
+        // Half of the catches measured over these 120 seeds once the harness retired the facts
         // event, re-initialised a lost topic's receivers at the event, and stopped clamping
-        // rewinds to the log start (D43's rule; counts in D115): 74, 14, 83, 87, 83, 59, 19,
+        // rewinds to the log start: 74, 14, 83, 87, 83, 59, 19,
         // 29 and 93.
         Map<SabotageMode, Integer> floors = new EnumMap<>(SabotageMode.class);
         floors.put(SabotageMode.IGNORE_CAUSES, 37);

@@ -10,7 +10,7 @@ import java.util.List;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Establishes that the ordering store is built with the host's write cache (D110). Every
+ * Establishes that the ordering store is built with the host's write cache. Every
  * received record merges its frontier and every delivery merges the delivered past, one
  * store write per channel whose position advanced, so an uncached store costs about two
  * RocksDB writes and two changelog records per frontier channel per record. The cache
@@ -31,6 +31,6 @@ class OrderingStoreCachingTest {
                 "the ordering store must be cached, so writes per commit are bounded by keys, not records; layers: "
                         + layers);
         assertTrue(layers.stream().anyMatch(name -> name.startsWith("ChangeLogging")),
-                "the ordering store must stay changelogged (D57); layers: " + layers);
+                "the ordering store must stay changelogged; layers: " + layers);
     }
 }

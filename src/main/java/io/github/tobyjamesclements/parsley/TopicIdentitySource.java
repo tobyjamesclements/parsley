@@ -7,7 +7,7 @@ import java.util.UUID;
  * Answers, when a task initialises, which of the topics its ordering state names still exist.
  *
  * <p>This is the one question the Kafka Streams host asks the substrate outside delivery,
- * and it is asked at task initialisation rather than on a cadence (D115). A seam, so a
+ * and it is asked at task initialisation rather than on a cadence. A seam, so a
  * topology can be driven without a broker.
  *
  * @see AdminTopicIdentitySource
@@ -19,7 +19,7 @@ interface TopicIdentitySource {
      *
      * <p>Absence of evidence is not evidence of deletion: an id whose name the source does
      * not know, whose describe was denied, or whose answer did not arrive is reported as
-     * neither deleted nor recreated, and its causes stay expressed (D44, D75).
+     * neither deleted nor recreated, and its causes stay expressed.
      *
      * @param topicIds the ids a task's received channels and frontier name
      * @return the ids confirmed deleted, and those confirmed recreated under their name

@@ -23,15 +23,15 @@
  * at each task initialisation. Positions are meaningful only against the log they were
  * assigned in, so a topic recreated under a name a process has state for is a reason to
  * refuse. Nothing is asked of the broker between deliveries. A cause names the position of a
- * committed record, and receiving that record is what satisfies it (D115).
+ * committed record, and receiving that record is what satisfies it.
  *
  * <p>Configuration carrying the guarantee is fixed by the runtime and cannot be overridden:
  * {@code exactly_once_v2}, {@code read_committed}, and no automatic offset reset.
  *
- * <p>Fourteen types are public. Ten are the declaration surface named above, with
+ * <p>Thirteen types are public. Ten are the declaration surface named above, with
  * {@link io.github.tobyjamesclements.parsley.Parsley} and
  * {@link io.github.tobyjamesclements.parsley.ParsleyConfig} to run it and
- * {@link io.github.tobyjamesclements.parsley.ProcessStatus} to observe it. The other four
+ * {@link io.github.tobyjamesclements.parsley.ProcessStatus} to observe it. The other three
  * an application or an operator handles rather than declares:
  * {@link io.github.tobyjamesclements.parsley.Header} on a delivered or sent message,
  * {@link io.github.tobyjamesclements.parsley.FailClosedException} and its reason when a

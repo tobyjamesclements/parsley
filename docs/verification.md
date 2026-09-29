@@ -65,4 +65,4 @@ Each test is meant to fail when the behaviour it pins breaks. A test that stays 
 the behaviour breaks is treated as worse than no test.
 
 There is no mutation-testing gate. `Sabotage` is this project's mutation testing, with the
-mutations chosen against specification criteria rather than syntax (D67).
+mutations chosen against specification criteria rather than syntax.

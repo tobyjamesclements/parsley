@@ -7,7 +7,7 @@ Per received channel *c* the engine tracks two things.
 `fedUpTo(c)` is the highest position such that every position at or below it has either been
 fed to this process as a message or will never arrive as one. Receipt advances it while an
 execution runs; at initialisation the start position raises it once, and a received channel
-whose topic the identity check finds deleted is settled to its end (D21).
+whose topic the identity check finds deleted is settled to its end.
 
 Receipt of a record at offset *o* on *c* sets `fedUpTo(c) := max(fedUpTo(c), o)`. Within an
 execution the host feeds each partition in offset order, and Kafka's per-partition order
@@ -23,7 +23,7 @@ position it will feed first, as the bootstrap established it at `Parsley.start` 
 earlier execution and committed, or lies below the position the process was started at; a
 start position of 0 covers nothing. Beyond receipt, the start position and a channel's
 deletion, nothing advances `fedUpTo(c)` — in particular not elapsed time, and nothing asked
-of the broker between deliveries (D115).
+of the broker between deliveries.
 
 `held(c)` is the hold-back buffer: received but undelivered messages of *c*, in position
 order, persisted.
@@ -73,7 +73,7 @@ starts it is the group's committed position. Where prior state exists but the co
 position has expired, it is the covered position the ordering state holds for *c* — its
 `fedUpTo(c)` — plus one, the next position the previous execution would have read; where the
 ordering state covers nothing on *c*, a channel that has joined the received set, it is the
-channel's earliest retained position (D115). `fedUpTo(c)` is also restored from the ordering
+channel's earliest retained position. `fedUpTo(c)` is also restored from the ordering
 state at each start, and the start position only ever raises it, so positions below the
 first receipt count as already satisfied.
 

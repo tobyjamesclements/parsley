@@ -16,8 +16,8 @@ import io.github.tobyjamesclements.parsley.SimWorld.SimChannel;
 /**
  * A simulated process: its declaration, its engine, and its lifecycle.
  *
- * <p>The simulated host honours the host obligations the way the Kafka Streams host does
- * after D115: it feeds each channel in order from its committed read position, hands the
+ * <p>The simulated host honours the host obligations the way the Kafka Streams host does:
+ * it feeds each channel in order from its committed read position, hands the
  * engine that position at start (Host obligation 2), reports channel identity at start
  * and never between deliveries, and refuses a fetch below a channel's earliest retained
  * position the way {@code auto.offset.reset=none} does — as a {@code POSITIONS_DISCARDED_UNREAD}
@@ -101,7 +101,7 @@ public final class SimProcess {
     /**
      * Starts an execution: builds the engine over the committed store with the host's
      * committed read positions as its start positions, then reports channel identity — the
-     * one thing the host tells the engine about the world outside the feed (D115).
+     * one thing the host tells the engine about the world outside the feed.
      */
     public void start() {
         if (engine != null) {
@@ -220,7 +220,7 @@ public final class SimProcess {
     /**
      * Feeds the next message of a channel, or reports that none is fetchable. A read
      * position below the channel's earliest retained position is the substrate's to refuse
-     * (D9's {@code auto.offset.reset=none}): the host raises {@code POSITIONS_DISCARDED_UNREAD}
+     * ({@code auto.offset.reset=none}): the host raises {@code POSITIONS_DISCARDED_UNREAD}
      * for the fetch, exactly as {@code StreamsRuntime.classifyFailure} names the consumer's
      * out-of-range stop, and the engine never sees the discarded positions.
      */
@@ -287,11 +287,11 @@ public final class SimProcess {
      * from (SPEC Structural 12, Host obligation 2), or on a channel this process does not
      * receive and so will never deliver. Judged at delivery time for the oracle's
      * delivery-legality check. Retention excuses nothing here: a cause retention discarded
-     * before this process read it is one the fetch refuses, never one that settles (D115).
+     * before this process read it is one the fetch refuses, never one that settles.
      *
      * <p>A cause this process has received and still holds is never settled, whatever the
      * world says of its channel: the process owes its delivery, and delivering an effect
-     * past it is the inversion D46 refuses. Without this the check was blind to exactly the
+     * past it is the inversion the engine refuses. Without this the check was blind to exactly the
      * shape that record exists for.
      */
     private Set<Instance> settledCauses(Instance instance) {
@@ -343,7 +343,7 @@ public final class SimProcess {
 
         // Only a dead channel excuses an unexpressed cause (SPEC Structural 13, 15): nothing
         // is dropped for retention any more, so a cause below its channel's log start must
-        // still be expressed (D115).
+        // still be expressed.
         Set<Instance> excused = new java.util.HashSet<>();
         for (Instance cause : trueCauses) {
             SimChannel causeChannel = world.channel(cause.channel);
@@ -379,7 +379,7 @@ public final class SimProcess {
     /**
      * The identity report the host gives the engine at start: every dead channel whose name
      * now resolves to another channel is a recreated one, the rest are deleted. Positions
-     * are never reported (D115).
+     * are never reported.
      */
     private void reportIdentity() {
         ensureTxn();
@@ -411,7 +411,7 @@ public final class SimProcess {
      * Moves the committed read position back, as an expiry restart re-establishing it from
      * coverage does. The target is never clamped to the log start: a position the substrate
      * no longer retains is the fetch's to refuse (SPEC Safety 8), never the host's to skip
-     * past, which is exactly the resume-at-log-start D115 retired.
+     * past, which is exactly the resume-at-log-start the engine retired.
      */
     public void rewindCommitted(SimChannel channel, int back) {
         if (engine != null) {

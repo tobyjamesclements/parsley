@@ -7,8 +7,8 @@ import java.util.UUID;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * Pins the one-rule exception taxonomy D73 records: a null component is refused with
- * {@code IllegalArgumentException} across {@code api/} and {@code core/} alike. These two
+ * Pins the one-rule exception taxonomy: a null component is refused with
+ * {@code IllegalArgumentException} across the declaration surface and the protocol alike. These two
  * records previously threw {@code NullPointerException} while their siblings ({@code Causes},
  * every {@code api/} site) threw {@code IllegalArgumentException} for the identical mistake.
  */

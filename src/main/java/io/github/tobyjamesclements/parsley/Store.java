@@ -6,9 +6,9 @@ import org.apache.kafka.common.serialization.Serde;
  * A typed key-value store a process reads and writes.
  *
  * <p>Stores declared here hold application state. Parsley keeps its own ordering state in
- * separate stores under {@link Parsley#RESERVED_PREFIX}, which application names may not contain
- * anywhere: an embedded occurrence would compose a changelog topic name inside parsley's
- * namespace.
+ * separate stores under {@link Parsley#RESERVED_PREFIX}, which application names may not
+ * contain anywhere: an embedded occurrence would compose a changelog topic name inside
+ * parsley's namespace.
  *
  * @param <K> key type
  * @param <V> value type

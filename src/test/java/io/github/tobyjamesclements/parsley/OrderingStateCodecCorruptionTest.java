@@ -20,9 +20,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Establishes that corrupt ordering state raises the classified refusal, never a raw
  * runtime exception and never an allocation sized by the corruption.
  *
- * <p>The blob and the store entries arrive verbatim from the changelog; a corrupted record
- * or a misdirected producer reaches these decode paths directly, and
- * {@code docs/failing-closed.md} promises a diagnosed stop for them. Length and count
+ * <p>The blob and the store entries arrive verbatim from the changelog. A corrupted record
+ * or a misdirected producer reaches these decode paths directly, and the fail-closed
+ * contract promises a diagnosed stop for them. Length and count
  * fields are hostile input: each is validated against the bytes actually present before
  * anything is allocated from it.
  */
@@ -79,6 +79,7 @@ class OrderingStateCodecCorruptionTest {
         return thrown;
     }
 
+    /** A held blob round-trips every field byte for byte: timestamp, key, value, headers and causes. */
     @Test
     void roundTripRestoresEveryFieldByteForByte() {
         OrderingStateCodec.HeldBlob decoded = OrderingStateCodec.decodeHeld(validBlob());
@@ -91,6 +92,7 @@ class OrderingStateCodecCorruptionTest {
         assertEquals(Causes.of(Map.of(CH, 3L)), decoded.causes());
     }
 
+    /** A null key, value or header value round-trips as null, distinct from empty. */
     @Test
     void roundTripDistinguishesNullsFromEmpty() {
         byte[] blob = OrderingStateCodec.encodeHeld(0L, null, new byte[0],
@@ -101,41 +103,49 @@ class OrderingStateCodecCorruptionTest {
         assertNull(decoded.headers().get(0).value());
     }
 
+    /** A negative key length raises the classified refusal. */
     @Test
     void negativeKeyLengthRaisesTheRefusal() {
         refusal(patched(10, -2));
     }
 
+    /** A key length beyond the bytes present raises the refusal before anything is allocated from it. */
     @Test
     void oversizedKeyLengthRaisesTheRefusalWithoutAllocating() {
         refusal(patched(10, Integer.MAX_VALUE - 2));
     }
 
+    /** A value length beyond the bytes present raises the refusal. */
     @Test
     void oversizedValueLengthRaisesTheRefusal() {
         refusal(patched(15, Integer.MAX_VALUE - 2));
     }
 
+    /** A header count beyond the bytes present raises the refusal before anything is allocated from it. */
     @Test
     void oversizedHeaderCountRaisesTheRefusalWithoutAllocating() {
         refusal(patched(20, Integer.MAX_VALUE));
     }
 
+    /** A negative header count raises the refusal. */
     @Test
     void negativeHeaderCountRaisesTheRefusal() {
         refusal(patched(20, -1));
     }
 
+    /** A header key length beyond the bytes present raises the refusal. */
     @Test
     void oversizedHeaderKeyLengthRaisesTheRefusal() {
         refusal(patched(24, Integer.MAX_VALUE - 2));
     }
 
+    /** A header value length beyond the bytes present raises the refusal. */
     @Test
     void oversizedHeaderValueLengthRaisesTheRefusal() {
         refusal(patched(29, Integer.MAX_VALUE - 2));
     }
 
+    /** A header value length below the null sentinel raises the refusal. */
     @Test
     void headerValueLengthBelowNullSentinelRaisesTheRefusal() {
         refusal(patched(29, Integer.MIN_VALUE));
@@ -159,8 +169,8 @@ class OrderingStateCodecCorruptionTest {
 
     /**
      * The header-value length refusal must name the bad length and the bytes actually
-     * present — `docs/failing-closed.md` promises a diagnosed stop, and D81 makes naming the
-     * condition the rule. The refusal's signature is shared with decodeHeld's catch-all wrap
+     * present. The fail-closed contract promises a diagnosed stop, and naming the
+     * condition is the rule. The refusal's signature is shared with decodeHeld's catch-all wrap
      * at the bottom, so this pin is message-level: deleting the header-value length guard
      * still refuses — the oversized read underflows and the negative one throws
      * NegativeArraySizeException, both caught and wrapped as a bare "corrupt held blob" —
@@ -180,7 +190,7 @@ class OrderingStateCodecCorruptionTest {
 
     /**
      * The sized-bytes refusal must say which field's length was bad — key, value or header
-     * key — and against how many bytes were present (D81). Signature shared with the
+     * key — and against how many bytes were present. Signature shared with the
      * catch-all wrap, so this pin is message-level: deleting the guard inside readSizedBytes
      * still refuses every probe — negative lengths as NegativeArraySizeException and
      * oversized ones as underflow, wrapped without the diagnosis — and only these assertions
@@ -200,24 +210,28 @@ class OrderingStateCodecCorruptionTest {
                 () -> "the refusal must name the header-key field's bad length: " + headerKey.getMessage());
     }
 
+    /** A cause count that disagrees with the bytes present raises the refusal. */
     @Test
     void miscountedCausesRaiseTheRefusal() {
         byte[] blob = validBlob();
         refusal(patched(blob.length - 4 - CAUSE_ENTRY, 2));
     }
 
+    /** A blob cut short raises the refusal. */
     @Test
     void truncatedBlobRaisesTheRefusal() {
         byte[] blob = validBlob();
         refusal(Arrays.copyOf(blob, blob.length - 4));
     }
 
+    /** Bytes after the last field raise the refusal. */
     @Test
     void trailingBytesRaiseTheRefusal() {
         byte[] blob = validBlob();
         refusal(Arrays.copyOf(blob, blob.length + 3));
     }
 
+    /** An unknown blob version raises the refusal rather than being guessed at. */
     @Test
     void unknownBlobVersionRaisesTheRefusal() {
         byte[] blob = validBlob();
@@ -225,6 +239,7 @@ class OrderingStateCodecCorruptionTest {
         refusal(blob);
     }
 
+    /** A stored long decodes only from exactly eight bytes. */
     @Test
     void decodeLongRequiresExactlyEightBytes() {
         assertEquals(3L, OrderingStateCodec.decodeLong(OrderingStateCodec.encodeLong(3L)));
@@ -235,6 +250,7 @@ class OrderingStateCodecCorruptionTest {
         }
     }
 
+    /** A channel entry key of the wrong length raises the refusal, and a well-formed one round-trips. */
     @Test
     void malformedChannelKeysRaiseTheRefusal() {
         byte[] shortKey = {OrderingStateCodec.TAG_FED_UP_TO, 1, 2, 3};
@@ -245,6 +261,7 @@ class OrderingStateCodecCorruptionTest {
         assertEquals(CH, OrderingStateCodec.channelOfEntryKey(OrderingStateCodec.channelKey(OrderingStateCodec.TAG_FED_UP_TO, CH)));
     }
 
+    /** A held key of the wrong length raises the refusal, and a well-formed one yields its channel and position. */
     @Test
     void malformedHeldKeysRaiseTheRefusal() {
         byte[] shortKey = {OrderingStateCodec.TAG_HELD, 1, 2, 3};

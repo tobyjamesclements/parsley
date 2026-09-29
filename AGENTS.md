@@ -36,11 +36,6 @@ by reordering, skipping, or adding a timeout. Where the guarantee cannot be uphe
    grammar needs a new version byte and a documented migration; prefer no change.
 3. `docs/model.md`, how the pieces satisfy the spec, and why.
 
-Code and docs cite decision records as "D<n>" (D115, D67 and so on). The decision log those
-numbers index was removed from the tree; the records are in the git history of
-`DECISIONS.md` before its deletion, and the numbers are kept in the citations as pointers
-into it.
-
 ## Map
 
 Everything lives in one package, `io.github.tobyjamesclements.parsley`. Kafka Streams is
@@ -78,9 +73,7 @@ each violation class.
 ## Verifying anything
 
 - `./mvnw verify` is the full gate: **the whole suite, green, roughly eleven minutes** (the
-  surefire summary prints the count; it was 716 at D113, 698 at D115 after the facts round's
-  suites went with the round, 651 once the session package and its suites went, and 670
-  after the packages collapsed into one, which added the fence's checks and the two suites
+  surefire summary prints the count, 670 after the packages collapsed into one, which added the fence's checks and the two suites
   that exercise the public surface from outside it). It must be green at every commit, and
   it grows. It shrinks only when a mechanism is deleted with its pins, and the record that
   deletes it says so.
@@ -96,8 +89,7 @@ each violation class.
 - Simulator runs are seeded and deterministic: `CausalOrderPropertyTest` sweeps seeds 1 to 300,
   and a failure reproduces exactly from its seed.
 - There is **no mutation-testing gate**; `Sabotage` is this project's mutation testing, aimed
-  at spec criteria rather than syntax. D67 records why, and the three gaps a pitest run found
-  before it was removed.
+  at spec criteria rather than syntax.
 
 ## Using it from an application
 

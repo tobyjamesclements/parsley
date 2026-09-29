@@ -196,7 +196,7 @@ class EndToEndIntegrationTest {
      *
      * <p>The second instance may start while the first runs because its bootstrap takes the
      * read-only fast path: the first instance's bootstrap already committed initial
-     * positions, and only a commit requires joining the group (D48).
+     * positions, and only a commit requires joining the group.
      */
     @Test
     void heldMessageSurvivesTaskMigrationBetweenInstances() throws Exception {
@@ -295,7 +295,7 @@ class EndToEndIntegrationTest {
      * constraint 8) — is held, neither rescued by a report nor refused: the process stays
      * healthy, and nothing delivers past the hold until a later record on the
      * channel settles the run below it — receipt of gap-a@3 asserts everything below was fed
-     * or never will be, and B goes with it (D115). A parsley stamper never produces this
+     * or never will be, and B goes with it. A parsley stamper never produces this
      * header; the facts round that used to rescue it served stampers this library does not
      * control.
      */
@@ -346,7 +346,7 @@ class EndToEndIntegrationTest {
     }
 
     /**
-     * Retention crossing a held message no longer stops the holder (D115 supersedes D104):
+     * Retention crossing a held message no longer stops the holder:
      * the message it owes lives in the ordering changelog, its senders keep expressing it,
      * and it delivers in causal order — here from a restart's changelog restore, after its
      * copy on the topic was discarded — once its cause arrives. Assumption 10's intent, and
@@ -433,7 +433,7 @@ class EndToEndIntegrationTest {
             assertEquals(FailClosedException.Reason
                             .POSITIONS_DISCARDED_UNREAD,
                     parsley.status().get("pt").refusalReason().orElseThrow(),
-                    "the fetch is the one judge of retention, and its stop names Safety 8's condition (D109)");
+                    "the fetch is the one judge of retention, and its stop names Safety 8's condition");
         } finally {
             parsley.close();
         }

@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  * topic whose absence is load-bearing: the changelog reader's absence-of-records is the
  * prior-state evidence, and the bootstrap member subscribes to just-resolved received
  * topics. An auto-created empty impostor at either seam converts a refusal into a silent
- * resume (D82). The facts round's probe consumer, the third such consumer, is gone (D115);
+ * resume. The facts round's probe consumer, the third such consumer, is gone;
  * the identity check at task initialisation uses the admin client alone, which creates
  * nothing.
  */

@@ -7,7 +7,7 @@ import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-/** Establishes that a channel's wire encoding is fixed-width and round-trips. */
+/** A channel's wire encoding is fixed-width and round-trips. */
 class ChannelTest {
     /** A channel encodes to a fixed width and decodes back to itself, by either route. */
     @Test

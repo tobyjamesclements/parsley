@@ -202,7 +202,7 @@ class TargetedScenarioTest {
      * blocker names the position and what the channel has settled to, and the next message
      * on that channel — which the substrate places above the dead run — settles the run and
      * releases the hold, because receipt of a position asserts everything below it was fed
-     * or never will be (D115; the induction that retired the read-position report).
+     * or never will be (the induction that retired the read-position report).
      */
     @Test
     void causeOnPositionThatNeverYieldsIsHeldAndVisibleUntilALaterMessageSettlesIt() {
@@ -312,8 +312,8 @@ class TargetedScenarioTest {
     /**
      * Truncation beyond the read position fails closed at the fetch: the host's read
      * position lies below the earliest retained position, and the substrate refuses to
-     * serve it rather than skip to the next retained message (D9's {@code auto.offset.reset=none},
-     * which D115 leaves as the only mid-run retention check).
+     * serve it rather than skip to the next retained message ({@code auto.offset.reset=none},
+     * the only mid-run retention check).
      */
     @Test
     void truncationBeyondReadPositionFailsClosed() {
@@ -521,7 +521,7 @@ class TargetedScenarioTest {
     }
 
     /**
-     * Retention crosses a message a process still holds (D104's shape, D115's outcome). P
+     * Retention crosses a message a process still holds. P
      * receives {b, w, x} and holds X (x@0, expressing W on w, unfed at P); Q receives {x, t},
      * delivers X at once (it does not receive w) and sends to b. Retention then discards x@0
      * — exactly up to both readers' committed read position — and Q re-initialises, which
@@ -567,8 +567,8 @@ class TargetedScenarioTest {
     }
 
     /**
-     * Retention discarding a held message no longer stops the holder (D115 supersedes D104):
-     * the hazard D104 refused — senders pruning the discarded message and their later sends
+     * Retention discarding a held message no longer stops the holder:
+     * the hazard the old retention stop guarded against — senders pruning the discarded message and their later sends
      * expressing nothing about it — is gone once nothing prunes for retention, so B still
      * expresses X and waits behind it. The holder keeps X in its hold-back buffer, survives
      * a re-initialisation, and delivers W, X, B in causal order once W arrives; the copy
@@ -629,7 +629,7 @@ class TargetedScenarioTest {
         return rig;
     }
 
-    /** A recreated received topic fails closed at the next initialisation, where identity is checked (D115). */
+    /** A recreated received topic fails closed at the next initialisation, where identity is checked. */
     @Test
     void recreatedReceivedTopicFailsClosedAtTheNextInitialisation() {
         Rig rig = recreatedTopic(SabotageMode.NONE);
@@ -826,11 +826,11 @@ class TargetedScenarioTest {
 
     /**
      * Join clamp survives retention at its exact position: a delivered-past entry is never
-     * pruned by retention (D115), so a channel that joins after the log start reached its
+     * pruned by retention, so a channel that joins after the log start reached its
      * delivered cause does not redeliver the cause behind its delivered effect. Only the
      * exact boundary is observable: once the log start passes the entry, the joining
      * channel's own start position covers everything below it, so a prune strictly below
-     * the log start — the predicate the engine had until D115 — changes no delivery and no
+     * the log start — the predicate the engine once had — changes no delivery and no
      * scenario can catch it.
      */
     @Test

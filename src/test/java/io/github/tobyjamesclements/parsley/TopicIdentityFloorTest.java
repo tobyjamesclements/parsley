@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * topic-partition identified so that a recreated topic is a different channel — which
  * needs the broker-assigned topic ID. A pre-topic-ID broker describes every topic with the
  * reserved {@link Uuid#ZERO_UUID}, the one hard tripwire below the floor; adopting it as
- * identity would give every topic the same identity and D83's whole machinery — recreation
+ * identity would give every topic the same identity and the whole identity machinery — recreation
  * detection, the zero-id decode refusal — nothing to stand on.
  */
 class TopicIdentityFloorTest {
@@ -30,8 +30,8 @@ class TopicIdentityFloorTest {
      * Catches the floor tripwire being dropped or renamed: a description carrying the
      * reserved zero topic ID means the broker predates topic IDs (below SPEC Substrate
      * 1's 3.7.0 floor), and resolution must refuse with SUBSTRATE_MISCONFIGURED — the
-     * reason supervisors key on (D55) — naming the topic and the floor, rather than adopt
-     * the zero id as channel identity (Assumption 2, D83).
+     * reason supervisors key on — naming the topic and the floor, rather than adopt
+     * the zero id as channel identity (Assumption 2).
      */
     @Test
     void zeroTopicIdRefusesToStartAsSubstrateMisconfigured() {

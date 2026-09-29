@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>Reserved names, reserved headers and owned configuration keys are rejected at
  * construction, before any broker is contacted, and null components are refused with
- * {@code IllegalArgumentException} everywhere (D73's one-rule taxonomy).
+ * {@code IllegalArgumentException} everywhere (the one-rule taxonomy).
  */
 class ApiValidationTest {
 
@@ -91,7 +91,7 @@ class ApiValidationTest {
         assertThrows(IllegalArgumentException.class,
                 () -> Parsley.start(ParsleyConfig.builder("unreachable:1", "x").build(), p),
                 "a declared topic equal to a composed store-changelog name is refused at"
-                        + " declaration time (D58), even without the reserved namespace in it");
+                        + " declaration time, even without the reserved namespace in it");
     }
 
     /** Distinct processes composing one changelog topic name are refused. */
@@ -120,7 +120,7 @@ class ApiValidationTest {
      * Two processes sharing one name would compose the same application id and therefore
      * the same consumer group and changelog topics, each restoring the other's records —
      * the identical-name degenerate of the composition collision
-     * {@link #composedChangelogNameCollisionAcrossProcessesIsRefused} pins (D73). The
+     * {@link #composedChangelogNameCollisionAcrossProcessesIsRefused} pins. The
      * duplicate is refused by name as the first statement of start, before any broker
      * contact, which is why the unreachable bootstrap never matters here.
      */
@@ -190,7 +190,7 @@ class ApiValidationTest {
                 () -> builder.streamsProperty("default.timestamp.extractor", "LogAndSkipOnInvalidTimestamp"));
 
         // The membership protocol selects the fencing semantics the bootstrap's
-        // initial-position commit is argued on (D48); swapping it is guarantee-bearing.
+        // initial-position commit is argued on; swapping it is guarantee-bearing.
         assertThrows(IllegalArgumentException.class,
                 () -> builder.streamsProperty("group.protocol", "consumer"));
         assertThrows(IllegalArgumentException.class,
@@ -201,7 +201,7 @@ class ApiValidationTest {
         // Streams pins the plain bootstrap.servers from its own config but applies
         // prefixed consumer overrides on top without re-pinning, so a prefixed spelling
         // would point a consumer at a different cluster than the one start() resolved
-        // topic identities against (D87).
+        // topic identities against.
         assertThrows(IllegalArgumentException.class,
                 () -> builder.streamsProperty("main.consumer.bootstrap.servers", "elsewhere:9092"));
         assertThrows(IllegalArgumentException.class,
@@ -329,10 +329,10 @@ class ApiValidationTest {
     /**
      * A null value on put is refused pointing at delete(): {@code Effects.Write}
      * accepts a null value deliberately, because null <em>is</em> delete()'s
-     * representation and tombstones pass through the seam unencoded (D29), so without
+     * representation and tombstones pass through the seam unencoded, so without
      * this guard {@code put(store, key, null)} constructs a Write byte-identical
      * to {@code delete(store, key)} — silently removing the entry the caller meant to
-     * write instead of refusing the mistake (D73's declaration-site rule).
+     * write instead of refusing the mistake (the declaration-site rule).
      */
     @Test
     void nullPutValueIsRefusedPointingAtDelete() {
@@ -358,7 +358,7 @@ class ApiValidationTest {
         assertThrows(IllegalArgumentException.class,
                 () -> Process.named("p").receives(channel("t"), null),
                 "a null handler would otherwise surface as an NPE on the stream thread at first"
-                        + " delivery — the exact failure mode D73 eliminated for serdes");
+                        + " delivery — the exact failure mode the declaration-site rule eliminated for serdes");
     }
 
     /**
@@ -366,7 +366,7 @@ class ApiValidationTest {
      * topic: the builder registers inputs with {@code putIfAbsent}, so without this
      * refusal the second declaration's handler would be dropped on the floor while the
      * first kept handling the topic — application logic silently never invoked, the
-     * exact late-or-silent failure D73's declaration-site rule exists to prevent.
+     * exact late-or-silent failure the declaration-site rule exists to prevent.
      */
     @Test
     void secondReceivesForOneTopicIsRefused() {
@@ -385,7 +385,7 @@ class ApiValidationTest {
      * A duplicate store name is refused naming the process and the store: without this
      * refusal {@code putIfAbsent} keeps the first {@code Store} instance, so both
      * declarations would silently alias one state store and one changelog topic while
-     * the second declaration's serdes were never consulted (D73's declaration-site
+     * the second declaration's serdes were never consulted (the declaration-site
      * rule; the cross-instance ambiguity mirrors the sends() case
      * {@link #sendTopicDeclaredThroughTwoInstancesIsRefused} pins).
      */
@@ -426,7 +426,7 @@ class ApiValidationTest {
      * A null sends varargs array — reachable through an explicit cast or a propagated
      * null array variable — is refused with the taxonomy's exception and a message
      * naming the process, where the loop over the array would otherwise throw a bare
-     * unattributed NPE (D73's one-rule taxonomy; the null-element case is pinned
+     * unattributed NPE (the one-rule taxonomy; the null-element case is pinned
      * separately by {@link #nullElementAmongSendsVarargsIsRefused}).
      */
     @Test
@@ -444,7 +444,7 @@ class ApiValidationTest {
     /**
      * A null stores varargs array is refused with the taxonomy's exception and a
      * message naming the process, mirroring {@link #nullSendsChannelArrayIsRefused}:
-     * one rule for null components across the whole declaration surface (D73).
+     * one rule for null components across the whole declaration surface.
      */
     @Test
     void nullStoresArrayIsRefused() {
@@ -480,7 +480,7 @@ class ApiValidationTest {
      * Null and blank bootstrap servers are refused at the builder with one message
      * naming the parameter: a blank string would otherwise ride into every Streams
      * configuration and fail much later as a Kafka client ConfigException naming no
-     * parsley declaration site (D73: declaration mistakes fail where they are written).
+     * parsley declaration site (declaration mistakes fail where they are written).
      */
     @Test
     void blankBootstrapServersAreRefused() {
@@ -496,7 +496,7 @@ class ApiValidationTest {
 
     /**
      * A zero or negative metadata budget is refused naming the parameter: the budget
-     * bounds the causal metadata every message may carry (D52, enforced on receipt and
+     * bounds the causal metadata every message may carry (enforced on receipt and
      * on send), so a non-positive bound would pass build() only to refuse the very
      * first send's metadata with a growth diagnosis when the actual mistake is a
      * declaration typo.

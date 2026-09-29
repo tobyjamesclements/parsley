@@ -5,14 +5,14 @@ import java.util.UUID;
 
 /**
  * What a {@link TopicIdentitySource} concluded about the ids it was asked: the topics
- * confirmed gone — deleted outright, or deleted and recreated under their name so that the
- * id a process knows is a dead incarnation — and the ids whose question the substrate could
- * not answer this time, which the asker keeps pending and asks again.
+ * confirmed gone, and the ids whose question the substrate could not answer this time,
+ * which the asker keeps pending and asks again. Gone means deleted outright, or deleted and
+ * recreated under the name so that the id a process knows is a dead incarnation.
  *
  * @param deleted    ids whose topic no longer exists under any name
  * @param recreated  ids whose last-known name now resolves to a different id
- * @param unanswered ids the substrate gave no answer about — a timed-out or failed
- *                   corroborating describe — so that nothing was concluded either way
+ * @param unanswered ids the substrate gave no answer about, because a corroborating
+ *                   describe timed out or failed, so that nothing was concluded either way
  */
 record TopicIdentityVerdicts(Set<UUID> deleted, Set<UUID> recreated, Set<UUID> unanswered) {
 

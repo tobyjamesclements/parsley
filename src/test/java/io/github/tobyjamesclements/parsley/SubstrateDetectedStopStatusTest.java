@@ -17,7 +17,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Establishes that a stop the substrate detects, but that recurs identically on restart,
- * reaches {@code status()} with its reason (D109, Operational 1). The main consumer's
+ * reaches {@code status()} with its reason (Operational 1). The main consumer's
  * OffsetOutOfRangeException under auto.offset.reset=none is the consumer-level half of
  * Safety 8; a held message's persisted form exceeding the changelog's record limit is a
  * substrate configuration the guarantee cannot survive. Both used to reach status() as
@@ -59,7 +59,7 @@ class SubstrateDetectedStopStatusTest {
     }
 
     /**
-     * A received topic missing at a rebalance stays transient (D115): a restart either
+     * A received topic missing at a rebalance stays transient: a restart either
      * resumes it — the topic merely lagged in a broker's metadata — or refuses with the
      * start path's own diagnosis of what became of it, so the stop itself carries no reason.
      */

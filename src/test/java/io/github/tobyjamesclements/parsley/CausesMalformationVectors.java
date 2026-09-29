@@ -9,18 +9,14 @@ import java.util.UUID;
  * The one spelling of the malformation battery: every class of damaged causes bytes the
  * frozen grammar refuses, as (family, label, bytes, diagnosis fragment) vectors.
  *
- * <p>Two decoders must refuse these identically — the engine's own
- * ({@code CausesCodecTest}) and the session companion's ({@code CausalPastMalformationTest},
- * D99) — and a class pinned for one but not the other is silent drift in exactly the
- * property the companion promises ("exactly as strict as the engine's"). Sharing the
- * vectors makes the mirror structural: a new malformation class is added <em>here</em>, and
- * both decoders' catalogue sweeps pick it up with no further test change. Public across
- * test packages for the same reason {@code EngineTestFactory} is.
+ * <p>{@code CausesCodecTest} sweeps the catalogue by family and as a whole, so a new
+ * malformation class is added <em>here</em> and the sweeps pick it up with no further test
+ * change.
  *
  * <p>{@link #all()} builds fresh arrays on every call, so callers may mutate what they
  * receive without poisoning another test.
  */
-public final class CausesMalformationVectors {
+final class CausesMalformationVectors {
 
     /**
      * One malformed encoding and the refusal it must draw.
@@ -130,7 +126,7 @@ public final class CausesMalformationVectors {
                     buffer.array(), "exceeds the non-negative int range");
         }
 
-        // Snapshot-era flat-grammar shapes (D101): version byte 1 hardcoded, not
+        // Snapshot-era flat-grammar shapes: version byte 1 hardcoded, not
         // FORMAT_VERSION, because these bytes are historical constants — the retired flat
         // layout was version, a fixed 4-byte big-endian entry count, then 28-byte entries.
         // Under the grouped grammar the count's leading zero byte reads as a zero topic

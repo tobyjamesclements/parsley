@@ -42,10 +42,10 @@ final class OrderingStateCodec {
 
     /**
      * Every state tag except {@link #TAG_VERSION}. The unversioned-state refusal iterates
-     * this set; a new tag must be added here, or the state it marks silently escapes the
-     * changelog-head-loss check. {@code OrderingStateCodecCorruptionTest#stateTagsCoverEveryTagConstantExceptVersion}
-     * pins the set against the {@code TAG_} constants by reflection, so a tag added above
-     * without an entry here fails the build rather than drifting.
+     * this set, so a new tag must be added here or the state it marks silently escapes the
+     * changelog-head-loss check. {@code OrderingStateCodecCorruptionTest} pins the set
+     * against the {@code TAG_} constants by reflection, so a tag added above without an
+     * entry here fails the build rather than drifting.
      */
     private static final byte[] STATE_TAGS = {TAG_FED_UP_TO, TAG_FRONTIER, TAG_DELIVERED_PAST,
             TAG_NAME_BINDING, TAG_HELD};
@@ -364,7 +364,7 @@ final class OrderingStateCodec {
     /**
      * Whether a key is a held message's, by its tag and shape. A host reading ordering
      * state for its start-time checks needs to know that a hold exists, never what it
-     * carries, so it can keep a marker in place of the body (D110).
+     * carries, so it can keep a marker in place of the body.
      *
      * @param key a key from the ordering state
      * @return {@code true} when the key is a held message's
@@ -409,7 +409,7 @@ final class OrderingStateCodec {
      * must re-establish a lost read position resumes at this coverage plus one, the next
      * position the previous execution would have read, and leaves it to the substrate's
      * fetch, under {@code auto.offset.reset=none}, to refuse the position if retention has
-     * since discarded it (D115).
+     * since discarded it.
      *
      * <p>A channel settled on its topic's confirmed deletion carries the fed-to-end
      * sentinel, {@code Long.MAX_VALUE}, returned verbatim. Arithmetic on a returned value

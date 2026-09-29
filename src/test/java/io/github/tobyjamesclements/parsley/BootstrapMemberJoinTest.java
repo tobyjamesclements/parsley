@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * group is owned, or as a diagnosed interrupt — never as a silent hang, and never with an
  * unusable inherited session timeout reaching the broker at all.
  *
- * <p>The join wait is the one place a contested group is discovered (D48: a live Kafka
+ * <p>The join wait is the one place a contested group is discovered (a live Kafka
  * Streams lifetime makes every poll throw the protocol conflict), so its deadline is what
  * turns "another lifetime owns this group" into a diagnosed bootstrap failure instead of an
  * infinite hang (Operational 2). Each waiting test is bounded twice: the class timeout, and
@@ -43,7 +43,7 @@ class BootstrapMemberJoinTest {
      * The inherited-session-timeout floor: a resolved value below one millisecond can never
      * be a usable session timeout, and it must be refused during property composition —
      * before any network contact, naming the property and the value — rather than stand up
-     * a consumer whose join the broker then rejects with its own vocabulary (D48; D87's
+     * a consumer whose join the broker then rejects with its own vocabulary (the
      * attributable-refusal rule for this property).
      */
     @Test
@@ -59,7 +59,7 @@ class BootstrapMemberJoinTest {
 
     /**
      * The join deadline itself: a coordinator that never assigns must fail the bootstrap
-     * loudly within the deadline, naming the timeout it waited (D48, Operational 2). This
+     * loudly within the deadline, naming the timeout it waited (Operational 2). This
      * is the site whose deletion turns a diagnosed bootstrap failure into an infinite
      * hang — the consumer double's poll budget and the class timeout convert that hang
      * into a visible failure.
@@ -80,8 +80,8 @@ class BootstrapMemberJoinTest {
      * a closed one's members not yet timed out) makes every poll throw the protocol
      * conflict, and the deadline must surface that as the likely-holders explanation with
      * the conflict as cause — a bare timeout would send the operator to the network when
-     * the group is simply held (D48's join-fast-fail contract; D86 records the deadline
-     * this diagnosis reaches operators through).
+     * the group is simply held (the join-fast-fail contract, whose deadline is how
+     * this diagnosis reaches operators).
      */
     @Test
     void protocolConflictAtTheDeadlineNamesTheLikelyHoldersAndCarriesTheCause() {
@@ -103,7 +103,7 @@ class BootstrapMemberJoinTest {
      * An interrupt during the protocol-conflict backoff: a supervisor tearing down a
      * contested bootstrap must end the join as its own diagnosed failure with the
      * interrupt status restored — not have the interrupt swallowed into further backoff
-     * cycles until the deadline dresses the stop as a coordinator timeout (D48).
+     * cycles until the deadline dresses the stop as a coordinator timeout.
      */
     @Test
     void interruptDuringTheProtocolConflictBackoffFailsTheJoinAsInterrupted() {

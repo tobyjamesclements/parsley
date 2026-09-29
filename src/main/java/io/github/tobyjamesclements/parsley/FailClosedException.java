@@ -24,10 +24,10 @@ public final class FailClosedException extends RuntimeException {
          * The host fed a channel at a position, above the session floor, that this
          * execution's own coverage already records as fed or never arriving: the feed and
          * the engine's record contradict each other. An invariant guard with no known
-         * trigger since D115 — coverage above the floor is raised only by this execution's
-         * own receipts and by a deleted channel's settlement, both of which the feed-order
-         * checks refuse first — so a restart resumes from the committed record and the
-         * refusal does not recur.
+         * trigger, because coverage above the floor is raised only by this
+         * execution's own receipts and by a deleted channel's settlement, both of which the
+         * feed-order checks refuse first. A restart resumes from the committed record and
+         * the refusal does not recur.
          */
         COVERED_POSITION_FED,
         /**

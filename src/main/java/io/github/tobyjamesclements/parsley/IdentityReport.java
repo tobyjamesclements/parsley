@@ -11,10 +11,10 @@ import java.util.Set;
  * was sent (wire-format constraint 8), so receiving that message is what satisfies it, and
  * nothing about positions needs reporting. Identity is different. A topic that no longer
  * exists can never yield the message a cause names, so its causes can no longer matter
- * (SPEC Structural 13) and its entries leave the frontier; a received topic recreated under
+ * (SPEC Structural 13) and its entries leave the frontier. A received topic recreated under
  * its name is a different channel, whose records must not be fed under the old identity
  * (SPEC Assumption 2). Both are learned by asking the substrate, and a host asks when it
- * initialises a process (D115).
+ * initialises a process.
  *
  * @param deadChannels      channels whose topic no longer exists
  * @param recreatedChannels channels whose topic exists under a new identity

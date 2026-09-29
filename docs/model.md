@@ -89,7 +89,7 @@ That is checked once per task initialisation, when the process asks the broker a
 topic its state names. A denied or unavailable answer is never death, and the pair stays
 until an initialisation finds the topic gone. Nothing is dropped for a position's age: a
 cause whose record retention has discarded still matters to any process holding a message
-that names it (D115).
+that names it.
 
 What retention threatens is a process's read position, not what it holds. Where retention
 passes the position a stopped or lagging process reads next, the fetch refuses under

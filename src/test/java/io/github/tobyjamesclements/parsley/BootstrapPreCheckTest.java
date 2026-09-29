@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * transactional commit, so against a live sibling committing every EOS commit interval, a
  * snapshot routinely misses a partition that is not missing at all. Concluding "missing"
  * from one snapshot sends the start into the group join, which can only grind against the
- * sibling's protocol until the join deadline and then refuse a legitimate scale-out (D86).
+ * sibling's protocol until the join deadline and then refuse a legitimate scale-out.
  * Every listing — the first included — goes through the one scripted-listing seam, so
  * these tests script the whole answer sequence a start sees: the retry loop's relist
  * adoption, its fast paths, its give-up budget and its interrupted-refusal arm, alongside
@@ -73,7 +73,7 @@ class BootstrapPreCheckTest {
      * partition to a pending transactional commit must be relisted, and the relist that
      * covers the received set must be the listing the start acts on — adopting the
      * partial snapshot instead sends a healthy scale-out into the group join it cannot
-     * win (D86).
+     * win.
      */
     @Test
     void aStableRelistEndsThePreCheckRetryAndIsAdopted() {
@@ -98,7 +98,7 @@ class BootstrapPreCheckTest {
      * Catches the fast paths regressing into the wait: a first listing that already
      * covers the received set — and a first start's empty listing — must be adopted
      * without a single relist or sleep, or every healthy start pays the unstable-skip
-     * tax (D86 promises the wait only for the partial shape).
+     * tax (the wait is promised only for the partial shape).
      */
     @Test
     void aCoveringOrEmptyFirstListingIsAdoptedWithoutRelisting() {
@@ -133,7 +133,7 @@ class BootstrapPreCheckTest {
      * retry budget is not a pending commit resolving — pending commits resolve within
      * the transaction timeout the budget models — and the retry must stop and adopt the
      * still-partial listing, falling through to the group join, which remains
-     * authoritative on whether the gap is real (D86). Deleting the budget check turns
+     * authoritative on whether the gap is real. Deleting the budget check turns
      * that fall-through into an unbounded relist loop, which the scripted listing's
      * budget converts into a visible failure rather than a hang.
      */
@@ -153,7 +153,7 @@ class BootstrapPreCheckTest {
 
         assertEquals(partial, adopted,
                 "past the budget the still-partial listing is what the start acts on; the"
-                        + " join it falls through to is authoritative on the gap (D86)");
+                        + " join it falls through to is authoritative on the gap");
         assertTrue(listings.get() >= 2,
                 "the partial shape must be relisted at least once before the budget gives up,"
                         + " or the retry promised for pending commits never happened");
@@ -186,10 +186,10 @@ class BootstrapPreCheckTest {
 
     /**
      * The position an expired committed offset resumes at is the covered position plus one
-     * (D115): the next position the previous execution would have read, whether retention
+     *: the next position the previous execution would have read, whether retention
      * still holds it being the substrate's to decide at the first fetch. A partition the
      * ordering state names as received but never covered — started at 0 and never fed, or
-     * covered to -1 by a pre-D115 execution — resumes at 0, the one position it can show it
+     * covered to -1 by an earlier build — resumes at 0, the one position it can show it
      * read from: the substrate's earliest may have moved past positions it never read, and
      * taking it would treat them as fed (the shape the review found). Only a topic the state
      * never named, and the fed-to-end sentinel a channel settled on its topic's deletion
@@ -204,7 +204,7 @@ class BootstrapPreCheckTest {
         assertEquals(java.util.OptionalLong.of(1), StreamsRuntime.resumePosition(0L, true),
                 "covered up to 0: resume at 1");
         assertEquals(java.util.OptionalLong.of(0), StreamsRuntime.resumePosition(-1L, true),
-                "a pre-D115 execution recorded coverage of -1 for a channel started at 0: resume at 0");
+                "an earlier build recorded coverage of -1 for a channel started at 0: resume at 0");
         assertEquals(java.util.OptionalLong.of(0), StreamsRuntime.resumePosition(null, true),
                 "received before but never covered: the previous execution read from 0, so resume there");
         assertEquals(java.util.OptionalLong.empty(), StreamsRuntime.resumePosition(null, false),

@@ -22,7 +22,7 @@ public record ProcessStatus(
     /**
      * Refuses null components.
      *
-     * @throws IllegalArgumentException if any component is null; absence is expressed
+     * @throws IllegalArgumentException if any component is null. Absence is expressed
      *         through the empty {@code Optional}s
      */
     public ProcessStatus {

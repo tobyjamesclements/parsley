@@ -21,10 +21,10 @@ import io.github.tobyjamesclements.parsley.FailClosedException.Reason;
  *
  * <p>The engine holds a causal frontier, a per-channel hold-back buffer, and the record of
  * what it has already delivered. A host feeds it messages, asks it what is deliverable, and
- * tells it what was delivered; at initialisation it also tells the engine where each channel's
+ * tells it what was delivered. At initialisation it also tells the engine where each channel's
  * feed will start and which channels no longer exist. Nothing is reported between deliveries:
  * a cause names the position of a message that was sent (wire-format constraint 8), so
- * receiving that message is what satisfies it (D115). The engine names no host type, consults
+ * receiving that message is what satisfies it. The engine names no host type, consults
  * no clock and opens no connection, so the same engine runs under a simulator and under Kafka
  * Streams.
  *
@@ -62,7 +62,7 @@ final class ProcessEngine {
 
     // The frontier's encoded width, maintained incrementally so the budget check in
     // mergeFrontier stays O(1) now that size is a function of the frontier's shape rather
-    // than its entry count (D98). frontierBodyBytes counts everything after the version
+    // than its entry count. frontierBodyBytes counts everything after the version
     // byte and the topic-count varint; the per-topic partition counts supply the
     // varint-width deltas as groups grow, shrink, appear and empty. Kept in step at the
     // frontier's three mutation sites — restore, merge, prune; positions update in place
@@ -76,12 +76,12 @@ final class ProcessEngine {
     // Holds taken in since the last flush, in receipt order. A flush persists exactly these,
     // so its cost follows the holds added since the previous flush rather than the depth of
     // every buffer, which is what keeps a deep hold-back buffer from taxing every later
-    // receipt (D102).
+    // receipt.
     private final ArrayDeque<Hold> unpersisted = new ArrayDeque<>();
 
     // The frontier's encoded form, built on first use and dropped at the frontier's
     // mutation sites, so a step that sends several messages encodes once and a step that
-    // sends none never encodes (D102).
+    // sends none never encodes.
     private byte[] encodedFrontier;
 
     private final Map<Channel, Long> sessionFloor;
@@ -91,14 +91,14 @@ final class ProcessEngine {
     /**
      * One held message.
      *
-     * <p>The decoded form — causes, key, value and headers — is in memory in exactly two
-     * cases: the hold has not been persisted yet, or it is the head of its channel's buffer.
-     * Everything else lives only in the store, because the delivery decision reads the head
-     * and nothing but the head; a hold is decoded from the store when it becomes head, and a
-     * flush drops the decoded form of every hold behind one. That keeps a deep buffer at
-     * O(held) references plus O(channels) decoded messages, rather than O(held × frontier)
-     * decoded entries (D102). {@code causes == null} is the one spelling of "not in
-     * memory"; the four decoded fields are loaded and dropped together.
+     * <p>The decoded form, meaning causes, key, value and headers, is in memory in exactly
+     * two cases: the hold has not been persisted yet, or it is the head of its channel's
+     * buffer. Everything else lives only in the store, because the delivery decision reads
+     * the head and nothing but the head. A hold is decoded from the store when it becomes
+     * head, and a flush drops the decoded form of every hold behind one. That keeps a deep
+     * buffer at O(held) references plus O(channels) decoded messages, rather than
+     * O(held × frontier) decoded entries. {@code causes == null} is the one spelling
+     * of "not in memory". The four decoded fields are loaded and dropped together.
      */
     private static final class Hold {
         final Channel channel;
@@ -167,8 +167,8 @@ final class ProcessEngine {
      * cause naming a position below it is therefore treated as satisfied (SPEC Structural
      * 12, Host obligation 2), which is what lets a process started at a channel's end, or
      * one whose channel joined the received set above discarded history, deliver an effect
-     * whose cause it will never receive. Coverage the store already holds is never lowered;
-     * a channel absent from the map, or at position zero, is restored unchanged.
+     * whose cause it will never receive. Coverage the store already holds is never lowered.
+     * A channel absent from the map, or at position zero, is restored unchanged.
      *
      * @param processName         the process name, used in diagnostics
      * @param receivedChannels    the channels this process receives, mapped to topic names
@@ -222,7 +222,7 @@ final class ProcessEngine {
             // header absorbed before wire-format constraint 5 refused it at receipt: no
             // substrate query can ever answer for it, so restoring it would re-express and
             // re-persist untrustworthy state forever. Stored state that cannot be trusted
-            // is a reason to stop (D88).
+            // is a reason to stop.
             if (Channel.isZeroTopicId(channel.topicId())) {
                 throw new FailClosedException(Reason.UNKNOWN_ORDERING_STATE_FORMAT,
                         "process " + processName + ": restored frontier names the reserved zero topic id;"
@@ -248,7 +248,7 @@ final class ProcessEngine {
             }
             // Decoded here to refuse a corrupt blob at start rather than at delivery; only
             // the skeleton is retained, the decoded form is reloaded when the hold reaches
-            // the head of its buffer (D102).
+            // the head of its buffer.
             OrderingStateCodec.HeldBlob blob = OrderingStateCodec.decodeHeld(value);
 
             // Everything downstream treats the deque head as the minimum held position, so
@@ -275,7 +275,7 @@ final class ProcessEngine {
         // by the initial position the process was started at. Raising coverage to just
         // below it is Structural 12's baseline, taken here so that it lies within the
         // session floor: a feed below the start position is the host re-feeding a
-        // committed past, a replay to drop, never a contradiction (D10, D115).
+        // committed past, a replay to drop, never a contradiction.
         startPositions.forEach((channel, start) -> {
             if (this.receivedChannels.contains(channel) && start > 0) {
                 advanceFedUpTo(channel, start - 1);
@@ -285,15 +285,15 @@ final class ProcessEngine {
     }
 
     /**
-     * Refuses a restored position no channel can assign (D105): the reserved maximum, which
+     * Refuses a restored position no channel can assign: the reserved maximum, which
      * the engine uses in-band as its fed-to-end marker, and any negative value. The maximum
      * can only have entered the store through a forged header absorbed before receipt
-     * refused it; a negative row is store corruption, since receipt has always refused
+     * refused it. A negative row is store corruption, since receipt has always refused
      * negative positions. Restored into the frontier either would be re-expressed on every
-     * send — the send path encodes the frontier directly and validates nothing, so
-     * this is the one check between the store and the wire — and restored into the
-     * delivered past the maximum would reach {@code fedUpTo} through the join clamp and
-     * read as "this channel no longer exists" for a topic that is alive.
+     * send, because the send path encodes the frontier directly and validates nothing, so
+     * this is the one check between the store and the wire. Restored into the delivered
+     * past the maximum would reach {@code fedUpTo} through the join clamp and read as
+     * "this channel no longer exists" for a topic that is alive.
      */
     private long requireAssignablePosition(Channel channel, long position, String what) {
         if (position == Long.MAX_VALUE) {
@@ -318,7 +318,7 @@ final class ProcessEngine {
      *
      * <p>The version entry is written before any state, in the store's earliest transaction,
      * so state without it is unambiguous evidence that the head of the changelog has been
-     * lost — and with it an unknowable amount of the state itself. Stamping a fresh version
+     * lost, and with it an unknowable amount of the state itself. Stamping a fresh version
      * here would adopt the remainder as complete and silently under-express causes.
      */
     private void refuseUnversionedState() {
@@ -370,9 +370,9 @@ final class ProcessEngine {
      * @return whether the message was accepted or recognised as already delivered
      * @throws FailClosedException if the host fed out of order within this execution,
      *         if the message's position lies above the session floor yet inside coverage
-     *         this execution already recorded as fed or never arriving — a contradiction
+     *         this execution already recorded as fed or never arriving (a contradiction
      *         between the host's feed and the engine's own record, kept as an invariant
-     *         guard though no path in this tree reaches it (D115) — if the metadata cannot
+     *         guard though no path in this tree reaches it), if the metadata cannot
      *         be decoded, or if the metadata exceeds the configured budget
      */
     public ReceiveOutcome onReceive(ReceivedMessage message) {
@@ -413,7 +413,7 @@ final class ProcessEngine {
                 // Not a feed-order violation: in-execution order is checked against
                 // fedThisExecution above. Coverage above the session floor is only ever
                 // raised by this execution's own receipts, which fedThisExecution already
-                // guards, so this branch is an invariant guard with no known trigger (D115):
+                // guards, so this branch is an invariant guard with no known trigger:
                 // it is kept so that a contradiction between the host's feed and the
                 // engine's record can never fall through to a silent drop or a delivery.
                 throw new FailClosedException(Reason.COVERED_POSITION_FED,
@@ -476,16 +476,16 @@ final class ProcessEngine {
      * Takes what the host learned of channel identity when it initialised this process.
      *
      * <p>A received channel whose topic was deleted settles to its end: nothing more can
-     * arrive on it, so every cause on it is satisfied (D21) — unless messages from it are
-     * still held, whose place in causal order can then no longer be preserved, which refuses
-     * (SPEC Safety 9, D46). A received channel whose topic was recreated under its name
-     * refuses: records fed under the old identity can no longer be trusted (SPEC Assumption
-     * 2). Frontier and delivered-past entries for dead and recreated channels are pruned —
-     * the one discarding Structural 13 permits, since a cause on a channel that no longer
+     * arrive on it, so every cause on it is satisfied. If messages from it are still
+     * held, their place in causal order can no longer be preserved, which refuses (SPEC
+     * Safety 9). A received channel whose topic was recreated under its name refuses:
+     * records fed under the old identity can no longer be trusted (SPEC Assumption 2).
+     * Frontier and delivered-past entries for dead and recreated channels are pruned, the
+     * one discarding Structural 13 permits, since a cause on a channel that no longer
      * exists can no longer matter. Nothing is pruned by retention: a cause names a message
      * that was sent, its holder keeps it until its own causes arrive, and its senders keep
      * expressing it, so retention crossing a held message costs nothing but the message's
-     * copy on its topic (D115 supersedes D104).
+     * copy on its topic.
      *
      * @param report the host's identity report
      * @throws FailClosedException if a received topic was recreated under its name,
@@ -674,7 +674,7 @@ final class ProcessEngine {
 
     /**
      * Brings a hold's decoded form into memory from the store, where a flush or a restore
-     * left it (D102). A hold that is still in memory is returned as it is.
+     * left it. A hold that is still in memory is returned as it is.
      *
      * @throws FailClosedException if the store no longer holds the message: the
      *         buffer says it is held, so ordering state contradicts itself
@@ -710,8 +710,8 @@ final class ProcessEngine {
      * delivered causal past with the delivered message's causes, which is the clamp a
      * channel joining the received set later must start above. The delivered position itself
      * is not written to the delivered past: for a received channel {@code fedUpTo} already
-     * covers it, was advanced at receipt, and is never pruned, so the clamp — a maximum over
-     * both — could never be raised by it (D106 closes D67's first gap on this basis).
+     * covers it, was advanced at receipt, and is never pruned, so the clamp, a maximum over
+     * both, could never be raised by it.
      *
      * @param channel  the channel the message arrived on
      * @param position its position within that channel
@@ -854,7 +854,7 @@ final class ProcessEngine {
             hold.persisted = true;
             if (held.get(hold.channel).peekFirst() != hold) {
                 // Only the head is read before it is delivered; everything behind it waits
-                // in the store and is decoded again on reaching the head (D102).
+                // in the store and is decoded again on reaching the head.
                 hold.key = null;
                 hold.value = null;
                 hold.headers = null;
@@ -865,7 +865,7 @@ final class ProcessEngine {
 
     /**
      * How many holds carry their decoded form in memory: at most the unflushed ones plus
-     * one per channel with a non-empty buffer (D102). For tests pinning that rule.
+     * one per channel with a non-empty buffer. For tests pinning that rule.
      */
     int decodedHoldCount() {
         int decoded = 0;

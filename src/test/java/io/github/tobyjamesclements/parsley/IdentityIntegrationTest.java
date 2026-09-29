@@ -140,13 +140,13 @@ class IdentityIntegrationTest {
     /**
      * A received topic deleted while messages from it are held — an Assumption 17 breach —
      * stops the process before anything delivers past them (SPEC Safety 9). On this host
-     * that happens one of two ways, both fail-closed and neither periodic (D115): a
+     * that happens one of two ways, both fail-closed and neither periodic: a
      * rebalance finds the source topic missing and Kafka Streams stops the thread with its
      * own diagnosis, which {@code status()} carries as a transient the restart refines; or
      * the task's transactional commit fails once the partition is gone (the producer's
      * {@code max.block.ms}, a minute, and the abort that follows can spend another) and
      * Streams re-creates the task, whose initialisation reports the topic deleted and
-     * refuses with CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES (D46) — or, when the
+     * refuses with CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES — or, when the
      * re-creation's rejoin is what first meets the missing topic, stops the thread. Which
      * one wins is the host's timing (measured: the commit and abort timeouts back to back,
      * a little over two minutes); this pins that one does, and that nothing was delivered.
@@ -193,13 +193,13 @@ class IdentityIntegrationTest {
 
     /**
      * The identity classification a task's initialisation acts on, over a real broker
-     * (D115): a live topic is neither deleted nor recreated; a deleted one is deleted only
+     *: a live topic is neither deleted nor recreated; a deleted one is deleted only
      * once its name is gone across three consistent answers; a topic recreated under its
      * name makes the id it had a dead incarnation; an id whose name the source never
-     * learned is never confirmed dead at all (D75), since a Describe denial masks a live
+     * learned is never confirmed dead at all, since a Describe denial masks a live
      * topic as unknown by id exactly the same way; and a Describe denial on a topic whose
      * name is known is answered by name as denied — alive, and the question answered — never
-     * as death (D44). A denied received topic cannot meet a task initialisation on this
+     * as death. A denied received topic cannot meet a task initialisation on this
      * host, since the start's own resolution refuses under the denial first; the source's
      * verdict is what an initialisation would act on where it could.
      */
@@ -263,7 +263,7 @@ class IdentityIntegrationTest {
      * whichever the host's timing produces. What this does not pin, and nothing can, is a
      * recreation that lands entirely between two polls with the new log already past the
      * old position: that is SPEC Assumption 17's territory, observed in the hardening review
-     * and again under review, and detected only at the task's next initialisation (D115).
+     * and again under review, and detected only at the task's next initialisation.
      */
     @Test
     void aReceivedTopicRecreatedWhileTheProcessPollsStopsTheProcess() throws Exception {
@@ -352,7 +352,7 @@ class IdentityIntegrationTest {
      * A Describe denial on a frontier topic, in place when a task initialises, does not
      * prune its cause: the broker masks the denied topic as unknown by id, the source has
      * no name for a topic this process never declared, and an id without a name is never
-     * confirmed dead (D75, D115). The restart is what puts the denial in front of an
+     * confirmed dead. The restart is what puts the denial in front of an
      * initialisation's identity check.
      */
     @Test

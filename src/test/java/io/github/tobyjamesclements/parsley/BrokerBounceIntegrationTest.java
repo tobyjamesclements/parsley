@@ -51,6 +51,7 @@ class BrokerBounceIntegrationTest {
         ClusterTestSupport.stopCluster(cluster, admin);
     }
 
+    /** A held message survives a full broker bounce, neither lost nor released until its cause arrives. */
     @Test
     void heldMessageSurvivesABrokerBounceAndReleasesOnlyByEvidence() throws Exception {
         admin.createTopics(List.of(new NewTopic("bounce-a", 1, (short) 1), new NewTopic("bounce-b", 1, (short) 1)))

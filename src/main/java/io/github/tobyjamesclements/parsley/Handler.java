@@ -12,7 +12,7 @@ package io.github.tobyjamesclements.parsley;
  *
  * <p>A handler that throws fails its step: the process stops, and on restart it is fed the
  * same message and fails again. Parsley never skips a message. To continue past an
- * application failure, catch it and return effects that record it deterministically — for
+ * application failure, catch it and return effects that record it deterministically, for
  * example a send to a declared dead-letter topic.
  *
  * @param <K> delivered key type

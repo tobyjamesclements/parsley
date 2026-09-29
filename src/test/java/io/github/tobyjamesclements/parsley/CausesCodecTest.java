@@ -13,7 +13,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Establishes the frozen wire format of the causal frontier: entries grouped by topic,
- * structural fields as minimal varints, positions fixed-width (D98).
+ * structural fields as minimal varints, positions fixed-width.
  *
  * <p>Encoding is canonical, and decoding rejects rather than salvages. A golden vector
  * assembled by hand from the specification alone guards against the implementation and the
@@ -110,7 +110,7 @@ class CausesCodecTest {
 
     /**
      * Rejects unknown version. Version byte 2 named this same grouped grammar in
-     * pre-release snapshots only (D101) and is refused like any unknown byte, pinned here
+     * pre-release snapshots only and is refused like any unknown byte, pinned here
      * beside zero, the first unassigned value (3), a far one (9) and two high-bit bytes
      * (0x81, 0xFF — negative as Java bytes) so neither a widened accept set, a salvaging
      * default nor a sign- or mask-shaped compare can stay green.
@@ -127,7 +127,7 @@ class CausesCodecTest {
 
     /**
      * Rejects the snapshot-era flat-grammar shapes, which lead with the now-released
-     * version byte and so pass the version check (D101). The flat layout's fixed 4-byte
+     * version byte and so pass the version check. The flat layout's fixed 4-byte
      * big-endian entry count leads with a zero byte, read here as a zero topic count, so
      * both the empty flat frontier and a populated one must refuse as trailing bytes —
      * an empty-frontier fast path or tolerated trailing padding would instead decode them
@@ -155,7 +155,7 @@ class CausesCodecTest {
      * Rejects truncation and trailing bytes. Truncation inside a position, inside a topic
      * id, inside a varint and below the version byte all classify as the truncated-header
      * diagnosis — never a raw {@code BufferUnderflowException} escaping decode into the
-     * receive path unnamed (Safety 7; D3's strict decode; D8's fail-closed stop) — and a
+     * receive path unnamed (Safety 7, strict decode, fail-closed stop) — and a
      * surplus byte after the last group is trailing, so the exact byte length stays part of
      * the grammar even though it is no longer computable from a count. Regression caught:
      * deleting the underflow catch clause lets the truncation probes throw raw.
@@ -198,7 +198,7 @@ class CausesCodecTest {
     /**
      * Rejects a negative position, diagnosed per entry naming its channel. Backstopped by
      * {@code Causes.of}'s own refusal through the malformed-header wrapper (see
-     * {@code PositionRefusalTest}), so this pin is message-level (D81): deleting the
+     * {@code PositionRefusalTest}), so this pin is message-level: deleting the
      * decoder's guard still refuses through the backstop, and only the diagnosis assertion
      * goes red.
      */
@@ -214,7 +214,7 @@ class CausesCodecTest {
     }
 
     /**
-     * Rejects the reserved zero topic ID (wire-format constraint 5, D83), checked once per
+     * Rejects the reserved zero topic ID (wire-format constraint 5), checked once per
      * group. The substrate never assigns it to a channel, and once merged it would sit in
      * the frontier as an id no broker query can answer for — a well-framed forged header
      * must not be able to plant it.
@@ -355,8 +355,8 @@ class CausesCodecTest {
      * Refuses every vector in the shared malformation battery. The named tests above pin
      * each class with its own narrative and exact diagnoses; this sweep pins the codec to
      * {@link CausesMalformationVectors}, the catalogue the session companion's mirror
-     * battery also runs, so a malformation class added there is enforced on both decoders
-     * with no further test change (D99's mirror, made structural).
+     * battery also runs, so a malformation class added there is enforced
+     * with no further test change.
      */
     @Test
     void refusesEveryCataloguedMalformation() {

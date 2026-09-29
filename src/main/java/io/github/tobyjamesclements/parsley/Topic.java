@@ -80,7 +80,7 @@ public final class Topic<K, V> {
      * any ordering state. A topic added later to a process that has run, or a partition
      * whose committed position has expired, begins at {@link InitialPosition#EARLIEST}
      * whatever was declared: a later {@code LATEST} would make a restart observable in
-     * what is delivered (D36). Positions below the first receipt count as already
+     * what is delivered. Positions below the first receipt count as already
      * satisfied.
      *
      * @param initialPosition where to begin reading

@@ -35,7 +35,7 @@ class ProcessEngineTest {
 
     /**
      * A cause is satisfied by receiving and delivering the message it names, and by nothing
-     * else (D115): the effect waits while the cause's position is unreceived, waits while
+     * else: the effect waits while the cause's position is unreceived, waits while
      * the cause is received but undelivered, and goes once the cause has been delivered.
      */
     @Test
@@ -67,7 +67,7 @@ class ProcessEngineTest {
     /**
      * A cause naming a position no record occupies — an aborted transaction's slot, a
      * marker — is settled by the receipt of the next record on the channel and by nothing
-     * before it (SPEC Liveness 3 as D115 restates it): a record below the named position
+     * before it (SPEC Liveness 3): a record below the named position
      * leaves the effect held with the gap still open, and the record after it, once
      * delivered, releases the effect without the named position ever being fed.
      */
@@ -96,7 +96,7 @@ class ProcessEngineTest {
      * Structural 12): a cause below the start position is satisfied without the message
      * ever being received, a feed below it is a replay dropped rather than a contradiction
      * refused, coverage the store already holds is never lowered, and a start position of
-     * zero, or one for a channel not received, changes nothing (D115).
+     * zero, or one for a channel not received, changes nothing.
      */
     @Test
     void aStartPositionCoversEverythingBelowItWithinTheSessionFloor() {
@@ -219,7 +219,7 @@ class ProcessEngineTest {
      * The maintained frontier size agrees with the encoded header, byte for byte, across
      * the shapes that exercise every term of the arithmetic. The agreement is load-bearing:
      * the merge-site budget gate reads the counter where the send gate measures real
-     * bytes, and drift between them would let one refuse what the other allows (D98). Each
+     * bytes, and drift between them would let one refuse what the other allows. Each
      * leg exists because a mutation trial showed its absence stays green: growth, a
      * mid-group prune and restore catch a counter update deleted at any of the three
      * mutation sites; the position-raising re-merge catches an unconditional add
@@ -413,11 +413,11 @@ class ProcessEngineTest {
     }
 
     /**
-     * Feed on a dead channel fails closed even after restart — and with the diagnosis D77
-     * assigned it: the dead-channel re-feed keeps {@code OUT_OF_ORDER_FEED} (D77 carved
-     * {@code COVERED_POSITION_FED} out for report/feed contradictions and left feed-order
-     * breaches, this one included, behind), and the message names the channel as recorded no
-     * longer existing (D21's end-of-channel sentinel) rather than accusing a generic order
+     * Feed on a dead channel fails closed even after restart — and with the diagnosis
+     * assigned it: the dead-channel re-feed keeps {@code OUT_OF_ORDER_FEED}
+     * ({@code COVERED_POSITION_FED} covers report/feed contradictions, and feed-order
+     * breaches, this one included, stay here), and the message names the channel as recorded
+     * no longer existing (the end-of-channel sentinel) rather than accusing a generic order
      * breach. Catches the reason being swapped or the dead-channel diagnosis being garbled,
      * which the previous type-only assertThrows stayed green through.
      */
@@ -436,7 +436,7 @@ class ProcessEngineTest {
                 () -> restarted.onReceive(plain(C1, 1, "ghost")),
                 "a channel recorded as dead can never legitimately feed again; this must not be silently dropped");
         assertEquals(FailClosedException.Reason.OUT_OF_ORDER_FEED, e.reason(),
-                "the dead-channel re-feed is a feed-order breach, the half D77 left with OUT_OF_ORDER_FEED");
+                "the dead-channel re-feed is a feed-order breach, the half left with OUT_OF_ORDER_FEED");
         assertTrue(e.getMessage().contains("recorded as no longer existing"),
                 "the diagnosis names the dead-channel condition, not a generic order breach, got: " + e.getMessage());
     }
@@ -450,7 +450,7 @@ class ProcessEngineTest {
     }
 
     /**
-     * The one discarding Structural 13 permits after D115: a cause on a channel whose topic
+     * The one discarding Structural 13 permits: a cause on a channel whose topic
      * no longer exists leaves the frontier at the identity report, and a cause on a live
      * channel is kept whatever the report says about others — there is no retention input
      * left to prune by.
@@ -534,8 +534,8 @@ class ProcessEngineTest {
      * A restored frontier naming the reserved zero topic id is untrustworthy state: it can
      * only have entered through a forged causes header absorbed before wire-format
      * constraint 5 refused it at receipt, and no substrate query can ever answer for it,
-     * so restoring it would re-express and re-persist the ghost on every send forever
-     * (D88). Stored state that cannot be trusted is a reason to stop.
+     * so restoring it would re-express and re-persist the ghost on every send forever.
+     * Stored state that cannot be trusted is a reason to stop.
      */
     @Test
     void restoredFrontierNamingTheZeroTopicIdFailsClosed() {
@@ -584,7 +584,7 @@ class ProcessEngineTest {
      * channel holding nothing — never fed, or already drained by the delivery just recorded —
      * has no head, and without the guard the equality probe dereferences a null head (an
      * undiagnosed NullPointerException) instead of the {@code IllegalStateException} naming
-     * the hold-back-buffer head contract (the buffer and its head rule: D5). The
+     * the hold-back-buffer head contract (the buffer and its head rule). The
      * double-delivery of one position is the classic host regression the second leg refuses.
      */
     @Test
@@ -615,8 +615,8 @@ class ProcessEngineTest {
      * the buffer non-empty, a non-head position falls through to the {@code removeIf}
      * mid-buffer removal — delivery recorded for a message that never passed the head rule,
      * the frontier advanced past its unblocked predecessors, per-channel order (SPEC Safety 3)
-     * broken with no exception anywhere. D67 recorded the adjacent equivalent-mutant shape at
-     * the old L482; this pins the non-equivalent one: the guard must refuse and leave the
+     * broken with no exception anywhere. An adjacent mutant is equivalent;
+     * this pins the non-equivalent one: the guard must refuse and leave the
      * buffered holds and the frontier exactly as they were.
      */
     @Test
@@ -648,7 +648,7 @@ class ProcessEngineTest {
      * both police the budget as the frontier grows, so a frontier can stand beyond the budget
      * only by being restored from state committed under a larger one. Without the send
      * check that restored frontier is encoded and handed back oversized, riding toward the
-     * broker's record-size wall with no parsley diagnosis — exactly what D52's third
+     * broker's record-size wall with no parsley diagnosis — exactly what the third
      * enforcement point exists to stop.
      */
     @Test
@@ -676,7 +676,7 @@ class ProcessEngineTest {
                 constricted::causesHeaderForSend,
                 "expressing a frontier beyond the budget must fail closed, not hand back an oversized header");
         assertEquals(FailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason(),
-                "the stop carries the budget diagnosis (D52)");
+                "the stop carries the budget diagnosis");
         assertTrue(e.getMessage().contains("expressing the causal frontier"),
                 "the diagnosis names the send site, not the receipt or merge gates, got: " + e.getMessage());
     }
@@ -694,7 +694,7 @@ class ProcessEngineTest {
      * budget: the
      * growth gate cannot fire (nothing merges, and even a merge would leave the frontier's
      * size unchanged and within budget), and only the per-message gate, which judges raw
-     * length before any decode, can produce the budget diagnosis (D52's receipt enforcement
+     * length before any decode, can produce the budget diagnosis (the receipt enforcement
      * point). Deleting that gate alone turns this refusal into UNDECODABLE_METADATA and this
      * test red while the fresh-channel test stays green.
      */
@@ -717,7 +717,7 @@ class ProcessEngineTest {
                 () -> engine.onReceive(message),
                 "a header beyond the budget must be refused on raw length before any decode");
         assertEquals(FailClosedException.Reason.METADATA_BUDGET_EXCEEDED, e.reason(),
-                "an oversized header's diagnosis is the budget, not undecodability (D52)");
+                "an oversized header's diagnosis is the budget, not undecodability");
         assertTrue(e.getMessage().contains("carries 101 bytes of causal metadata"),
                 "the diagnosis states the per-message gate's own measurement, got: " + e.getMessage());
         assertEquals(1, engine.heldCountTotal(), "only the staging message may be held");
@@ -728,7 +728,7 @@ class ProcessEngineTest {
     /**
      * Only the head of each channel's hold-back buffer keeps its decoded form once flushed:
      * the delivery decision reads the head and nothing else, so everything behind it lives
-     * in the store until it reaches the head (D102). A restart keeps nothing decoded until
+     * in the store until it reaches the head. A restart keeps nothing decoded until
      * a head is first offered to the decision.
      */
     @Test
@@ -771,7 +771,7 @@ class ProcessEngineTest {
     /**
      * A hold reloaded from the store — after a flush and a restart — reaches logic with the
      * key, value, headers and causes it arrived with, and its causes still enter the
-     * delivered causal past, which a later-joining channel is clamped above (D31, D102).
+     * delivered causal past, which a later-joining channel is clamped above.
      */
     @Test
     void aHoldReloadedFromTheStoreReachesLogicWithItsCausesIntact() {
@@ -806,7 +806,7 @@ class ProcessEngineTest {
     /**
      * A hold delivered in the step that received it is never written to the store: it left
      * its buffer before the flush, and the flush must skip it rather than resurrect it as a
-     * held message a restart would deliver again (D102).
+     * held message a restart would deliver again.
      */
     @Test
     void aHoldDeliveredBeforeItsFirstFlushIsNeverWrittenToTheStore() {
@@ -825,7 +825,7 @@ class ProcessEngineTest {
     /**
      * A hold whose store entry has vanished refuses rather than delivering an empty message
      * or skipping it: the buffer and the store contradict each other, which is ordering
-     * state that cannot be trusted (D102).
+     * state that cannot be trusted.
      */
     @Test
     void aHeldMessageMissingFromTheStoreRefusesRatherThanDeliveringNothing() {
@@ -848,7 +848,7 @@ class ProcessEngineTest {
      * The encoded frontier is computed once per change and handed out as a copy: two
      * sends in one step share the encoding, a send's bytes are the caller's to
      * alter, and every frontier mutation site — merge on receipt, merge on delivery, prune
-     * on an identity report — produces a fresh encoding (D102).
+     * on an identity report — produces a fresh encoding.
      */
     @Test
     void theSendHeaderIsReusedUntilTheFrontierChangesAndHandedOutAsACopy() throws Exception {
@@ -885,7 +885,7 @@ class ProcessEngineTest {
 
     /**
      * Flushing after every receipt stays cheap while the buffer deepens: a flush writes the
-     * holds taken in since the previous flush and never scans the buffer (D102). This is
+     * holds taken in since the previous flush and never scans the buffer. This is
      * the suite's one wall-clock bound, chosen with a wide margin: 50,000 receipts each
      * followed by a flush complete in well under a second here, where a flush that scanned
      * every hold would spend on the order of twenty seconds in the scan alone.
@@ -914,7 +914,7 @@ class ProcessEngineTest {
      * feed-order breach on both sides of the session floor: above the floor a check weakened
      * to strict-less-than would fall through to the covered-position branch and misname the
      * condition (SPEC Operational 6); below the floor it would drop the second feed silently
-     * as a sanctioned replay (D67 gap 3).
+     * as a sanctioned replay.
      */
     @Test
     void feedingTheSamePositionTwiceInOneExecutionFailsClosedAsOutOfOrderOnBothSidesOfTheSessionFloor() {
@@ -947,7 +947,7 @@ class ProcessEngineTest {
      * A delivered-past entry pruned with its dead channel must not resurface as a join clamp.
      * Were it kept, a channel of that identity joining the received set would have its
      * fed-up-to advanced to the stale past, leaving a coverage record for a channel this
-     * process never read, and the bootstrap would resume the channel from it (D115).
+     * process never read, and the bootstrap would resume the channel from it.
      * Coverage is the fed-up-to record alone, and a joined-never-read channel must leave
      * none.
      */

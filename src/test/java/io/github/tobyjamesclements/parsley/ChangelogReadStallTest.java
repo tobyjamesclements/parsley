@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * snapshot end, or loudly.
  *
  * <p>The read loop drains the changelog up to an end-offset snapshot taken at the log's
- * true (read-uncommitted) end. Three behaviours carry the design (D79): no progress for
+ * true (read-uncommitted) end. Three behaviours carry the design: no progress for
  * the stall deadline fails the start loudly instead of blocking it indefinitely
  * (Operational 2); a partition that reached its snapshot end is paused, because a live
  * writer's post-snapshot records would otherwise keep resetting the shared stall deadline
@@ -41,7 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * <p>Before the loop ever runs, the reader's own metadata answer is corroborated against
  * the describe the read was keyed on: with auto-create pinned off, a lagging broker
  * answers an empty partition list immediately, and trusting it would flip prior state off
- * one stale view (D88). The decision logic of that comparison — not its production call
+ * one stale view. The decision logic of that comparison — not its production call
  * site — is pinned here too; the same call-site caveat applies to the isolation choice
  * (see the two tests' own notes).
  *
@@ -60,7 +60,7 @@ class ChangelogReadStallTest {
      * Catches the stall deadline being dropped, and its rendering regressing: a partition
      * whose snapshot end never arrives — retention advanced, a broker stopped answering —
      * must fail the read with the no-progress diagnosis within the deadline, not block
-     * the start forever (Operational 2, D79), and the diagnosis must render the
+     * the start forever (Operational 2), and the diagnosis must render the
      * sub-second deadline as "40ms" — {@code toSeconds()} alone printed it as the
      * meaningless "0s".
      */
@@ -85,7 +85,7 @@ class ChangelogReadStallTest {
      * sits below its end, and a live writer keeps appending post-snapshot records to p0.
      * Paused at its end, p0 stops feeding the loop and p1's starvation surfaces as the
      * loud stall; unpaused, every post-snapshot p0 record resets the stall deadline and
-     * the promised loud stall becomes an indefinite hang (D79) — which the poll budget
+     * the promised loud stall becomes an indefinite hang — which the poll budget
      * and the JUnit timeout convert into a visible failure.
      */
     @Test
@@ -118,14 +118,14 @@ class ChangelogReadStallTest {
      * {@code changelogEndOffsetIsolation()} builds must carry READ_UNCOMMITTED, because
      * the end-offset snapshot has to bound the scan at the log's true end — the last
      * stable offset would silently hide committed tail records sitting above a superseded
-     * execution's open transaction (D79; the sibling listOffsets in commitInitialPositions
+     * execution's open transaction (the sibling listOffsets in commitInitialPositions
      * deliberately asks for the committed view). Two residuals this test does not close:
      * READ_UNCOMMITTED is also ListOffsetsOptions' constructor default, so the helper
      * quietly falling back to the no-arg constructor stays green here; and nothing pins
      * the listOffsets call in readOrderingChangelog actually passing the helper's option
-     * — that call site sits behind the real Admin, and closing it needs the admin-level
-     * seam D96's alternatives already weigh (D79/D82 record why an open-transaction
-     * integration staging was rejected).
+     * — that call site sits behind the real Admin, and closing it needs an admin-level
+     * seam, which was weighed and rejected, as was an open-transaction integration
+     * staging.
      */
     @Test
     void theEndOffsetSnapshotAsksForTheUncommittedEnd() {
@@ -133,13 +133,13 @@ class ChangelogReadStallTest {
                 StreamsRuntime.changelogEndOffsetIsolation().isolationLevel(),
                 "the end-offset snapshot must ask for the log's true end; the read-committed"
                         + " last stable offset would truncate the restored view below an open"
-                        + " transaction's committed tail (D79)");
+                        + " transaction's committed tail");
     }
 
     /**
      * Catches the completed-read path breaking: every partition reaching its snapshot end
      * must end the loop and return the view — the latest value per key, and exactly the
-     * partitions that held records (the per-partition prior-state evidence D88 keys on).
+     * partitions that held records (the per-partition prior-state evidence).
      */
     @Test
     void reachingEverySnapshotEndReturnsTheCompactedView() {
@@ -157,7 +157,7 @@ class ChangelogReadStallTest {
                 "a key written once must survive the read");
         assertEquals(Set.of(0, 1), view.partitionsWithRecords(),
                 "exactly the partitions that held records must be reported; an empty partition"
-                        + " reporting records would hide the per-partition loss shape (D88)");
+                        + " reporting records would hide the per-partition loss shape");
     }
 
     /**
@@ -165,8 +165,8 @@ class ChangelogReadStallTest {
      * metadata answers fewer partitions than the changelog was described with is reading
      * a lagging broker's view — with auto-create pinned off, an empty answer arrives
      * immediately, no retry, no timeout — and scanning it vacuously would flip prior
-     * state off one stale view, the exact single-answer trust D84 removed from the
-     * describe path (D88). The refusal must be the retryable transient naming both
+     * state off one stale view, the exact single-answer trust the
+     * describe path refuses. The refusal must be the retryable transient naming both
      * counts, never a terminal diagnosis with a destructive remedy. This pins
      * {@code requireCorroboratedWidth} only: its call in readOrderingChangelog, before
      * assign, cannot be integration-staged (it needs a broker whose metadata lags its
@@ -207,7 +207,7 @@ class ChangelogReadStallTest {
     }
 
     /**
-     * The bootstrap view keeps a held message's presence, never its body (D110): the checks
+     * The bootstrap view keeps a held message's presence, never its body: the checks
      * that read the view ask which channels hold something, and retaining every blob put the
      * whole hold-back backlog on the heap at every start. A tombstone still clears the
      * entry, and other tags keep their values.

@@ -27,9 +27,11 @@ public final class Process {
      */
     public record Input<K, V>(Topic<K, V> topic, Handler<K, V> handler) {
         /**
-         * @throws IllegalArgumentException if {@code topic} or {@code handler} is null;
-         *         a null handler would otherwise surface as an NPE on the stream thread at
-         *         first delivery
+         * Refuses a null topic or handler.
+         *
+         * @throws IllegalArgumentException if {@code topic} or {@code handler} is null. A
+         *         null handler would otherwise surface as a NullPointerException on the
+         *         stream thread at first delivery
          */
         public Input {
             if (topic == null) {
@@ -183,7 +185,7 @@ public final class Process {
 
         /**
          * Declares the topics this process may send on. Repeats of the same topic are
-         * ignored; the same topic through a different {@code Topic} instance is refused,
+         * ignored. The same topic through a different {@code Topic} instance is refused,
          * because two instances for one topic leave it ambiguous which declared serdes the
          * sends on that topic carry.
          *

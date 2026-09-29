@@ -45,7 +45,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * these tests do it by hand — in that order, and also as {@code init} without {@code close},
  * which other lifecycles may produce. Every initialisation is where the one question the
  * host asks the substrate outside delivery is asked: which of the topics the task's state
- * names still exist (D115). The answers are scripted here; the classification behind them
+ * names still exist. The answers are scripted here; the classification behind them
  * is pinned over a real broker in {@code IdentityIntegrationTest}.
  */
 class ProcessorRevivalTest {
@@ -128,7 +128,7 @@ class ProcessorRevivalTest {
     /**
      * Every initialisation asks about the received topics and every topic the restored
      * frontier names — the set the engine's identity report can act on — and the
-     * punctuation never asks: nothing is polled between deliveries (D115).
+     * punctuation never asks: nothing is polled between deliveries.
      */
     @Test
     void everyInitialisationAsksAboutReceivedAndFrontierTopicsAndNothingElseAsks() {
@@ -171,8 +171,8 @@ class ProcessorRevivalTest {
     }
 
     /**
-     * A received topic reported deleted with nothing held from it settles to its end (D21),
-     * which releases an effect waiting on it — but not inside initialisation (D34): the hold
+     * A received topic reported deleted with nothing held from it settles to its end,
+     * which releases an effect waiting on it — but not inside initialisation: the hold
      * goes on the next punctuation, the well-trodden host path.
      */
     @Test
@@ -183,14 +183,14 @@ class ProcessorRevivalTest {
         identity.verdicts = new TopicIdentityVerdicts(Set.of(IN1_ID), Set.of());
         MockProcessorContext<byte[], byte[]> revived = assertDoesNotThrow(() -> revive(true),
                 "a deleted received topic with nothing held from it is not a refusal");
-        assertEquals(List.of(), delivered, "nothing is delivered from within initialisation (D34)");
+        assertEquals(List.of(), delivered, "nothing is delivered from within initialisation");
         punctuate(revived);
         assertEquals(List.of("B"), delivered, "the dead channel settled every position, so the effect goes");
     }
 
     /**
      * A received topic reported deleted while messages from it are held refuses the
-     * revival with CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES (SPEC Safety 9, D46): the held
+     * revival with CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES (SPEC Safety 9): the held
      * messages' place in causal order can no longer be preserved, and nothing is delivered.
      */
     @Test
@@ -210,7 +210,7 @@ class ProcessorRevivalTest {
      * A received topic reported recreated under its name refuses the revival with
      * CHANNEL_IDENTITY_CHANGED (SPEC Assumption 2): records of the new incarnation must
      * never be fed under the old identity. This is the event-driven check that replaces the
-     * facts round's recreation window (D115 supersedes D44/D85).
+     * facts round's recreation window.
      */
     @Test
     void aRecreatedReceivedTopicRefusesRevival() {
@@ -224,7 +224,7 @@ class ProcessorRevivalTest {
     /**
      * An identity source that cannot answer — a broker outage at initialisation — is not
      * evidence about any topic: the revival proceeds on the identities resolved at start,
-     * the hold stays, and the frontier keeps every cause (D44's rule, D115). The question
+     * the hold stays, and the frontier keeps every cause. The question
      * stays pending: the status punctuation asks again until it is answered — backing off,
      * since each attempt can block the stream thread for the describe's timeout, from one
      * status interval to a minute — and the answer is then applied exactly as an
@@ -275,7 +275,7 @@ class ProcessorRevivalTest {
      * A source that answers about some ids and reports the rest unanswered — a by-name
      * describe that timed out mid-corroboration — has the answered verdicts applied and the
      * question kept pending for the rest: a timed-out corroboration is no answer, exactly
-     * as a failed by-id describe is none (D115), so the next punctuation asks again.
+     * as a failed by-id describe is none, so the next punctuation asks again.
      */
     @Test
     void aPartlyUnansweredIdentityCheckAppliesWhatWasAnsweredAndAsksAgainForTheRest() {
@@ -301,7 +301,7 @@ class ProcessorRevivalTest {
      * The start position the bootstrap established covers everything below it (SPEC Host
      * obligation 2, Structural 12): an effect whose cause lies below in1's start position is
      * deliverable without in1 ever being fed, which is what lets a process started at a
-     * channel's end deliver effects of history it skipped (D115).
+     * channel's end deliver effects of history it skipped.
      */
     @Test
     void theStartPositionCoversPositionsBelowIt() {

@@ -27,8 +27,8 @@ public final class Effects {
      * @param key       the message key
      * @param value     the message value
      * @param headers   application headers to attach
-     * @param timestamp the message timestamp, or empty to inherit the delivered message's
-     *                  (D15); time-based retention and downstream event-time windows read
+     * @param timestamp the message timestamp, or empty to inherit the delivered message's.
+     *                  Time-based retention and downstream event-time windows read
      *                  it, so a message sent long after the one it answers may want its
      *                  own, derived deterministically from delivered data
      * @param <K>       key type
@@ -104,9 +104,11 @@ public final class Effects {
      */
     public record Write<K, V>(Store<K, V> store, K key, V value) {
         /**
-         * @throws IllegalArgumentException if {@code store} or {@code key} is null; a null
+         * Refuses a null store or key.
+         *
+         * @throws IllegalArgumentException if {@code store} or {@code key} is null. A null
          *         key cannot address a store entry and would only surface as the state
-         *         backend's own NPE on the stream thread
+         *         backend's own NullPointerException on the stream thread
          */
         public Write {
             if (store == null) {

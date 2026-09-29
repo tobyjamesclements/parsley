@@ -175,7 +175,7 @@ initialises with — coverage is raised only by this execution's own receipts, o
 fed-to-end sentinel by the identity check for a channel whose topic is gone, and a feed
 below either is refused first as `OUT_OF_ORDER_FEED`. This branch is kept so that a
 contradiction between the host's feed and the engine's record can never fall through to a
-silent drop or a delivery; nothing known reaches it (D115).
+silent drop or a delivery; nothing known reaches it.
 
 **Check.** The log around the stop, in full, and the last logged status before it.
 
@@ -193,7 +193,7 @@ each. A partition that appears afterwards has no committed position, and
 `auto.offset.reset=none` stops the task rather than guess one.
 
 **Do.** Restart the application. The start re-resolves every topic and pre-commits the new
-partitions at earliest, whatever the channel declares — a process with prior state always
+partitions at earliest, whatever the topic declares — a process with prior state always
 begins a new partition at earliest. If the widened topic was the process's widest received
 topic, the restart refuses with [`TASK_WIDTH_CHANGED`](#task_width_changed) instead. Either
 way, adding partitions changes which partition a key lands on, so state kept per key under
@@ -289,7 +289,7 @@ or `<store> state read key could not be serialized by the declared serde`.
 
 **What happened.** A declared serde threw, or returned `null` for a key. A `Topic` or
 `Store` instance whose types differ from the declared one — a look-alike built with other
-serdes — is the common cause; the declared channel's serdes produce the bytes whatever
+serdes — is the common cause; the declared topic's serdes produce the bytes whatever
 instance carried the effect.
 
 **Do.** Fix the serde or the type at the effect. Effects are serialized during planning,
@@ -314,7 +314,7 @@ record with `kafka-console-consumer --topic <topic> --partition <p> --offset <po
 **Do.** For a delivered payload whose bytes are wrong: fix whatever produced them, and then
 get the process past the record. Parsley never skips a message, so the way past is a serde
 that decodes the bad bytes into a value the handler recognises and dead-letters — a send
-to a declared channel, or a state write — rather than throwing. For a stored value: the bytes
+to a declared topic, or a state write — rather than throwing. For a stored value: the bytes
 were written by an earlier version of the value serde, so the fix is a serde that reads both
 encodings. Never delete a store's changelog to clear a bad value; under exactly-once
 semantics it committed together with the ordering state and read positions, and removing it
@@ -428,9 +428,10 @@ process's later sends would express nothing about them.
 topic's id. Confirm the topic still exists; if it does not, this is
 [`CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES`](#channel_deleted_with_undelivered_messages).
 
-**Do.** Put the channel back in the declaration, with a handler that does the right thing for
-the remaining messages, and restart. Watch `status()` until every task reports no held
-messages on that topic, then remove the channel and restart again. That path loses nothing.
+**Do.** Put the topic back in the declaration, with a handler that does the right thing for
+the remaining messages, and restart. Read the ordering changelog
+([a message is held](#a-message-is-held-and-not-moving)) until no live held key names a
+channel of that topic, then remove the topic and restart again. That path loses nothing.
 A reset is the alternative, and discards the held messages with the rest of the causal past.
 
 ### The causal past is gone
@@ -530,14 +531,16 @@ be skipped. The refusal is raised at task initialisation, by the identity check 
 the topic gone — its name unknown in three answers half a second apart — while the task
 still holds messages from it.
 
-**Check.** The last logged status before the stop for what was held on that channel, since
-the process can no longer say. Whether the topic is coming back under the same name; if so
+**Check.** The ordering changelog for what was held on that channel, before the reset
+deletes it: each held entry is keyed by channel and position and carries the message as
+received ([State](state.md#ordering-state)). Whether the topic is coming back under the same
+name; if so
 its identity differs and the next start refuses with
 [`CHANNEL_IDENTITY_CHANGED`](#channel_identity_changed).
 
-**Do.** Remove the channel from the declaration, or recreate the topic, then reset. The held
-messages are lost with the causal past; the logged status is the only record of what they
-were.
+**Do.** Remove the topic from the declaration, or recreate it, then reset. The held
+messages are lost with the causal past; what was read from the changelog is the only record
+of what they were.
 
 #### UNKNOWN_ORDERING_STATE_FORMAT
 
@@ -587,7 +590,7 @@ read_committed` and identify the producer from its key, value or other headers.
 
 **Do.** Fix the producer, so no more such records arrive. The refusing record stays on the
 topic, and no restart passes it: Parsley skips nothing, and offers no way to skip one
-message. The only ways past are a [reset](#resetting-a-process) with the affected channel
+message. The only ways past are a [reset](#resetting-a-process) with the affected topic
 declared `startingAt(LATEST)`, which skips everything retained on it, or a reset taken once
 retention has discarded the record. Both are causal boundaries, and both are the operator's
 deliberate act.
@@ -796,15 +799,15 @@ accepting it on purpose.
   committed offsets from `kafka-consumer-groups --describe`, and each received partition's
   log start and end from `kafka-get-offsets`. Together they say which positions the reset
   re-reads or skips, which is the record the application's own reconciliation needs.
-- **Choose each channel's initial position.** `EARLIEST` re-reads everything retained on the
-  channel; deliveries happen again, and the effects they produce are sent again as new
+- **Choose each topic's initial position.** `EARLIEST` re-reads everything retained on the
+  topic; deliveries happen again, and the effects they produce are sent again as new
   messages, which every downstream process receives as new. `LATEST` skips everything
   retained, and nothing between the old position and the end is ever delivered. There is
   no position in between ([what the library does not do](#what-the-library-does-not-do)).
 - **Decide about application state.** Under exactly-once semantics the declared stores
   committed together with the ordering state, so re-reading from `EARLIEST` against kept
   stores applies every delivery a second time. The procedure below deletes them. Keeping a
-  store's changelog while starting `LATEST` on every channel leaves it as of the last
+  store's changelog while starting `LATEST` on every topic leaves it as of the last
   committed step, which is consistent; that is a choice to make deliberately and record,
   not a default.
 
@@ -819,7 +822,7 @@ kafka-topics --bootstrap-server <servers> --delete --topic <prefix>-<process>-in
 rm -rf <state.dir>/<prefix>-<process>        # on every instance
 ```
 
-Then start again. The bootstrap resolves topics, pre-commits each channel's declared initial
+Then start again. The bootstrap resolves topics, pre-commits each topic's declared initial
 position, and creates fresh changelogs. The transactional ids Kafka Streams derives need no
 action; a new producer under the same id fences the old.
 
@@ -843,7 +846,7 @@ topics and resets offsets but leaves local state; use the steps above.
 
 Limits an operator should know before an incident, each the boundary of a runbook above.
 
-- **Start from a chosen position.** A channel starts at `EARLIEST` or `LATEST`, and the
+- **Start from a chosen position.** A topic starts at `EARLIEST` or `LATEST`, and the
   bootstrap refuses committed offsets it did not write. There is no way to resume a process
   at a position an operator picks, and so no way past one bad record short of skipping
   everything retained.

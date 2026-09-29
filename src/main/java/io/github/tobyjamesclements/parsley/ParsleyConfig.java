@@ -42,7 +42,7 @@ public final class ParsleyConfig {
             // consumer overrides on top without re-pinning (unlike its producer path), so a
             // main.consumer./restore.consumer./global.consumer. spelling would point a
             // consumer at a different cluster than the one start() resolved identities
-            // against (D87).
+            // against.
             "bootstrap.servers");
 
     private final String bootstrapServers;

@@ -22,7 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
- * Establishes the identity classification a task's initialisation acts on (D115), over
+ * Establishes the identity classification a task's initialisation acts on, over
  * scripted admin answers: which answers confirm a topic deleted or recreated, and which —
  * a denial, an unavailable answer, a name the source never learned, a stale by-id answer,
  * or an answer that flips mid-corroboration — keep its causes expressed.
@@ -115,7 +115,7 @@ class AdminTopicIdentitySourceTest {
     }
 
     /**
-     * An id whose name the source never learned is never confirmed dead (D75): a Describe
+     * An id whose name the source never learned is never confirmed dead: a Describe
      * denial masks a live topic as unknown by id, and with no name there is no answer that
      * could tell the two apart. Its causes stay expressed, at the cost of expression size.
      */
@@ -131,7 +131,7 @@ class AdminTopicIdentitySourceTest {
     /**
      * A denied or a stale by-id answer keeps the id alive: the name resolving to the very id
      * asked about proves the by-id answer stale, and absence of evidence never confirms
-     * death (D44). Both are answers, so nothing is left to ask again.
+     * death. Both are answers, so nothing is left to ask again.
      */
     @Test
     void deniedAndSameIdAnswersKeepTheIdAliveAndCountAsAnswered() throws Exception {
@@ -148,7 +148,7 @@ class AdminTopicIdentitySourceTest {
     /**
      * A by-name describe that times out or fails is no answer: the id is neither convicted
      * nor acquitted but reported unanswered, so the asker keeps its question pending and
-     * asks again — exactly as it does when the by-id describe fails (D115). Reading a
+     * asks again — exactly as it does when the by-id describe fails. Reading a
      * timeout as "alive" would let one slow corroboration silence a recreation for the
      * life of the task.
      */

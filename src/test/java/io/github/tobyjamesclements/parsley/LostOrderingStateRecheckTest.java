@@ -21,15 +21,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * <p>{@code refuseLostOrderingState} sees committed read positions the bootstrap did not
  * stamp over a changelog partition that held no records — the shape of committed state
- * lost (D76, per partition since D88). But the view it holds was read before the offsets
+ * lost, per partition. But the view it holds was read before the offsets
  * were listed, and a pause of arbitrary duration lands between any two statements (SPEC
  * Fault model 2): a concurrent lifetime of this process can have created records — and
  * committed — in that window. So the refusal looks again immediately before firing, and
- * what the second look finds decides everything (D84): records now present is a healthy
+ * what the second look finds decides everything: records now present is a healthy
  * concurrent sibling and must refuse as a retryable transient, because the state-loss
  * diagnosis's printed remedy — delete the group's offsets — would destroy what that
  * sibling just wrote. The recheck seam scripts the second look, following the
- * {@code readToEnds} / {@code ScriptedFacts} precedent (D92).
+ * {@code readToEnds} / {@code ScriptedFacts} precedent.
  */
 @Timeout(value = 10)
 class LostOrderingStateRecheckTest {
@@ -48,7 +48,7 @@ class LostOrderingStateRecheckTest {
      * records that appeared between the first read and the offset listing are a healthy
      * concurrent lifetime, and the refusal must be the retryable
      * ordering-records-appeared transient — misdiagnosing it as ORDERING_STATE_LOST hands
-     * the operator a remedy that deletes the offsets that sibling just committed (D84).
+     * the operator a remedy that deletes the offsets that sibling just committed.
      */
     @Test
     void recordsAppearingOnTheRecheckRefuseAsRetryableNotStateLoss() {
@@ -73,7 +73,7 @@ class LostOrderingStateRecheckTest {
      * Catches the state-loss arm being weakened: a recheck that still shows the partition
      * recordless corroborates the loss, and the refusal must be terminal
      * ORDERING_STATE_LOST naming the emptied-partition shape — the operator has to know
-     * the topic survived while its records did not (D84, per partition D88).
+     * the topic survived while its records did not (per partition).
      */
     @Test
     void aRecheckStillShowingNoRecordsRefusesAsStateLossNamingTheEmptiedShape() {
@@ -96,8 +96,8 @@ class LostOrderingStateRecheckTest {
     /**
      * Catches the two loss shapes being conflated: a recheck finding no changelog topic at
      * all must refuse as ORDERING_STATE_LOST naming the does-not-exist shape — restoring a
-     * deleted topic is a different operator action from restoring purged records (D84
-     * requires the message to name the shape it found).
+     * deleted topic is a different operator action from restoring purged records (the
+     * message must name the shape it found).
      */
     @Test
     void anAbsentChangelogOnTheRecheckRefusesAsStateLossNamingTheMissingTopic() {
@@ -117,7 +117,7 @@ class LostOrderingStateRecheckTest {
      * Catches the provenance naming regressing: an empty-metadata offset was committed
      * outside parsley — Kafka Streams stamps every commit, the bootstrap stamps its own —
      * and the diagnosis must attribute it to external tooling so the operator looks at
-     * the right actor (D76's diagnosis, shape-named per D84).
+     * the right actor (the diagnosis names the shape).
      */
     @Test
     void anUnstampedOffsetIsAttributedToExternalTooling() {
@@ -136,7 +136,7 @@ class LostOrderingStateRecheckTest {
      * first-start bootstrap that crashed after committing initial positions leaves
      * offsets with no records anywhere, but every one carries the bootstrap's own stamp —
      * recovery from that crash must start, not refuse, and must not even pay the recheck
-     * (D76/D84; the end-to-end counterpart is
+     * (the end-to-end counterpart is
      * {@code BootstrapIntegrationTest#bootstrapCommittedOffsetsWithoutAChangelogStillStart}).
      */
     @Test
@@ -160,7 +160,7 @@ class LostOrderingStateRecheckTest {
      * Catches the records-present skip being dropped: a partition whose records were in
      * the first read's view is healthy prior state, and the scan must pass it without
      * invoking the recheck — re-reading the changelog once per healthy partition would
-     * tax every restart with describes it does not need (D88 keys the loss per partition).
+     * tax every restart with describes it does not need (the loss is keyed per partition).
      */
     @Test
     void aPartitionWhoseRecordsWereInTheFirstViewPassesWithoutRecheck() {

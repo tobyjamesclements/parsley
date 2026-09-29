@@ -34,7 +34,7 @@ the broker does not know and whose name it has learned — a deletion or recreat
 confirmed only by three consistent answers half a second apart; an id whose name was never
 learned is left alive. Nothing is asked of the broker between deliveries, and no consumer
 beyond the Streams application's own is assigned to the partitions a held head waits on:
-receipt of the named record is what settles a cause (D115). The ACLs those need are
+receipt of the named record is what settles a cause. The ACLs those need are
 Describe on every declared topic and on the group, Read on the group and on the received
 topics, and whatever Streams itself needs to create and write its changelogs. A Describe
 denial is treated as denial, never as a topic's deletion.

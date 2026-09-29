@@ -11,7 +11,7 @@ import java.util.UUID;
  * The wire representation of a causal frontier.
  *
  * <p>The format is frozen: entries grouped by topic, structural fields as minimal varints,
- * positions fixed-width (wire-format.md, D98). Any change to the grammar requires a new
+ * positions fixed-width (wire-format.md). Any change to the grammar requires a new
  * {@link #FORMAT_VERSION} and a documented migration, because a frontier written by one
  * process is read by another.
  *
@@ -50,8 +50,8 @@ final class CausesCodec {
     /**
      * The exact encoded width of a frontier.
      *
-     * <p>Size is a function of the frontier's shape — distinct topics, partitions, and the
-     * varint widths of the structural fields — not of its entry count alone. The engine
+     * <p>Size is a function of the frontier's shape, not of its entry count alone: distinct
+     * topics, partitions, and the varint widths of the structural fields. The engine
      * maintains the same figure incrementally for its budget checks
      * ({@link ProcessEngine#frontierBytes()}), pinned against this arithmetic through
      * {@link #encode(Causes)}.
@@ -66,7 +66,7 @@ final class CausesCodec {
     /**
      * The encoded size of a frontier given as its sorted map, without building a
      * {@link Causes}: the engine keeps its frontier as this map and asks for the width on
-     * every merge (D98), so the value object's copy would be paid per record for nothing.
+     * every merge, so the value object's copy would be paid per record for nothing.
      */
     static int encodedSize(SortedMap<Channel, Long> byChannel) {
         int size = 1 + unsignedVarintSize(topicCount(byChannel));
@@ -93,8 +93,8 @@ final class CausesCodec {
     /**
      * Encodes a frontier.
      *
-     * <p>Channels are written in {@link Channel} order — topics ascending unsigned, each
-     * once, partitions ascending within their group — so the same frontier always yields
+     * <p>Channels are written in {@link Channel} order, topics ascending unsigned, each
+     * once, partitions ascending within their group, so the same frontier always yields
      * the same bytes.
      *
      * @param causes the frontier to encode
@@ -105,8 +105,8 @@ final class CausesCodec {
     }
 
     /**
-     * Encodes a frontier held as a map in {@link Channel} order — the engine's own
-     * frontier, without copying it into a {@link Causes} first (D102). The map must be
+     * Encodes a frontier held as a map in {@link Channel} order, which is the engine's own
+     * frontier, without copying it into a {@link Causes} first. The map must be
      * sorted by the channel's natural order, which is the order every group and pair is
      * written in.
      *
@@ -219,7 +219,7 @@ final class CausesCodec {
             // The zero topic ID is reserved by the substrate and never assigned to a
             // channel, so no genuine cause can carry it — and once merged it would sit in
             // the frontier as an id no broker query can ever answer for. Refused here so it
-            // can never enter a frontier at all (wire-format.md constraint 5, D83).
+            // can never enter a frontier at all (wire-format.md constraint 5).
             if (Channel.isZeroTopicId(topicId)) {
                 throw new UndecodableMetadataException("zero topic id at group " + group
                         + "; the substrate never assigns it to a channel");
@@ -248,7 +248,7 @@ final class CausesCodec {
                 // No log reaches 2^63 - 1 records, so no genuine cause can name it, and the
                 // engine keeps that value as its in-band fed-to-end marker: absorbed from a
                 // header it would masquerade as a channel's deletion once it reached fedUpTo
-                // (wire-format.md constraint 7, D105).
+                // (wire-format.md constraint 7).
                 if (position == Long.MAX_VALUE) {
                     throw new UndecodableMetadataException("position " + position + " on " + channel
                             + " is beyond any position a channel can assign");
@@ -268,10 +268,10 @@ final class CausesCodec {
      *
      * <p>Strictness matches the rest of the codec: a padded spelling would let two byte
      * strings mean one frontier, so a terminal zero byte after the first is refused. So is
-     * a fifth byte carrying anything beyond the three bits a non-negative int has left —
+     * a fifth byte carrying anything beyond the three bits a non-negative int has left.
      * Java's shift discards bits past 31, so without that refusal {@code 85 80 80 80 10}
      * would silently decode to the same value as {@code 05}, aliasing the padding check
-     * cannot see — and the same guard refuses a sixth byte outright.
+     * cannot see. The same guard refuses a sixth byte outright.
      */
     private static int readUnsignedVarint(ByteBuffer buffer, String field) throws UndecodableMetadataException {
         int value = 0;

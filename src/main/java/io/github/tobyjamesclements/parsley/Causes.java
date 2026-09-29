@@ -41,7 +41,7 @@ final class Causes {
      * @param byChannel per channel, the highest causal position
      * @return the frontier, canonically ordered
      * @throws IllegalArgumentException if any position is null, negative, or the reserved
-     *         maximum {@code Long.MAX_VALUE}, which no channel can assign (D105)
+     *         maximum {@code Long.MAX_VALUE}, which no channel can assign
      */
     public static Causes of(Map<Channel, Long> byChannel) {
         if (byChannel.isEmpty()) {

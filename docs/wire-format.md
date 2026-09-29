@@ -64,14 +64,12 @@ writer, and its breach shows as a hold in the receiver's status, not as a refusa
 5. `topicId` is not all-zero bytes. The substrate reserves the zero topic ID and never
    assigns it to a channel, so no genuine cause can name it; a group carrying it is
    undecodable. (A reader-side tightening, not a grammar change: no conforming writer has
-   ever produced such a group, because writers only express channels the substrate named —
-   D83 records the reasoning.)
+   ever produced such a group, because writers only express channels the substrate named.)
 6. `position` is non-negative.
 7. `position` is below 2⁶³ − 1. No log reaches that many records, so no genuine cause can
    name it, and an implementation may keep it as an in-band marker of its own — this one
    records a deleted channel with it. (A reader-side tightening in the manner of
-   constraint 5: no conforming writer has ever produced such a pair; D105 records the
-   reasoning.)
+   constraint 5: no conforming writer has ever produced such a pair.)
 8. `position` is the offset at which a committed record was stored on that channel: a
    record the substrate served to a `read_committed` reader, whether or not retention
    still holds it — never a control record, a record of an aborted transaction, or an
@@ -80,7 +78,7 @@ writer, and its breach shows as a hold in the receiver's status, not as a refusa
    and positions it learned from received metadata. A writer naming any other position — the
    log-end offset is the natural naive stamp — is out of contract: no reader is obliged
    to settle it, and a receiver holds the message until a later
-   record on that channel settles the position (D115). Unlike constraints 1–7 this one is
+   record on that channel settles the position. Unlike constraints 1–7 this one is
    not decidable from the bytes, so no reader refuses it; it is the contract a writer
    signs.
 
