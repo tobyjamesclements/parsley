@@ -35,7 +35,7 @@ public final class Oracle {
         final Set<Instance> deltaFedOwed = new HashSet<>();
         final Map<Channel, Long> deltaExpressible = new HashMap<>();
 
-        /*
+        /**
          * Mirrors the engine's persisted delivered-past clamp: delivered positions merged
          * with each delivered message's *expressed* frontier — coarser than trueCauses, and
          * deliberately so, because the engine's sanctioned drops are judged by expression.

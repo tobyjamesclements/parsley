@@ -767,7 +767,7 @@ class TargetedScenarioTest {
         p.drain();
         p.feedOne(c1);
         p.commitStep();
-        /*
+        /**
          * A restart hands the engine c1's committed read position, past the dead run: the
          * coverage an over-expressing engine would stamp, and an honest one never does.
          */

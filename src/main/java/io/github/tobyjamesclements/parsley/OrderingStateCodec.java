@@ -313,7 +313,7 @@ final class OrderingStateCodec {
                 int valueLength = buffer.getInt();
                 byte[] headerValue = null;
                 if (valueLength != -1) {
-                    /*
+                    /**
                      * -1 is the one null sentinel encodeHeld writes; any other negative is
                      * corruption, not an alternate spelling of null.
                      */
@@ -359,7 +359,7 @@ final class OrderingStateCodec {
         return new FailClosedException(
                 FailClosedException.Reason.UNKNOWN_ORDERING_STATE_FORMAT, "corrupt held blob: " + detail);
     }
-    /*
+    /**
      * Readers over an image of the state, as the latest value per key. These are the
      * questions the start-time checks ask of state a previous run left behind, and they
      * need no engine: only the key layout above.

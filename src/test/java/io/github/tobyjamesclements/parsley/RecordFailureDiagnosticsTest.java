@@ -231,7 +231,7 @@ class RecordFailureDiagnosticsTest {
         Throwable refusal = streamsWrapped(new FailClosedException(
                 FailClosedException.Reason.TASK_WIDTH_CHANGED, "width changed"));
 
-        /*
+        /**
          * Captured and discarded: this test pins the merge, not the log lines, and the
          * scripted failures should not shout through the suite's output.
          */

@@ -49,7 +49,7 @@ public final class Process {
     private final Map<String, Topic<?, ?>> outputsByTopic;
     private final Map<String, Store<?, ?>> storesByName;
 
-    /*
+    /**
      * Declaration order is part of the contract: the topology's sources, state stores and
      * composed changelog names are derived by iterating these, and Map.copyOf randomises
      * iteration order per JVM, which would make the generated topology nondeterministic
@@ -217,7 +217,7 @@ public final class Process {
                             + " send topic once");
                 }
             }
-            /*
+            /**
              * Append-only commit: accepted was seeded from the field and putIfAbsent never
              * replaced an entry, so earlier declarations keep their order and identity.
              */

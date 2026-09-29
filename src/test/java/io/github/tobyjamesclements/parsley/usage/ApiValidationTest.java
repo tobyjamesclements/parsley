@@ -189,7 +189,7 @@ class ApiValidationTest {
         assertThrows(IllegalArgumentException.class,
                 () -> builder.streamsProperty("default.timestamp.extractor", "LogAndSkipOnInvalidTimestamp"));
 
-        /*
+        /**
          * The membership protocol selects the fencing semantics the bootstrap's
          * initial-position commit is argued on; swapping it is guarantee-bearing.
          */
@@ -200,7 +200,7 @@ class ApiValidationTest {
         assertThrows(IllegalArgumentException.class,
                 () -> builder.streamsProperty("group.remote.assignor", "uniform"));
 
-        /*
+        /**
          * Streams pins the plain bootstrap.servers from its own config but applies
          * prefixed consumer overrides on top without re-pinning, so a prefixed spelling
          * would point a consumer at a different cluster than the one start() resolved

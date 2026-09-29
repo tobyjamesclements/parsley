@@ -69,7 +69,7 @@ final class ClusterTestSupport {
             cluster.startup();
             cluster.waitForReadyBrokers();
         } catch (Exception e) {
-            /*
+            /**
              * The caller's field is never assigned on failure, so its @AfterAll cannot
              * release a half-started broker; close it here or its non-daemon threads and
              * bound ports outlive this suite into the rest of the surefire fork.

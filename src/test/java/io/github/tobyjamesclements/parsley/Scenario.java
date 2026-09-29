@@ -195,7 +195,7 @@ public final class Scenario {
                 if (channel.dead) {
                     continue;
                 }
-                /*
+                /**
                  * Judged from world truth the host cannot launder: every committed record
                  * between where this process first read the channel and where it has
                  * committed reading to must have been fed to it. A host that reset its read
@@ -223,7 +223,7 @@ public final class Scenario {
             }
         }
 
-        /*
+        /**
          * SPEC Assumption 2 is judged at each commit (SimProcess.commitStep), and quiesce
          * commits a step for every running process before this point, so nothing is left
          * to judge here.
@@ -265,7 +265,7 @@ public final class Scenario {
 
     private static void truncateEvent(SimWorld world, List<SimProcess> processes, List<SimChannel> channels,
                                       Random rng, List<String> journal, RefusalLedger ledger) {
-        /*
+        /**
          * Biased toward channels some running process holds messages from, as killEvent is:
          * retention crossing a held message is the shape the engine once refused and now delivers
          * from the hold-back buffer in order, and an unbiased pick reached it in a handful
@@ -289,7 +289,7 @@ public final class Scenario {
 
             target = reader.committedNextRead(channel) + (shape == 0 ? 0 : 1);
         } else if (shape == 4 && !readers.isEmpty()) {
-            /*
+            /**
              * Exactly one past a reader's oldest held message: the smallest retention that
              * discards the copy of a message a process still holds.
              */
