@@ -125,9 +125,9 @@ has both.
 
 The Javadoc of `main` is the project's published site, at
 https://tobyjamesclements.github.io/parsley/. `.github/workflows/javadoc.yml` rebuilds and
-redeploys it on every push to `main`, and fails on a broken `{@link}` or `@see`, which
-`./mvnw verify` does not check; run `./mvnw javadoc:javadoc` before pushing a change to a
-doc comment. There is no other site: the Markdown under `docs/` is read in the repository.
+redeploys it on every push to `main`. A broken `{@link}` or `@see` fails the build, which
+`./mvnw verify` does not check, so CI runs `./mvnw javadoc:javadoc` as its own job on every
+push. There is no other site: the Markdown under `docs/` is read in the repository.
 
 ## Conventions if you modify the code
 
