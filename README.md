@@ -25,6 +25,7 @@ agent, working on the code. The `docs/` directory has the rest:
 
 | Page | Subject |
 |---|---|
+| [Getting started](docs/getting-started.md) | From an empty project to a running process, and a handler test with no broker |
 | [Model](docs/model.md) | How the specification's terms map onto Kafka, and what the metadata expresses |
 | [Delivery](docs/delivery.md) | The settled frontier and the delivery decision |
 | [State](docs/state.md) | Ordering state, persistence and recovery |
