@@ -123,6 +123,12 @@ runbook per refusal reason. A reason added to `FailClosedException.Reason` needs
 there and a trigger row in `docs/failing-closed.md`; `RunbookCoverageTest` fails until it
 has both.
 
+The Javadoc of `main` is the project's published site, at
+https://tobyjamesclements.github.io/parsley/. `.github/workflows/javadoc.yml` rebuilds and
+redeploys it on every push to `main`, and fails on a broken `{@link}` or `@see`, which
+`./mvnw verify` does not check; run `./mvnw javadoc:javadoc` before pushing a change to a
+doc comment. There is no other site: the Markdown under `docs/` is read in the repository.
+
 ## Conventions if you modify the code
 
 - Keep the protocol pure, and classify every main source you add. `ProtocolPurityTest` will
