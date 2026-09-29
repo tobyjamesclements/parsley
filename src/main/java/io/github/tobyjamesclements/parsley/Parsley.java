@@ -2,7 +2,6 @@ package io.github.tobyjamesclements.parsley;
 
 import java.util.List;
 
-
 /**
  * A running set of processes, each executing under causal delivery order.
  *

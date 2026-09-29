@@ -6,7 +6,8 @@ The suite runs under `./mvnw verify` in roughly four minutes and requires no Doc
 
 **Pure core.** Codec round-trip tests, decision-unit table tests, and engine unit tests. A
 purity scan — `PurityScan`, the one spelling of the fence — fails on any reference to a
-clock, randomness, the network, or the substrate in the `core` sources.
+clock, randomness, the network, or the substrate in the `core` sources, and on any reference
+to a type of the root package, whose adapter depends on the core and not the reverse.
 
 **Session companion.** Unit tests over `CausalPast` in the same style: merge and coverage
 semantics, and a malformation battery drawn from the shared vector catalogue the codec's

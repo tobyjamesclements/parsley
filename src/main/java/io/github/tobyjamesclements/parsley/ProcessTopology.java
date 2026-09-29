@@ -10,7 +10,6 @@ import org.apache.kafka.streams.state.Stores;
 import java.time.Duration;
 import java.util.Map;
 
-
 /**
  * Builds the Kafka Streams topology for one process.
  *

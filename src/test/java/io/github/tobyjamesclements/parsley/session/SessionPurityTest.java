@@ -5,7 +5,6 @@ import org.junit.jupiter.api.Test;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
-import java.util.regex.Pattern;
 
 import io.github.tobyjamesclements.parsley.core.PurityScan;
 
@@ -19,21 +18,17 @@ import io.github.tobyjamesclements.parsley.core.PurityScan;
  * adapter, because the companion must not couple to the host, and the declaration surface,
  * because the charter is the core's public surface alone — a session participant declares
  * no process, so reaching for the declaration surface is exactly the accretion D99 fences
- * against. The root package is spelled as a pattern because its name is the prefix of every
- * subpackage, the core's included.
+ * against.
  */
 class SessionPurityTest {
-
-    /** A fully qualified reference to any type declared directly in the root package. */
-    private static final Pattern ROOT_PACKAGE_TYPE =
-            Pattern.compile("io\\.github\\.tobyjamesclements\\.parsley\\.[A-Z]");
 
     /** Session sources touch neither clock nor network nor substrate, nor the root package. */
     @Test
     void sessionSourcesTouchOnlyTheCoreSurface() throws IOException {
-        Path sources = Path.of("src", "main", "java", "io", "github", "tobyjamesclements", "parsley", "session");
-        String rationale = "the companion must stay usable at any edge, over the core's public surface alone";
-        PurityScan.assertSourcesAvoid(sources, PurityScan.HOST_FACILITIES, rationale);
-        PurityScan.assertSourcesMatchNone(sources, List.of(ROOT_PACKAGE_TYPE), rationale);
+        PurityScan.assertSourcesAvoid(
+                Path.of("src", "main", "java", "io", "github", "tobyjamesclements", "parsley", "session"),
+                PurityScan.HOST_FACILITIES,
+                List.of(PurityScan.ROOT_PACKAGE_TYPE),
+                "the companion must stay usable at any edge, over the core's public surface alone");
     }
 }

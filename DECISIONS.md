@@ -5254,8 +5254,8 @@ allowed to be.
 The tree had four packages. `api` was the declaration surface, `kafka` the Kafka Streams
 adapter, and they imported each other: `api.Parsley` delegated every method to
 `kafka.ParsleyRuntime`, which was public for that one caller and for nothing else, and the
-adapter imported six `api` types and spelled `api.ProcessStatus` fully qualified seven times
-inside `status()`. The boundary suggested a host-neutral declaration surface over a
+adapter imported nine `api` types over fifteen import lines in four classes and spelled
+`api.ProcessStatus` fully qualified seven times inside `status()`. The boundary suggested a host-neutral declaration surface over a
 replaceable adapter, and nothing in `api` was host-neutral in substance: `Channel` and
 `Store` take Kafka `Serde`s, `ParsleyConfig` is a Kafka Streams configuration deny-list,
 `ProcessStatus.State` projects `KafkaStreams.State`, and `Delivery` carries partition, offset,
@@ -5282,11 +5282,21 @@ whether `Deliverability` stays public, and is not taken here.
 `SessionPurityTest` fenced the companion against the adapter and the declaration surface by
 package name, two fixed strings the scan looked for. The root package's name is the prefix of
 every subpackage, the core's included, so no fixed string can name "a type of the root
-package" without also naming the core the companion is allowed to use. `PurityScan` gains
-`assertSourcesMatchNone`, the same recursive scan against regular expressions, and the
-companion's fence is the pattern `parsley\.[A-Z]`: a fully qualified reference to any type
-declared directly in the root package, imports, code and prose alike. The host-facility
-fence is unchanged and still the shared `HOST_FACILITIES` list.
+package" without also naming the core the companion is allowed to use. `PurityScan`'s scan
+now takes patterns beside its strings, in the one pass over each file, and carries the one
+pattern entry, `ROOT_PACKAGE_TYPE`: `parsley\.(\*|[A-Z])`, a fully qualified reference to
+any type declared directly in the root package, or an on-demand import of the whole package,
+which would otherwise admit every root type by its simple name — review of the first cut
+found that hole, since the old string fence did catch `import …parsley.api.*`. Imports, code
+and prose alike trip it. The host-facility fence is unchanged and still the shared
+`HOST_FACILITIES` list.
+
+`CorePurityTest` takes the same entry. The core had one reference into the former `api`
+package, an `@see` on `ParsleyFailClosedException` pointing at `ProcessStatus#refusalReason()`,
+which the move would have carried into the root package as the shape the new fence forbids:
+the dependency runs from the root package to the core, and the core naming a root type, even
+in Javadoc, is that dependency running backwards. The `@see` is now prose naming the accessor
+without its package, and the fence keeps it that way.
 
 `AGENTS.md`'s map is one bullet shorter, and its citation for the core's purity fence is
 corrected from Structural 9 (no unsafe public operation) to Structural 7 (the decision is a

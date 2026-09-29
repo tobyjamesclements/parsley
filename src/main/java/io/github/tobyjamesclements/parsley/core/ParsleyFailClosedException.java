@@ -5,10 +5,10 @@ package io.github.tobyjamesclements.parsley.core;
  *
  * <p>Every throw stops delivery rather than weakening the guarantee. A process that fails
  * closed stays down until an operator intervenes, so this is a diagnosis rather than a
- * condition to retry.
+ * condition to retry. A running process reports the reason it stopped through its status
+ * ({@code ProcessStatus.refusalReason()} in the root package).
  *
  * @see #reason()
- * @see io.github.tobyjamesclements.parsley.ProcessStatus#refusalReason()
  */
 public final class ParsleyFailClosedException extends RuntimeException {
 
