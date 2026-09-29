@@ -11,8 +11,8 @@ both delivers A first**, across restarts and for the whole lifetime of a process
 Single Maven module, Java 21, Kafka 4.3.1, one package,
 `io.github.tobyjamesclements.parsley`. `kafka-streams`, `kafka-clients` and `slf4j-api` are
 its only declared dependencies; everything else on the classpath arrives with Kafka. This
-tree is `io.github.tobyjamesclements:parsley:0.3.0-SNAPSHOT`, and the current release is
-0.2.0.
+tree is `io.github.tobyjamesclements:parsley:0.4.0-SNAPSHOT`, and the current release is
+0.3.0.
 
 > **This tree is a from-spec reimplementation.** Its API shares no type with 0.1.0.
 > `Stage`, `CausalStreams`, `Fold`, `Tick` and `Codec` no longer exist, and the wire format

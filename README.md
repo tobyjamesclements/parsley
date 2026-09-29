@@ -10,7 +10,7 @@ of a process. Where the guarantee cannot be upheld a process stops rather than w
 <dependency>
   <groupId>io.github.tobyjamesclements</groupId>
   <artifactId>parsley</artifactId>
-  <version>0.2.0</version>
+  <version>0.3.0</version>
 </dependency>
 ```
 
