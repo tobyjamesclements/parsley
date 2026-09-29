@@ -81,5 +81,6 @@ seed reproduces the run exactly.
 ./mvnw javadoc:javadoc
 ```
 
-Output lands in `target/reports/apidocs`.
+Output lands in `target/reports/apidocs`. The Javadoc of `main` is published at
+https://tobyjamesclements.github.io/parsley/ on every push.
 
