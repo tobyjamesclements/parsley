@@ -68,6 +68,7 @@ final class JepsenExportOracle {
     private final Map<UUID, Long> deadAt = new HashMap<>();
 
     private final Map<Channel, Map<Long, Instance>> instanceByPosition = new HashMap<>();
+    private final Map<JepsenExport.Rec, Causes> metaByRecord = new java.util.IdentityHashMap<>();
     private final Map<String, List<Set<Instance>>> pastByTask = new HashMap<>();
     private final Map<String, Map<Channel, Set<Long>>> mergedReceiptsByTask = new HashMap<>();
     private final Map<String, Integer> computing = new HashMap<>();
@@ -352,6 +353,32 @@ final class JepsenExportOracle {
         }
     }
 
+    /**
+     * The union of spans as disjoint spans in ascending order. Every observation of a task
+     * contributes a span and most nest in the next, so walking the records of each span in
+     * turn walks the same records once per observation, which made the replay quadratic in
+     * a task's observations; walking the union walks them once.
+     */
+    static List<Span> merged(List<Span> spans) {
+        List<Span> sorted = new ArrayList<>(spans);
+        sorted.sort(java.util.Comparator.comparingLong(Span::from).thenComparingLong(Span::to));
+        List<Span> merged = new ArrayList<>();
+        for (Span span : sorted) {
+            if (!merged.isEmpty() && span.from() <= merged.get(merged.size() - 1).to()) {
+                Span last = merged.remove(merged.size() - 1);
+                merged.add(new Span(last.from(), Math.max(last.to(), span.to())));
+            } else {
+                merged.add(span);
+            }
+        }
+        return merged;
+    }
+
+    /** {@link #decode} once per record: the expression bound reads every received record's header at every step. */
+    private Causes decodedMeta(JepsenExport.Rec rec) {
+        return metaByRecord.computeIfAbsent(rec, r -> decode(r.causesHeader()));
+    }
+
     /** Where the execution behind an observation began reading {@code channel}: its own start, else the task's recorded one. */
     private long executionStart(String task, JepsenExport.Reads reads, Channel channel) {
         Long start = reads.execStart().get(channel);
@@ -493,7 +520,7 @@ final class JepsenExportOracle {
                     continue;
                 }
                 Set<Long> done = merged.computeIfAbsent(channel, c -> new HashSet<>());
-                for (Span span : receivedSpansBefore(task, channel, delivered)) {
+                for (Span span : merged(receivedSpansBefore(task, channel, delivered))) {
                     for (JepsenExport.Rec rec : records.subMap(span.from(), span.to()).values()) {
                         if (done.add(rec.offset())) {
                             past.addAll(instanceOf(rec.channel(), rec.offset(), rec.uid()).trueCauses);
@@ -537,10 +564,10 @@ final class JepsenExportOracle {
             if (records == null) {
                 continue;
             }
-            for (Span span : receivedSpansUpTo(task, channel, entry)) {
+            for (Span span : merged(receivedSpansUpTo(task, channel, entry))) {
                 for (JepsenExport.Rec rec : records.subMap(span.from(), span.to()).values()) {
                     bound.merge(channel, rec.offset(), Math::max);
-                    Causes meta = decode(rec.causesHeader());
+                    Causes meta = decodedMeta(rec);
                     if (meta != null) {
                         meta.byChannel().forEach((named, position) -> bound.merge(named, position, Math::max));
                     }
@@ -568,7 +595,7 @@ final class JepsenExportOracle {
             }
             TreeMap<Long, JepsenExport.Rec> range = new TreeMap<>();
             if (observed) {
-                for (Span span : receivedSpansEver(task, channel)) {
+                for (Span span : merged(receivedSpansEver(task, channel))) {
                     range.putAll(records.subMap(span.from(), span.to()));
                 }
             } else {

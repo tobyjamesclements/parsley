@@ -55,6 +55,28 @@ final class JepsenClusterExport {
         return admin.describeTopics(names).allTopicNames().get(60, TimeUnit.SECONDS);
     }
 
+    /**
+     * Like {@link #describe}, leaving out the names that no longer exist. A Jepsen run
+     * deletes declared topics on purpose, and the dump must still be taken afterwards: the
+     * checker learns of the dead incarnation from the fault that killed it, and judges the
+     * records that survive.
+     */
+    static Map<String, TopicDescription> describeExisting(Admin admin, java.util.Collection<String> names)
+            throws Exception {
+        Map<String, TopicDescription> out = new LinkedHashMap<>();
+        for (Map.Entry<String, org.apache.kafka.common.KafkaFuture<TopicDescription>> entry
+                : admin.describeTopics(names).topicNameValues().entrySet()) {
+            try {
+                out.put(entry.getKey(), entry.getValue().get(60, TimeUnit.SECONDS));
+            } catch (ExecutionException e) {
+                if (!(e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException)) {
+                    throw e;
+                }
+            }
+        }
+        return out;
+    }
+
     static UUID id(TopicDescription description) {
         return new UUID(description.topicId().getMostSignificantBits(), description.topicId().getLeastSignificantBits());
     }
@@ -210,7 +232,7 @@ final class JepsenClusterExport {
         });
         names.add(traceTopic);
         try (Admin admin = admin(bootstrapServers)) {
-            Map<String, TopicDescription> topics = describe(admin, names);
+            Map<String, TopicDescription> topics = describeExisting(admin, names);
             List<TopicPartition> partitions = new ArrayList<>();
             topics.forEach((name, description) -> {
                 for (int p = 0; p < description.partitions().size(); p++) {

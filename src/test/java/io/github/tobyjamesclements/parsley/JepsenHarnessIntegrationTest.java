@@ -350,6 +350,35 @@ class JepsenHarnessIntegrationTest {
     }
 
     /**
+     * A dump taken after a declared topic was deleted, as the Jepsen test's topic faults
+     * leave the cluster, lists the topics that remain and none of the deleted one's records,
+     * rather than failing on the name that no longer resolves.
+     */
+    @Test
+    void dumpLeavesOutADeletedTopic() throws Exception {
+        produce(JepsenTopology.SELF, 0, "held-self");
+        produce(JepsenTopology.SRC, null, "x0");
+        admin.deleteTopics(List.of(JepsenTopology.SELF)).all().get(60, TimeUnit.SECONDS);
+        ClusterTestSupport.await("the topic to be gone",
+                () -> {
+                    try {
+                        return !admin.listTopics().names().get(30, TimeUnit.SECONDS).contains(JepsenTopology.SELF);
+                    } catch (Exception e) {
+                        return false;
+                    }
+                }, Duration.ofSeconds(60));
+
+        JepsenExport export = JepsenClusterExport.dump(cluster.bootstrapServers(), JepsenTopology.declaration(Set.of()),
+                JepsenTopology.TRACE, Map.of());
+        assertFalse(export.topics.stream().anyMatch(t -> t.name().equals(JepsenTopology.SELF)),
+                "the deleted topic must not be listed as alive");
+        assertEquals(JepsenTopology.TOPICS.size() - 1, export.topics.size(), "every other topic must be listed");
+        assertTrue(export.records.stream().anyMatch(r -> "x0".equals(r.uid())), "the surviving records must be dumped");
+        assertFalse(export.records.stream().anyMatch(r -> "held-self".equals(r.uid())),
+                "nothing can be dumped from the deleted topic");
+    }
+
+    /**
      * Swaps two deliveries of one task so an effect precedes what caused it: a delivery and a
      * later one whose uid descends from it, or failing that two deliveries from one channel,
      * which then arrive out of position order. Either is a violation the replay must see.
