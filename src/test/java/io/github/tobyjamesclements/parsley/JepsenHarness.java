@@ -11,7 +11,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.atomic.AtomicReference;
+
+import static io.github.tobyjamesclements.parsley.JepsenEdn.kw;
+import static io.github.tobyjamesclements.parsley.JepsenEdn.map;
 
 /**
  * The application the Jepsen test runs on every node: the {@link JepsenTopology} under
@@ -32,12 +34,12 @@ import java.util.concurrent.atomic.AtomicReference;
  * java -jar parsley-jepsen-harness.jar codec-vectors --out vectors.edn
  * </pre>
  *
- * <p>{@code run} keeps serving status after a process stops: a refusal is terminal by
- * design, and the status clients must be able to read it. The status is EDN:
- * {@code {:healthy false :processes {"joiner" {:lifecycle :STOPPED :refusal :ORDERING_STATE_LOST
- * :detail "..."}}}}. A refusal raised by {@code Parsley.start} itself, before any process
- * runs, is reported as {@code :start-refusal} and attributed to the process its message
- * names.
+ * <p>{@code run} starts each declared process on its own, so a refusal at one process's
+ * start leaves the others running, and keeps serving status after a process stops: a
+ * refusal is terminal by design, and the status clients must be able to read it. The
+ * status is EDN: {@code {:healthy false :processes {"joiner" {:lifecycle :STOPPED :refusal
+ * :ORDERING_STATE_LOST :detail "..."}}}}. A refusal raised by {@code Parsley.start} itself
+ * is reported under the process it refused, as {@code STOPPED} with the reason.
  */
 public final class JepsenHarness {
     private JepsenHarness() {
@@ -124,30 +126,36 @@ public final class JepsenHarness {
         return builder.build();
     }
 
-    /** The status endpoint's view: the running handle, or the refusal that prevented one. */
+    /**
+     * The status endpoint's view: every running handle, and for each process whose start
+     * failed, what stopped it. Each declared process is started on its own, so a refusal at
+     * one process's start leaves the others running, as separate applications would be.
+     */
     static final class StatusView {
-        final AtomicReference<Parsley> parsley = new AtomicReference<>();
-        volatile Throwable startFailure;
+        final List<Parsley> running = new java.util.concurrent.CopyOnWriteArrayList<>();
+        final Map<String, Throwable> startFailures = new java.util.concurrent.ConcurrentHashMap<>();
         volatile List<String> processNames = List.of();
 
         String edn() {
-            Parsley running = parsley.get();
-            if (running != null) {
-                return JepsenTopology.statusEdn(running);
-            }
             Map<Object, Object> processes = new LinkedHashMap<>();
-            Throwable failure = startFailure;
-            FailClosedException refusal = FailClosedException.findIn(failure);
-            String detail = failure == null ? null : failure.getMessage();
-            for (String name : processNames) {
-                boolean named = detail != null && detail.contains(name);
-                processes.put(name, JepsenEdn.map("lifecycle", JepsenEdn.kw("STOPPED"),
-                        "refusal", refusal != null && named ? JepsenEdn.kw(refusal.reason().name()) : null,
-                        "detail", named ? detail : null));
+            boolean healthy = startFailures.isEmpty();
+            for (Parsley handle : running) {
+                healthy &= handle.healthy();
+                handle.status().forEach((name, status) -> processes.put(name, map(
+                        "lifecycle", kw(status.lifecycle().name()),
+                        "refusal", status.refusalReason().map(reason -> (Object) kw(reason.name())).orElse(null),
+                        "detail", status.failureDetail().orElse(null))));
             }
-            return JepsenEdn.write(JepsenEdn.map("healthy", false, "starting", failure == null,
-                    "start-refusal", refusal == null ? null : JepsenEdn.kw(refusal.reason().name()),
-                    "start-failure", detail, "processes", processes)) + "\n";
+            startFailures.forEach((name, failure) -> {
+                FailClosedException refusal = FailClosedException.findIn(failure);
+                processes.put(name, map("lifecycle", kw("STOPPED"),
+                        "refusal", refusal == null ? null : kw(refusal.reason().name()),
+                        "detail", failure.getMessage()));
+            });
+            for (String name : processNames) {
+                processes.putIfAbsent(name, map("lifecycle", kw("STOPPED"), "refusal", null, "detail", "starting"));
+            }
+            return JepsenEdn.write(map("healthy", healthy, "processes", processes)) + "\n";
         }
     }
 
@@ -174,27 +182,36 @@ public final class JepsenHarness {
         HttpServer server = serveStatus(Integer.parseInt(opts.getOrDefault("status-port", "8080")), view);
         log.info("harness starting: bootstrap {} prefix {} processes {}", opts.get("bootstrap"), opts.get("prefix"),
                 view.processNames);
-        Parsley parsley;
-        try {
-            parsley = Parsley.start(config(opts), processes.toArray(new Process[0]));
-        } catch (RuntimeException e) {
-            view.startFailure = e;
-            log.error("harness: start refused; serving the refusal until stopped", e);
-            Thread.currentThread().join();
-            return;
+        ParsleyConfig config = config(opts);
+        for (Process process : processes) {
+            try {
+                view.running.add(Parsley.start(config, process));
+                log.info("harness started {}", process.name());
+            } catch (RuntimeException e) {
+                view.startFailures.put(process.name(), e);
+                log.error("harness: {} refused to start; serving the refusal until stopped", process.name(), e);
+            }
         }
-        view.parsley.set(parsley);
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("harness stopping");
-            parsley.close();
+            for (Parsley handle : view.running) {
+                handle.close();
+            }
             server.stop(0);
         }));
-        log.info("harness started");
+        Set<String> reported = new java.util.HashSet<>();
         while (true) {
-            if (parsley.awaitStopped(Duration.ofSeconds(30))) {
-                parsley.status().forEach((name, status) -> log.warn("process {} status: {}", name, status));
-                Thread.currentThread().join();
-                return;
+            for (Parsley handle : view.running) {
+                if (handle.awaitStopped(Duration.ofSeconds(5))) {
+                    handle.status().forEach((name, status) -> {
+                        if (reported.add(name)) {
+                            log.warn("process {} status: {}", name, status);
+                        }
+                    });
+                }
+            }
+            if (view.running.isEmpty()) {
+                Thread.sleep(5_000);
             }
         }
     }

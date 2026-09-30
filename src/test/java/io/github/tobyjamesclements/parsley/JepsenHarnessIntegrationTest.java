@@ -424,7 +424,7 @@ class JepsenHarnessIntegrationTest {
 
     private static String statusOverHttp(Parsley parsley) throws Exception {
         JepsenHarness.StatusView view = new JepsenHarness.StatusView();
-        view.parsley.set(parsley);
+        view.running.add(parsley);
         var server = JepsenHarness.serveStatus(0, view);
         try {
             HttpResponse<String> response = HttpClient.newHttpClient().send(HttpRequest.newBuilder(

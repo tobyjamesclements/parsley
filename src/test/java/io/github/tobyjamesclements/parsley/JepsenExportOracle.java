@@ -563,18 +563,23 @@ final class JepsenExportOracle {
     /**
      * Everything the task could have seen expressed by the time of {@code entry}: what it
      * had delivered, every position it could have received on a channel it ever received,
-     * and every position the records there name. {@code null} when retention has discarded
-     * records the task may have received and the export does not hold them, since what they
-     * named is gone with them; the simulator's export keeps every record its retention discarded.
+     * and every position the records there name. {@code null} when records the task may have
+     * received are gone from the export, since what they named is gone with them: retention
+     * discarded them and the export does not hold them (the simulator's keeps every record its
+     * retention discarded), or their topic was deleted and nothing of it could be dumped.
      */
     private Map<Channel, Long> expressionBound(String task, JepsenExport.TraceEntry entry, Map<Channel, Long> delivered) {
         Map<Channel, Long> bound = new HashMap<>(delivered);
         for (Channel channel : receivedEver(task)) {
             TreeMap<Long, JepsenExport.Rec> records = recordsByChannel.get(channel);
+            List<Span> spans = merged(receivedSpansUpTo(task, channel, entry));
             if (records == null) {
+                // A deleted topic could not be dumped at all; the same goes for what the task received there.
+                if (dead(channel) && !spans.isEmpty()) {
+                    return null;
+                }
                 continue;
             }
-            List<Span> spans = merged(receivedSpansUpTo(task, channel, entry));
             /*
              * Retention discarded records the task may have received, and what they named
              * went with them unless the export kept them, as the simulator's does: nothing

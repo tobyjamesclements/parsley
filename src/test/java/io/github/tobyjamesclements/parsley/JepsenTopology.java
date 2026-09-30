@@ -216,15 +216,4 @@ final class JepsenTopology {
             topics.add(new NewTopic(name, partitions, replication).configs(configs));
         }
         admin.createTopics(topics).all().get(60, TimeUnit.SECONDS);
-    }
-
-    /** The status of every process, as EDN for the harness's status endpoint. */
-    static String statusEdn(Parsley parsley) {
-        Map<Object, Object> processes = new LinkedHashMap<>();
-        parsley.status().forEach((name, status) -> processes.put(name, map(
-                "lifecycle", kw(status.lifecycle().name()),
-                "refusal", status.refusalReason().map(reason -> (Object) kw(reason.name())).orElse(null),
-                "detail", status.failureDetail().orElse(null))));
-        return JepsenEdn.write(map("healthy", parsley.healthy(), "processes", processes)) + "\n";
-    }
-}
+    }}
