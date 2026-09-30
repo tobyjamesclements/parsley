@@ -16,6 +16,12 @@ import java.util.Set;
  * FIFO per channel, and that everything received is eventually delivered.
  */
 public final class Oracle {
+    /**
+     * One send under judgement. {@code upperBoundAtSend} is everything the sender could have
+     * seen expressed, per channel; {@code null} means it is not known, because the sender had
+     * received records that retention has since discarded, and what they named is gone with
+     * them. The expression checks that need it are then not made.
+     */
     record Sent(Instance instance, Map<Channel, Long> upperBoundAtSend, Map<Channel, Long> lastAssignedAtSend,
                 java.util.Set<Instance> excusedAtSend) {
     }
@@ -173,12 +179,21 @@ public final class Oracle {
                 violations.add("Structural 14: " + instance
                         + " expresses dependency on own channel at or above itself: " + position);
             }
+            if (sent.upperBoundAtSend() == null) {
+                return;
+            }
             Long lastAssigned = sent.lastAssignedAtSend().get(channel);
-            if (lastAssigned != null && position > lastAssigned) {
+            Long bound = sent.upperBoundAtSend().get(channel);
+            /*
+             * Structural 12 lets a process express a position it learned from the metadata of a
+             * message it received, assigned or not: an out-of-contract stamp naming the log end
+             * is held, and its position travels in the holder's frontier meanwhile. The bound
+             * covers what the sender had received, so a position within it was learned.
+             */
+            if (lastAssigned != null && position > lastAssigned && (bound == null || position > bound)) {
                 violations.add("Structural 12: " + instance + " expresses position " + channel + "@" + position
                         + " which was unassigned at send time (last assigned: " + lastAssigned + ")");
             }
-            Long bound = sent.upperBoundAtSend().get(channel);
             if (bound == null || position > bound) {
                 violations.add("Over-expression: " + instance + " expresses " + channel + "@" + position
                         + " above anything its sender had delivered or seen expressed at send time (bound: "

@@ -103,6 +103,14 @@ final class JepsenExportOracle {
         for (JepsenExport.TopicInfo topic : export.topics) {
             topics.put(topic.id(), topic);
             topicsByName.computeIfAbsent(topic.name(), n -> new ArrayList<>()).add(topic);
+            // The last assigned position counts the offsets markers and aborted records took, as the
+            // simulator's world.lastAssigned does; the records alone would say a frontier that names a
+            // settled out-of-contract position names an unassigned one.
+            topic.logEnd().forEach((partition, end) -> {
+                if (end > 0) {
+                    lastAssigned.merge(new Channel(topic.id(), partition), end - 1, Math::max);
+                }
+            });
         }
         for (JepsenExport.Rec rec : export.records) {
             recordsByChannel.computeIfAbsent(rec.channel(), c -> new TreeMap<>()).put(rec.offset(), rec);
@@ -555,7 +563,9 @@ final class JepsenExportOracle {
     /**
      * Everything the task could have seen expressed by the time of {@code entry}: what it
      * had delivered, every position it could have received on a channel it ever received,
-     * and every position the records there name.
+     * and every position the records there name. {@code null} when retention has discarded
+     * records the task may have received and the export does not hold them, since what they
+     * named is gone with them; the simulator's export keeps every record its retention discarded.
      */
     private Map<Channel, Long> expressionBound(String task, JepsenExport.TraceEntry entry, Map<Channel, Long> delivered) {
         Map<Channel, Long> bound = new HashMap<>(delivered);
@@ -564,7 +574,18 @@ final class JepsenExportOracle {
             if (records == null) {
                 continue;
             }
-            for (Span span : merged(receivedSpansUpTo(task, channel, entry))) {
+            List<Span> spans = merged(receivedSpansUpTo(task, channel, entry));
+            /*
+             * Retention discarded records the task may have received, and what they named
+             * went with them unless the export kept them, as the simulator's does: nothing
+             * then bounds what the sender had seen expressed.
+             */
+            long logStart = logStart(channel);
+            if (logStart > 0 && !spans.isEmpty() && spans.get(0).from() < logStart
+                    && records.headMap(logStart).isEmpty()) {
+                return null;
+            }
+            for (Span span : spans) {
                 for (JepsenExport.Rec rec : records.subMap(span.from(), span.to()).values()) {
                     bound.merge(channel, rec.offset(), Math::max);
                     Causes meta = decodedMeta(rec);

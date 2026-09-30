@@ -50,7 +50,16 @@ final class JepsenExport {
 
     enum Source { CLUSTER, SIMULATOR }
 
-    record TopicInfo(UUID id, String name, int partitions, boolean alive, Map<Integer, Long> logStart) {
+    /**
+     * A topic incarnation. {@code logStart} is the earliest retained offset of each
+     * partition and {@code logEnd} the first offset never assigned, both as the dump found
+     * them: the last assigned position, which Structural 12 is judged against, is
+     * {@code logEnd - 1}, and it counts the offsets that transaction markers and aborted
+     * records took, which no committed record occupies. On a cluster a frontier names such
+     * a position whenever an out-of-contract stamp was settled by the channel moving past it.
+     */
+    record TopicInfo(UUID id, String name, int partitions, boolean alive, Map<Integer, Long> logStart,
+                     Map<Integer, Long> logEnd) {
     }
 
     record ProcessDecl(String name, List<String> receives, List<String> sends) {
@@ -158,8 +167,10 @@ final class JepsenExport {
         for (TopicInfo t : topics) {
             Map<Object, Object> starts = new LinkedHashMap<>();
             t.logStart().forEach((partition, start) -> starts.put((long) partition, start));
+            Map<Object, Object> ends = new LinkedHashMap<>();
+            t.logEnd().forEach((partition, end) -> ends.put((long) partition, end));
             topicList.add(map("id", t.id().toString(), "name", t.name(), "partitions", (long) t.partitions(),
-                    "alive", t.alive(), "log-start", starts));
+                    "alive", t.alive(), "log-start", starts, "log-end", ends));
         }
         out.put(kw("topics"), topicList);
         List<Object> taskList = new ArrayList<>();
@@ -237,8 +248,11 @@ final class JepsenExport {
             Map<Integer, Long> logStart = new LinkedHashMap<>();
             asMap(get(t, "log-start")).forEach((partition, start) ->
                     logStart.put(((Number) partition).intValue(), ((Number) start).longValue()));
+            Map<Integer, Long> logEnd = new LinkedHashMap<>();
+            asMap(get(t, "log-end")).forEach((partition, end) ->
+                    logEnd.put(((Number) partition).intValue(), ((Number) end).longValue()));
             export.topics.add(new TopicInfo(UUID.fromString(string(t, "id")), string(t, "name"),
-                    (int) integer(t, "partitions"), Boolean.TRUE.equals(get(t, "alive")), logStart));
+                    (int) integer(t, "partitions"), Boolean.TRUE.equals(get(t, "alive")), logStart, logEnd));
         }
         for (Object t : asList(get(edn, "tasks"))) {
             export.tasks.add(new TaskInfo(string(t, "process"), (int) integer(t, "task"), channels(get(t, "receives"))));

@@ -106,12 +106,17 @@ final class JepsenClusterExport {
 
     static Map<TopicPartition, Long> offsets(Admin admin, java.util.Collection<TopicPartition> partitions,
                                              OffsetSpec spec) throws Exception {
+        return offsets(admin, partitions, spec, IsolationLevel.READ_COMMITTED);
+    }
+
+    static Map<TopicPartition, Long> offsets(Admin admin, java.util.Collection<TopicPartition> partitions,
+                                             OffsetSpec spec, IsolationLevel isolation) throws Exception {
         Map<TopicPartition, OffsetSpec> query = new LinkedHashMap<>();
         for (TopicPartition tp : partitions) {
             query.put(tp, spec);
         }
         Map<TopicPartition, Long> out = new LinkedHashMap<>();
-        admin.listOffsets(query, new ListOffsetsOptions(IsolationLevel.READ_COMMITTED)).all()
+        admin.listOffsets(query, new ListOffsetsOptions(isolation)).all()
                 .get(30, TimeUnit.SECONDS).forEach((tp, info) -> out.put(tp, info.offset()));
         return out;
     }
@@ -241,13 +246,18 @@ final class JepsenClusterExport {
             });
             Map<TopicPartition, Long> logStarts = offsets(admin, partitions, OffsetSpec.earliest());
             Map<TopicPartition, Long> ends = offsets(admin, partitions, OffsetSpec.latest());
+            // The high watermark counts every assigned offset, markers and aborted records included.
+            Map<TopicPartition, Long> logEnds = offsets(admin, partitions, OffsetSpec.latest(),
+                    IsolationLevel.READ_UNCOMMITTED);
             topics.forEach((name, description) -> {
                 Map<Integer, Long> starts = new LinkedHashMap<>();
+                Map<Integer, Long> logEnd = new LinkedHashMap<>();
                 for (int p = 0; p < description.partitions().size(); p++) {
                     starts.put(p, logStarts.getOrDefault(new TopicPartition(name, p), 0L));
+                    logEnd.put(p, logEnds.getOrDefault(new TopicPartition(name, p), 0L));
                 }
                 export.topics.add(new JepsenExport.TopicInfo(id(description), name, description.partitions().size(),
-                        true, starts));
+                        true, starts, logEnd));
             });
             Map<String, UUID> ids = new HashMap<>();
             topics.forEach((name, description) -> ids.put(name, id(description)));

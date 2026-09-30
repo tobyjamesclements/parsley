@@ -189,13 +189,16 @@ final class JepsenSimulatorExport implements Scenario.Observer {
         }
         byTopic.forEach((topicId, channels) -> {
             Map<Integer, Long> logStart = new TreeMap<>();
+            Map<Integer, Long> logEnd = new TreeMap<>();
             boolean alive = true;
             for (SimChannel channel : channels) {
                 logStart.put(channel.id().partition(), channel.logStart);
+                // Every slot took a position, the pending and dead ones included, as world.lastAssigned counts.
+                logEnd.put(channel.id().partition(), (long) channel.slots.size());
                 alive &= !channel.dead;
             }
             export.topics.add(new JepsenExport.TopicInfo(topicId, channels.get(0).topicName, channels.size(), alive,
-                    logStart));
+                    logStart, logEnd));
             for (SimChannel channel : channels) {
                 for (int position = 0; position < channel.slots.size(); position++) {
                     if (channel.slots.get(position) instanceof SimWorld.MessageSlot slot) {
