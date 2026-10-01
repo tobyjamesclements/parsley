@@ -35,7 +35,9 @@ import static io.github.tobyjamesclements.parsley.JepsenEdn.map;
  * </pre>
  *
  * <p>{@code run} starts each declared process on its own, so a refusal at one process's
- * start leaves the others running, and keeps serving status after a process stops: a
+ * start leaves the others running, retries a start that fails for a missing prerequisite
+ * (a broker down, a topic not resolving) until it succeeds or refuses, and keeps serving
+ * status after a process stops: a
  * refusal is terminal by design, and the status clients must be able to read it. The
  * status is EDN: {@code {:healthy false :processes {"joiner" {:lifecycle :STOPPED :refusal
  * :ORDERING_STATE_LOST :detail "..."}}}}. A refusal raised by {@code Parsley.start} itself
@@ -184,13 +186,9 @@ public final class JepsenHarness {
                 view.processNames);
         ParsleyConfig config = config(opts);
         for (Process process : processes) {
-            try {
-                view.running.add(Parsley.start(config, process));
-                log.info("harness started {}", process.name());
-            } catch (RuntimeException e) {
-                view.startFailures.put(process.name(), e);
-                log.error("harness: {} refused to start; serving the refusal until stopped", process.name(), e);
-            }
+            Thread starter = new Thread(() -> startUntilRunningOrRefused(config, process, view, log), "start-" + process.name());
+            starter.setDaemon(true);
+            starter.start();
         }
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             log.info("harness stopping");
@@ -212,6 +210,37 @@ public final class JepsenHarness {
             }
             if (view.running.isEmpty()) {
                 Thread.sleep(5_000);
+            }
+        }
+    }
+
+    /**
+     * Starts one process, retrying while the failure is a prerequisite missing (an
+     * {@link IllegalStateException}: the cluster could not be queried, a topic does not
+     * resolve), which {@code docs/runbooks.md} says to retry, and stopping for good on a
+     * refusal ({@link FailClosedException}), which is terminal by design. A broker that is
+     * down at the moment a process starts must not take the process down for the run.
+     */
+    static void startUntilRunningOrRefused(ParsleyConfig config, Process process, StatusView view, org.slf4j.Logger log) {
+        while (true) {
+            try {
+                view.running.add(Parsley.start(config, process));
+                view.startFailures.remove(process.name());
+                log.info("harness started {}", process.name());
+                return;
+            } catch (RuntimeException e) {
+                view.startFailures.put(process.name(), e);
+                if (FailClosedException.findIn(e) != null) {
+                    log.error("harness: {} refused to start; serving the refusal until stopped", process.name(), e);
+                    return;
+                }
+                log.warn("harness: {} could not start ({}); retrying in 5 seconds", process.name(), e.getMessage());
+                try {
+                    Thread.sleep(5_000);
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
             }
         }
     }

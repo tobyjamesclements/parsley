@@ -43,12 +43,15 @@ column is what happened.
 | Restart with a declaration dropping a topic that holds messages (`self`) | `CHANNEL_REMOVED_WITH_HELD_MESSAGES` | Came, at the selfer. |
 | Malformed `parsley.causes` header (version byte 99) | `UNDECODABLE_METADATA` | Came, at the splitter; nothing delivered past it. |
 | Stamp naming the log-end offset (a tenth of all sends) | A hold until the channel's next record; no refusal | No refusal. The hold was settled by a transaction marker as well as by a record; see below. |
-| Partition, broker kill, pause, clock skew | No refusal | No refusal under partitions (one node, a majority, a ring), instance kills and SIGSTOP pauses lasting about a minute (past the transaction timeout), and clock bumps and strobes. Broker kill and pause were not run. |
+| Partition, broker kill, pause, clock skew | No refusal | No refusal under partitions (one node, a majority, a ring), broker kills and SIGSTOP pauses (Kafka 3.7.0), instance kills and pauses lasting about a minute (past the transaction timeout), and clock bumps and strobes. |
 
 The mixed run (partitions, instance kills and pauses, truncation, recreation, changelog
 deletion and the narrower declaration, ten minutes) judged valid with all four refusals the
 table expects, after three attempts that found faults landing inside a partition; those are
-under [the nemesis](#about-the-nemesis).
+under [the nemesis](#about-the-nemesis). A twenty-minute run on Kafka 3.7.0 at five sends a
+second, under partitions, broker and instance kills and pauses, retention and ten offset
+resets (56,352 trace entries, 47,554 records), judged valid in both checkers in 87 seconds.
+Kafka 3.7.0, the floor the spec names, behaved as 4.3.1 did in every run on it.
 
 Across every run: no Safety 1, 2 or 3 violation, no Structural 14 or 15 violation, no
 duplicate commit of an effect (Host obligation 6), no delivery from a channel outside the
@@ -100,6 +103,17 @@ followed that the checkers had not allowed for:
 
 Both checkers flagged this as Structural 12 until they were taught the clause and given
 each partition's log end (see below).
+
+### A broker down at start-up takes a process down for good, unless the application retries
+
+`Parsley.start` throws `IllegalStateException` when the cluster cannot be queried in time
+("committed read positions could not be listed", "declared topics could not be
+resolved"). With a broker killed forty seconds into a run, while the joiner was starting,
+its start timed out and the harness, which started each process once, served the joiner
+as stopped for the whole run; the other three ran. The runbooks class this as a
+prerequisite failure to retry, and the harness now does, every five seconds, until the
+process runs or refuses. An application should expect the same of itself: a start is not a
+refusal, and a broker outage at the wrong second is enough to hit it.
 
 ### Kafka Streams keeps its group membership on close
 
@@ -185,7 +199,10 @@ What the fault injection learned, for whoever extends it.
   log in a `.history` file, which Jepsen collects.
 - Memory: three brokers, three instances (four Kafka Streams applications each, with
   RocksDB), the control JVM and the replay share 8 GB. Nothing else should run on the VM
-  during a test.
+  during a test. An instance at 512 MB ran out of heap while a broker was down, as every
+  producer's buffer filled; 768 MB holds.
+- The brokers the final generator restarts are still electing leaders when the final phase
+  begins, so the quiescence wait and the dump retry rather than fail on the first timeout.
 - Docker nodes share the VM's clock, so the clock nemesis is a jump for the whole cluster,
   including the control node, not skew between nodes; the VM was minutes off afterwards
   and wanted `ntpdate`.
@@ -195,9 +212,7 @@ What the fault injection learned, for whoever extends it.
 
 ## Not yet done
 
-- Kafka 3.7.0, the floor the spec names. Only 4.3.1 has run.
-- Broker kill and pause (wired, not run); clock skew as skew; more than three nodes; the
-  labelled unclean-election run.
-- Long mixed runs; the checkers' cost no longer blocks them, but none has been run.
+- Clock skew as skew; more than three nodes; the labelled unclean-election run.
+- An hour-long run, which is only time now; the longest so far is twenty minutes.
 - A verdict on the topic-deletion finding: documentation, a named start-up condition, or
   both.

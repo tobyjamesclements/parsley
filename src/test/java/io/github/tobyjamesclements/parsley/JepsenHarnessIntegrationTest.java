@@ -379,6 +379,49 @@ class JepsenHarnessIntegrationTest {
     }
 
     /**
+     * A start that fails for a missing prerequisite is retried until it succeeds: the
+     * harness started against a topic that does not exist yet serves the process as
+     * stopped with the reason, and runs it once the topic is created. A refusal is not
+     * retried.
+     */
+    @Test
+    void startIsRetriedWhileAPrerequisiteIsMissing() throws Exception {
+        admin.deleteTopics(List.of(JepsenTopology.SELF)).all().get(60, TimeUnit.SECONDS);
+        ClusterTestSupport.await("the topic to be gone",
+                () -> {
+                    try {
+                        return !admin.listTopics().names().get(30, TimeUnit.SECONDS).contains(JepsenTopology.SELF);
+                    } catch (Exception e) {
+                        return false;
+                    }
+                }, Duration.ofSeconds(60));
+        JepsenHarness.StatusView view = new JepsenHarness.StatusView();
+        view.processNames = List.of(JepsenTopology.SELFER);
+        Process selfer = JepsenTopology.processes(Set.of()).stream()
+                .filter(p -> p.name().equals(JepsenTopology.SELFER)).findFirst().orElseThrow();
+        Thread starter = new Thread(() -> JepsenHarness.startUntilRunningOrRefused(config("retry"), selfer, view,
+                org.slf4j.LoggerFactory.getLogger(JepsenHarnessIntegrationTest.class)));
+        starter.setDaemon(true);
+        starter.start();
+        try {
+            ClusterTestSupport.await("the start to fail for the missing topic",
+                    () -> view.startFailures.containsKey(JepsenTopology.SELFER), Duration.ofSeconds(120));
+            assertTrue(view.edn().contains(":lifecycle :STOPPED"), () -> "a failed start is served as stopped: " + view.edn());
+            assertFalse(view.edn().contains(":refusal :"), () -> "a missing topic is not a refusal: " + view.edn());
+            admin.createTopics(List.of(new org.apache.kafka.clients.admin.NewTopic(JepsenTopology.SELF, PARTITIONS, (short) 1)))
+                    .all().get(60, TimeUnit.SECONDS);
+            ClusterTestSupport.await("the retried start to succeed", () -> !view.running.isEmpty(), Duration.ofSeconds(180));
+            assertFalse(view.startFailures.containsKey(JepsenTopology.SELFER), "the failure is cleared once the process runs");
+            assertTrue(view.edn().contains(":lifecycle :RUNNING") || view.edn().contains(":lifecycle :REBALANCING")
+                    || view.edn().contains(":lifecycle :CREATED"), () -> "the process runs: " + view.edn());
+        } finally {
+            for (Parsley handle : view.running) {
+                handle.close();
+            }
+        }
+    }
+
+    /**
      * Swaps two deliveries of one task so an effect precedes what caused it: a delivery and a
      * later one whose uid descends from it, or failing that two deliveries from one channel,
      * which then arrive out of position order. Either is a violation the replay must see.
