@@ -15,9 +15,10 @@ import java.util.TreeMap;
 import java.util.UUID;
 
 /**
- * The first checker over a {@link JepsenExport}: replays the trace through the simulator's
- * {@link Oracle}, which judges causal order, duplicates, FIFO and expression from ground
- * truth reconstructed here, never from what the engine claims.
+ * The first checker over a {@link JepsenExport}: judges causal order, duplicates, FIFO and
+ * expression from ground truth reconstructed here, never from what the engine claims, by
+ * the rules the simulator's {@link Oracle} applies, and the same rules as the Clojure
+ * checker in {@code parsley-jepsen}, which it cross-checks.
  *
  * <p>Happened-before comes from the trace and the declaration, not from headers. A record
  * sent by task T in the step that delivered D is caused by D, by every earlier delivery at
@@ -27,6 +28,15 @@ import java.util.UUID;
  * observation bracketed by the trace ends, so a receipt no observation covers is not in
  * it, and the expression check catches what that misses, since every send must express
  * every cause its sender had delivered or seen expressed.
+ *
+ * <p>A causal past is a frontier: for each channel, the greatest position in it, standing
+ * for every position on that channel up to it. That is the true past only where a task
+ * delivers each channel in position order (Safety 3), which is judged on its own: under
+ * FIFO a position is delivered exactly when every record before it on its channel is, so
+ * "every cause delivered" is "the greatest cause on each channel delivered", and "every
+ * cause expressed" is "the greatest expressed". The simulator's {@link Oracle} keeps the
+ * sets themselves, which is exact and quadratic in a run; a frontier is a map of a few
+ * channels, which is what lets an hour's trace be judged.
  *
  * <p>The judgements, cited as in {@code SPEC.md}: Safety 1 at delivery time and over
  * delivered pairs, Safety 2, Safety 3, Safety 7, Safety 8, Structural 12, 14 and 15,
@@ -47,7 +57,6 @@ final class JepsenExportOracle {
     }
 
     private final JepsenExport export;
-    private final Oracle oracle = new Oracle();
     private final List<String> violations = new ArrayList<>();
 
     private final Map<UUID, JepsenExport.TopicInfo> topics = new HashMap<>();
@@ -67,11 +76,69 @@ final class JepsenExportOracle {
     private final Map<UUID, Long> createdAt = new HashMap<>();
     private final Map<UUID, Long> deadAt = new HashMap<>();
 
-    private final Map<Channel, Map<Long, Instance>> instanceByPosition = new HashMap<>();
+    private final Map<Channel, Map<Long, Map<Channel, Long>>> causesByPosition = new HashMap<>();
     private final Map<JepsenExport.Rec, Causes> metaByRecord = new java.util.IdentityHashMap<>();
-    private final Map<String, List<Set<Instance>>> pastByTask = new HashMap<>();
+    private final Map<String, List<Map<Channel, Long>>> pastByTask = new HashMap<>();
     private final Map<String, Map<Channel, Set<Long>>> mergedReceiptsByTask = new HashMap<>();
     private final Map<String, Integer> computing = new HashMap<>();
+    /** Per channel, in offset order: the records' offsets, and what the records up to each could let a receiver see expressed. */
+    private final Map<Channel, PrefixBounds> namedByChannel = new HashMap<>();
+    /** Per task and trace-ends key ({@code lo} or {@code hi}) and trace partition: each observation's end, in index order, or null where they are not ascending. */
+    private final Map<String, Map<String, long[]>> endsByTask = new HashMap<>();
+    /** Per task and channel: for each k, the merged spans of the first k observations' receipts. */
+    private final Map<String, Map<Channel, List<List<Span>>>> prefixSpansByTask = new HashMap<>();
+    /** Per task: the delivered positions in trace order, and the first index at which each was delivered. */
+    private final Map<String, List<Position>> deliveredByTask = new LinkedHashMap<>();
+    private final Map<String, Map<Position, Integer>> firstIndexByTask = new HashMap<>();
+
+    record Position(Channel channel, long offset) {
+        @Override
+        public String toString() {
+            return channel + "@" + offset;
+        }
+    }
+
+    /**
+     * What the first n records of a channel could let a receiver see expressed, for any n:
+     * a checkpoint every {@link #EVERY} records and a walk of the rest, which keeps the
+     * memory a fraction of a bound per record.
+     */
+    record PrefixBounds(long[] offsets, List<JepsenExport.Rec> records, List<Map<Channel, Long>> checkpoints) {
+        static final int EVERY = 32;
+
+        /** Merges what the first {@code n} records let a receiver see expressed into {@code bound}. */
+        void mergeFirst(int n, Channel channel, Map<Channel, Long> bound, JepsenExportOracle oracle) {
+            int checkpoint = n / EVERY;
+            checkpoints.get(checkpoint).forEach((named, position) -> bound.merge(named, position, Math::max));
+            for (int i = checkpoint * EVERY; i < n; i++) {
+                oracle.mergeNamed(bound, channel, records.get(i));
+            }
+        }
+    }
+
+    /** Merges one record's offset and the positions its metadata names into {@code bound}. */
+    private void mergeNamed(Map<Channel, Long> bound, Channel channel, JepsenExport.Rec rec) {
+        bound.merge(channel, rec.offset(), Math::max);
+        Causes meta = decodedMeta(rec);
+        if (meta != null) {
+            meta.byChannel().forEach((named, position) -> bound.merge(named, position, Math::max));
+        }
+    }
+
+    /** How many of the ascending {@code offsets} are at or below {@code offset}. */
+    static int countAtOrBelow(long[] offsets, long offset) {
+        int lo = 0;
+        int hi = offsets.length;
+        while (lo < hi) {
+            int mid = (lo + hi) >>> 1;
+            if (offsets[mid] <= offset) {
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        return lo;
+    }
 
     private JepsenExportOracle(JepsenExport export) {
         this.export = export;
@@ -84,8 +151,9 @@ final class JepsenExportOracle {
         for (String task : tasks) {
             replay(task);
         }
-        oracle.finalChecks();
-        violations.addAll(oracle.violations());
+        for (String task : tasks) {
+            finalOrderChecks(task);
+        }
         for (String task : tasks) {
             liveness(task);
             safety8(task);
@@ -122,6 +190,22 @@ final class JepsenExportOracle {
                 undecodableAt.computeIfAbsent(rec.channel(), c -> new HashSet<>()).add(rec.offset());
             }
         }
+        recordsByChannel.forEach((channel, records) -> {
+            long[] offsets = new long[records.size()];
+            List<JepsenExport.Rec> inOrder = new ArrayList<>(records.values());
+            List<Map<Channel, Long>> checkpoints = new ArrayList<>();
+            checkpoints.add(Map.of());
+            Map<Channel, Long> bound = new HashMap<>();
+            for (int i = 0; i < inOrder.size(); i++) {
+                JepsenExport.Rec rec = inOrder.get(i);
+                offsets[i] = rec.offset();
+                mergeNamed(bound, channel, rec);
+                if ((i + 1) % PrefixBounds.EVERY == 0) {
+                    checkpoints.add(Map.copyOf(bound));
+                }
+            }
+            namedByChannel.put(channel, new PrefixBounds(offsets, inOrder, checkpoints));
+        });
         List<JepsenExport.TraceEntry> ordered = new ArrayList<>(export.trace);
         ordered.sort(java.util.Comparator.comparing(JepsenExport.TraceEntry::tp)
                 .thenComparingLong(JepsenExport.TraceEntry::to));
@@ -396,40 +480,92 @@ final class JepsenExportOracle {
         return startByTask.getOrDefault(task, Map.of()).getOrDefault(channel, 0L);
     }
 
+    /** The span of positions on {@code channel} one observation shows the task received, or null. */
+    private Span readSpan(String task, JepsenExport.Reads reads, Channel channel) {
+        Long next = reads.nextRead().get(channel);
+        if (next == null) {
+            return null;
+        }
+        long from = executionStart(task, reads, channel);
+        return next > from ? new Span(from, next) : null;
+    }
+
+    /*
+     * The observations of a task are kept in index order, and the trace ends they carry
+     * only grow along it (a cluster's stale observations are set aside first, and the
+     * simulator's trace ends are counts), so the observations taken before a step are a
+     * prefix of them. Each prefix's receipt spans are merged once and then found by one
+     * binary search, which keeps a task's replay linear in its observations.
+     */
+
+    /**
+     * Each observation's end for trace partition {@code tp}, in index order, under the
+     * {@code endsLo} or {@code endsHi} key; an observation that carries no end for it had
+     * seen nothing of it, which is 0. Null where they are not ascending.
+     */
+    private long[] endsVector(String task, boolean hi, String tp) {
+        String key = (hi ? "hi:" : "lo:") + tp;
+        Map<String, long[]> byKey = endsByTask.computeIfAbsent(task, t -> new HashMap<>());
+        if (byKey.containsKey(key)) {
+            return byKey.get(key);
+        }
+        List<JepsenExport.Reads> reads = readsByTask.getOrDefault(task, List.of());
+        long[] ends = new long[reads.size()];
+        boolean ascending = true;
+        for (int i = 0; i < reads.size(); i++) {
+            Map<String, Long> map = hi ? reads.get(i).endsHi() : reads.get(i).endsLo();
+            ends[i] = map.getOrDefault(tp, 0L);
+            ascending &= i == 0 || ends[i - 1] <= ends[i];
+        }
+        byKey.put(key, ascending ? ends : null);
+        return byKey.get(key);
+    }
+
+    /** For each k, the merged spans of the first k observations' receipts on {@code channel}. */
+    private List<List<Span>> prefixSpans(String task, Channel channel) {
+        return prefixSpansByTask.computeIfAbsent(task, t -> new HashMap<>()).computeIfAbsent(channel, c -> {
+            List<List<Span>> prefixes = new ArrayList<>();
+            List<Span> merged = List.of();
+            prefixes.add(merged);
+            for (JepsenExport.Reads reads : readsByTask.getOrDefault(task, List.of())) {
+                Span span = readSpan(task, reads, channel);
+                if (span != null) {
+                    List<Span> all = new ArrayList<>(merged);
+                    all.add(span);
+                    merged = merged(all);
+                }
+                prefixes.add(merged);
+            }
+            return prefixes;
+        });
+    }
+
     /**
      * Positions the task is known to have received on {@code channel} before {@code entry}:
      * for every observation taken before the step, the span from where its execution began
-     * reading the channel to the position it committed. Empty when no observation covers
-     * it, which under-approximates receipt.
+     * reading the channel to the position it committed, merged. Empty when no observation
+     * covers it, which under-approximates receipt.
      */
     private List<Span> receivedSpansBefore(String task, Channel channel, JepsenExport.TraceEntry entry) {
-        List<Span> spans = new ArrayList<>();
-        for (JepsenExport.Reads reads : readsByTask.getOrDefault(task, List.of())) {
-            Long end = reads.endsHi().get(entry.tp());
-            Long next = reads.nextRead().get(channel);
-            if (end != null && end <= entry.to() && next != null) {
-                long from = executionStart(task, reads, channel);
-                if (next > from) {
-                    spans.add(new Span(from, next));
+        long[] ends = endsVector(task, true, entry.tp());
+        if (ends == null) {
+            List<Span> spans = new ArrayList<>();
+            for (JepsenExport.Reads reads : readsByTask.getOrDefault(task, List.of())) {
+                Long end = reads.endsHi().get(entry.tp());
+                Span span = readSpan(task, reads, channel);
+                if (end != null && end <= entry.to() && span != null) {
+                    spans.add(span);
                 }
             }
+            return merged(spans);
         }
-        return spans;
+        return prefixSpans(task, channel).get(countAtOrBelow(ends, entry.to()));
     }
 
-    /** Every span of positions the task is known to have received on {@code channel} at any time. */
+    /** Every span of positions the task is known to have received on {@code channel} at any time, merged. */
     private List<Span> receivedSpansEver(String task, Channel channel) {
-        List<Span> spans = new ArrayList<>();
-        for (JepsenExport.Reads reads : readsByTask.getOrDefault(task, List.of())) {
-            Long next = reads.nextRead().get(channel);
-            if (next != null) {
-                long from = executionStart(task, reads, channel);
-                if (next > from) {
-                    spans.add(new Span(from, next));
-                }
-            }
-        }
-        return spans;
+        List<List<Span>> prefixes = prefixSpans(task, channel);
+        return prefixes.get(prefixes.size() - 1);
     }
 
     /**
@@ -442,78 +578,81 @@ final class JepsenExportOracle {
      */
     private List<Span> receivedSpansUpTo(String task, Channel channel, JepsenExport.TraceEntry entry) {
         List<Span> spans = new ArrayList<>(receivedSpansBefore(task, channel, entry));
+        List<JepsenExport.Reads> reads = readsByTask.getOrDefault(task, List.of());
+        long[] ends = endsVector(task, false, entry.tp());
         JepsenExport.Reads first = null;
-        for (JepsenExport.Reads reads : readsByTask.getOrDefault(task, List.of())) {
-            Long end = reads.endsLo().get(entry.tp());
-            if (end != null && end > entry.to() && (first == null || reads.index() < first.index())) {
-                first = reads;
+        if (ends == null) {
+            for (JepsenExport.Reads candidate : reads) {
+                Long end = candidate.endsLo().get(entry.tp());
+                if (end != null && end > entry.to()) {
+                    first = candidate;
+                    break;
+                }
             }
+        } else {
+            int k = countAtOrBelow(ends, entry.to());
+            first = k < reads.size() ? reads.get(k) : null;
         }
         if (first == null) {
             spans.add(new Span(0, Long.MAX_VALUE));
         } else {
-            Long next = first.nextRead().get(channel);
-            if (next != null) {
-                long from = executionStart(task, first, channel);
-                if (next > from) {
-                    spans.add(new Span(from, next));
-                }
+            Span span = readSpan(task, first, channel);
+            if (span != null) {
+                spans.add(span);
             }
         }
         return spans;
     }
 
-    // ---- ground truth: instances and their true causes ----
+    // ---- ground truth: true causes, as frontiers ----
 
-    private Instance instanceOf(Channel channel, long offset, String uidHint) {
-        Map<Long, Instance> byOffset = instanceByPosition.computeIfAbsent(channel, c -> new HashMap<>());
-        Instance existing = byOffset.get(offset);
-        if (existing != null) {
-            return existing;
-        }
-        JepsenExport.Rec rec = recordAt(channel, offset);
-        String uid = rec != null && rec.uid() != null ? rec.uid() : uidHint == null ? "?" : uidHint;
-        byte[] header = rec == null ? null : rec.causesHeader();
-        Causes meta = decode(header);
-        List<Header> headers = header == null ? List.of()
-                : List.of(new Header(CausesCodec.HEADER_KEY, header == JepsenExport.NULL_HEADER_VALUE ? null : header));
-        Set<Instance> causes = trueCausesOf(uid, rec);
-        Instance instance = new Instance(channel, offset, uid,
-                rec == null || rec.key() == null ? null : rec.key().getBytes(StandardCharsets.UTF_8),
-                rec == null || rec.value() == null ? null : rec.value().getBytes(StandardCharsets.UTF_8),
-                headers, meta == null ? Causes.none() : meta, causes);
-        byOffset.put(offset, instance);
-        return instance;
+    private static void mergeFrontier(Map<Channel, Long> into, Map<Channel, Long> other) {
+        other.forEach((channel, position) -> into.merge(channel, position, Math::max));
     }
 
-    private Set<Instance> trueCausesOf(String uid, JepsenExport.Rec rec) {
+    /**
+     * The true causes of the record at a position, as a frontier: the record an external
+     * stamper observed and its causes, or the producing task's past once its step delivered.
+     */
+    private Map<Channel, Long> trueCausesOf(Channel channel, long offset, String uidHint) {
+        Map<Long, Map<Channel, Long>> byOffset = causesByPosition.computeIfAbsent(channel, c -> new HashMap<>());
+        Map<Channel, Long> known = byOffset.get(offset);
+        if (known != null) {
+            return known;
+        }
+        JepsenExport.Rec rec = recordAt(channel, offset);
+        String uid = rec != null && rec.uid() != null ? rec.uid() : uidHint;
+        Map<Channel, Long> causes;
         if (rec != null && rec.stampedFrom() != null) {
             JepsenExport.Position from = rec.stampedFrom();
             if (recordAt(from.channel(), from.offset()) == null) {
-                return Set.of();
+                causes = Map.of();
+            } else {
+                causes = new HashMap<>(trueCausesOf(from.channel(), from.offset(), null));
+                causes.merge(from.channel(), from.offset(), Math::max);
+                causes = Map.copyOf(causes);
             }
-            Instance observed = instanceOf(from.channel(), from.offset(), null);
-            Set<Instance> causes = new HashSet<>(observed.trueCauses);
-            causes.add(observed);
-            return causes;
+        } else {
+            JepsenExport.TraceEntry producer = uid == null ? null : producerByEffectUid.get(uid);
+            causes = producer == null ? Map.of() : pastAfter(producer);
         }
-        JepsenExport.TraceEntry producer = producerByEffectUid.get(uid);
-        return producer == null ? Set.of() : pastAfter(producer);
+        byOffset.put(offset, causes);
+        return causes;
     }
 
     /**
      * The producing task's causal past once its step {@code entry} had delivered: every
      * earlier delivery and its causes, the causes of every record known received before
-     * the step, and the delivery itself with its causes.
+     * the step, and the delivery itself with its causes. One frontier per step.
      */
-    private Set<Instance> pastAfter(JepsenExport.TraceEntry entry) {
+    private Map<Channel, Long> pastAfter(JepsenExport.TraceEntry entry) {
         String task = entry.taskName();
         int step = stepOf.get(entry);
-        List<Set<Instance>> snapshots = pastByTask.computeIfAbsent(task, t -> new ArrayList<>());
+        List<Map<Channel, Long>> snapshots = pastByTask.computeIfAbsent(task, t -> new ArrayList<>());
         Integer inProgress = computing.get(task);
         if (inProgress != null && step >= inProgress) {
             violations.add("Causal cycle: " + describe(entry) + " is among the causes of what it delivered");
-            return snapshots.isEmpty() ? Set.of() : snapshots.get(snapshots.size() - 1);
+            return snapshots.isEmpty() ? Map.of() : snapshots.get(snapshots.size() - 1);
         }
         List<JepsenExport.TraceEntry> entries = traceByTask.get(task);
         Map<Channel, Set<Long>> merged = mergedReceiptsByTask.computeIfAbsent(task, t -> new HashMap<>());
@@ -521,26 +660,25 @@ final class JepsenExportOracle {
             int next = snapshots.size();
             computing.put(task, next);
             JepsenExport.TraceEntry delivered = entries.get(next);
-            Set<Instance> past = new HashSet<>(next == 0 ? Set.of() : snapshots.get(next - 1));
+            Map<Channel, Long> past = new HashMap<>(next == 0 ? Map.of() : snapshots.get(next - 1));
             for (Channel channel : receivedEver(task)) {
                 TreeMap<Long, JepsenExport.Rec> records = recordsByChannel.get(channel);
                 if (records == null) {
                     continue;
                 }
                 Set<Long> done = merged.computeIfAbsent(channel, c -> new HashSet<>());
-                for (Span span : merged(receivedSpansBefore(task, channel, delivered))) {
+                for (Span span : receivedSpansBefore(task, channel, delivered)) {
                     for (JepsenExport.Rec rec : records.subMap(span.from(), span.to()).values()) {
                         if (done.add(rec.offset())) {
-                            past.addAll(instanceOf(rec.channel(), rec.offset(), rec.uid()).trueCauses);
+                            mergeFrontier(past, trueCausesOf(rec.channel(), rec.offset(), rec.uid()));
                         }
                     }
                 }
             }
-            Instance instance = instanceOf(delivered.channel(), delivered.offset(), delivered.uid());
-            past.add(instance);
-            past.addAll(instance.trueCauses);
+            past.merge(delivered.channel(), delivered.offset(), Math::max);
+            mergeFrontier(past, trueCausesOf(delivered.channel(), delivered.offset(), delivered.uid()));
             computing.remove(task);
-            snapshots.add(past);
+            snapshots.add(Map.copyOf(past));
         }
         return snapshots.get(step);
     }
@@ -590,12 +728,14 @@ final class JepsenExportOracle {
                     && records.headMap(logStart).isEmpty()) {
                 return null;
             }
+            PrefixBounds prefix = namedByChannel.get(channel);
             for (Span span : spans) {
-                for (JepsenExport.Rec rec : records.subMap(span.from(), span.to()).values()) {
-                    bound.merge(channel, rec.offset(), Math::max);
-                    Causes meta = decodedMeta(rec);
-                    if (meta != null) {
-                        meta.byChannel().forEach((named, position) -> bound.merge(named, position, Math::max));
+                if (span.from() <= prefix.offsets()[0]) {
+                    // A span from the channel's first record is answered from the prefix bounds.
+                    prefix.mergeFirst(countAtOrBelow(prefix.offsets(), span.to() - 1), channel, bound, this);
+                } else {
+                    for (JepsenExport.Rec rec : records.subMap(span.from(), span.to()).values()) {
+                        mergeNamed(bound, channel, rec);
                     }
                 }
             }
@@ -636,53 +776,84 @@ final class JepsenExportOracle {
 
     private void replay(String task) {
         Map<Channel, Long> start = startByTask.getOrDefault(task, Map.of());
-        oracle.onStart(task);
-        owed(task).forEach((channel, records) -> {
-            for (JepsenExport.Rec rec : records) {
-                oracle.onFed(task, instanceOf(rec.channel(), rec.offset(), rec.uid()));
-            }
-        });
+        List<Position> delivered = new ArrayList<>();
+        Map<Position, Integer> firstIndex = new HashMap<>();
+        deliveredByTask.put(task, delivered);
+        firstIndexByTask.put(task, firstIndex);
+        /*
+         * Mirrors the engine's persisted delivered-past clamp: delivered positions merged
+         * with each delivered message's expressed frontier, coarser than the true causes and
+         * deliberately so, because the engine's sanctioned drops are judged by expression.
+         */
+        Map<Channel, Long> enginePast = new HashMap<>();
         Map<Channel, Long> maxDelivered = new HashMap<>();
         for (JepsenExport.TraceEntry entry : traceByTask.getOrDefault(task, List.of())) {
-            Instance instance = instanceOf(entry.channel(), entry.offset(), entry.uid());
+            Position pos = new Position(entry.channel(), entry.offset());
+            String described = entry.uid() + "(" + pos + ")";
             JepsenExport.Rec rec = recordAt(entry.channel(), entry.offset());
             if (rec != null && !Objects.equals(rec.uid(), entry.uid())) {
-                violations.add("Trace: " + task + " reports delivering " + entry.uid() + " at " + entry.channel() + "@"
-                        + entry.offset() + " but the committed record there carries " + rec.uid());
+                violations.add("Trace: " + task + " reports delivering " + entry.uid() + " at " + pos
+                        + " but the committed record there carries " + rec.uid());
             }
             if (rec == null && !dead(entry.channel()) && logStart(entry.channel()) <= entry.offset()) {
-                violations.add("Trace: " + task + " reports delivering " + entry.channel() + "@" + entry.offset()
+                violations.add("Trace: " + task + " reports delivering " + pos
                         + " (" + entry.uid() + ") but no committed record exists there");
             }
             if (undecodableAt.getOrDefault(entry.channel(), Set.of()).contains(entry.offset())) {
-                violations.add("Safety 7: " + task + " delivered " + instance
+                violations.add("Safety 7: " + task + " delivered " + described
                         + " whose causal metadata is present and undecodable");
             }
             Set<Channel> receivedNow = receivedAt(task, entry);
             if (!receivedNow.contains(entry.channel())) {
-                violations.add("Declaration: " + task + " delivered " + instance + " from a channel it does not receive");
+                violations.add("Declaration: " + task + " delivered " + described + " from a channel it does not receive");
             }
-            oracle.onDelivered(task, instance, settledNow(task, instance, entry, receivedNow, start, maxDelivered));
+            /*
+             * Safety 1 at this very moment: the greatest cause on every channel must already be
+             * delivered here, settled by evidence the world corroborates, or lie within the
+             * delivered past the engine is entitled to drop behind. Everything delivered lies
+             * within the engine's past, so a cause not within it was not delivered either. The
+             * end-of-run check compares delivered pairs only, so a premature delivery whose
+             * cause never delivers is visible only here.
+             */
+            Map<Channel, Long> causes = trueCausesOf(entry.channel(), entry.offset(), entry.uid());
+            Set<Channel> settled = settledNow(task, causes, entry, receivedNow, start, maxDelivered);
+            causes.forEach((channel, offset) -> {
+                if (settled.contains(channel)) {
+                    return;
+                }
+                long bound = enginePast.getOrDefault(channel, Long.MIN_VALUE);
+                if (offset > bound) {
+                    violations.add("Safety 1 (delivery-time): " + task + " delivered " + described
+                            + " while its cause " + new Position(channel, offset)
+                            + " was neither delivered, nor settled by evidence, nor within the delivered past (bound: "
+                            + (bound == Long.MIN_VALUE ? "none" : bound) + ")");
+                }
+            });
+            delivered.add(pos);
+            firstIndex.putIfAbsent(pos, delivered.size() - 1);
             maxDelivered.merge(entry.channel(), entry.offset(), Math::max);
+            enginePast.merge(entry.channel(), entry.offset(), Math::max);
+            Causes recMeta = rec == null ? null : decodedMeta(rec);
+            if (recMeta != null) {
+                recMeta.byChannel().forEach((channel, position) -> enginePast.merge(channel, position, Math::max));
+            }
 
             Map<Channel, Long> upper = expressionBound(task, entry, maxDelivered);
-            Set<Instance> past = pastAfter(entry);
-            Set<Instance> excused = new HashSet<>();
-            for (Instance cause : past) {
-                if (dead(cause.channel)) {
-                    excused.add(cause);
+            Map<Channel, Long> past = pastAfter(entry);
+            Set<Channel> excused = new HashSet<>();
+            for (Channel channel : past.keySet()) {
+                if (dead(channel)) {
+                    excused.add(channel);
                 }
             }
-            List<Oracle.Sent> sents = new ArrayList<>();
             Causes traceMeta = decode(entry.causesHeader());
             if (traceMeta == null) {
                 violations.add("Trace: the frontier " + task + " expressed at step " + entry.tp() + "@" + entry.to()
                         + " is undecodable");
                 traceMeta = Causes.none();
             }
-            Instance traceInstance = new Instance(traceChannel(entry), entry.to(), "trace:" + task + ":" + entry.to(),
-                    null, null, List.of(), traceMeta, past);
-            sents.add(new Oracle.Sent(traceInstance, upper, lastAssigned, excused));
+            Position tracePos = new Position(traceChannel(entry), entry.to());
+            checkExpression("trace:" + task + ":" + entry.to() + "(" + tracePos + ")", tracePos, traceMeta, past, upper, excused);
             for (JepsenExport.Effect effect : entry.effects()) {
                 List<JepsenExport.Rec> matches = new ArrayList<>();
                 for (JepsenExport.Rec candidate : recordsByUid.getOrDefault(effect.uid(), List.of())) {
@@ -702,43 +873,95 @@ final class JepsenExportOracle {
                             + effect.topic() + "; a superseded execution's step was committed too");
                 }
                 for (JepsenExport.Rec match : matches) {
-                    sents.add(new Oracle.Sent(instanceOf(match.channel(), match.offset(), match.uid()), upper,
-                            lastAssigned, excused));
+                    Position sent = new Position(match.channel(), match.offset());
+                    Causes meta = decodedMeta(match);
+                    if (meta == null) {
+                        violations.add("Trace: the frontier expressed by " + sent + " is undecodable");
+                        continue;
+                    }
+                    checkExpression(match.uid() + "(" + sent + ")", sent, meta, past, upper, excused);
                 }
             }
-            oracle.commitStep(task, sents);
         }
     }
 
     /**
-     * The causes of {@code instance} settled by evidence at this moment: on a channel the
-     * task does not receive, below the task's start position, or on a dead channel the task
-     * is not known to have received them from. A cause the task had received is never
-     * settled by its channel's death: the task owes its delivery (Safety 9).
+     * The expression checks on one send: Structural 14 and 12, over-expression, Structural
+     * 15. {@code past} is the sender's causal past as a frontier and {@code excused} the
+     * channels in it that no longer exist. With {@code upper} null, what the sender could
+     * have seen expressed is not known, because records it received are gone from the
+     * export, and the two checks that need it are not made.
      */
-    private Set<Instance> settledNow(String task, Instance instance, JepsenExport.TraceEntry entry,
-                                     Set<Channel> received, Map<Channel, Long> start, Map<Channel, Long> maxDelivered) {
-        Set<Instance> settled = new HashSet<>();
-        for (Instance cause : instance.trueCauses) {
-            if (!received.contains(cause.channel)) {
-                settled.add(cause);
-            } else if (cause.position < start.getOrDefault(cause.channel, 0L)) {
-                settled.add(cause);
-            } else if (dead(cause.channel) && !receivedBefore(task, cause, entry, maxDelivered)) {
-                settled.add(cause);
+    private void checkExpression(String instance, Position sent, Causes meta, Map<Channel, Long> past,
+                                 Map<Channel, Long> upper, Set<Channel> excused) {
+        meta.byChannel().forEach((channel, position) -> {
+            if (channel.equals(sent.channel()) && position >= sent.offset()) {
+                violations.add("Structural 14: " + instance
+                        + " expresses dependency on own channel at or above itself: " + position);
             }
-        }
+            if (upper == null) {
+                return;
+            }
+            Long last = lastAssigned.get(channel);
+            Long bound = upper.get(channel);
+            /*
+             * Structural 12 lets a process express a position it learned from the metadata of a
+             * message it received, assigned or not: an out-of-contract stamp naming the log end
+             * is held, and its position travels in the holder's frontier meanwhile. The bound
+             * covers what the sender had received, so a position within it was learned.
+             */
+            if (last != null && position > last && (bound == null || position > bound)) {
+                violations.add("Structural 12: " + instance + " expresses position " + channel + "@" + position
+                        + " which was unassigned at send time (last assigned: " + last + ")");
+            }
+            if (bound == null || position > bound) {
+                violations.add("Over-expression: " + instance + " expresses " + channel + "@" + position
+                        + " above anything its sender had delivered or seen expressed at send time (bound: "
+                        + bound + ")");
+            }
+        });
+        past.forEach((channel, offset) -> {
+            if (excused.contains(channel)) {
+                return;
+            }
+            Long expressed = meta.byChannel().get(channel);
+            if (expressed == null || expressed < offset) {
+                violations.add("Structural 15: " + instance + " fails to express cause " + new Position(channel, offset)
+                        + " (expressed: " + expressed + ")");
+            }
+        });
+    }
+
+    /**
+     * The channels of the delivered message's causes settled by evidence at this moment:
+     * a channel the task does not receive, one whose cause lies below the task's start
+     * position, or a dead channel the task is not known to have received the cause from. A
+     * cause the task had received is never settled by its channel's death: the task owes
+     * its delivery (Safety 9).
+     */
+    private Set<Channel> settledNow(String task, Map<Channel, Long> causes, JepsenExport.TraceEntry entry,
+                                    Set<Channel> received, Map<Channel, Long> start, Map<Channel, Long> maxDelivered) {
+        Set<Channel> settled = new HashSet<>();
+        causes.forEach((channel, offset) -> {
+            if (!received.contains(channel)) {
+                settled.add(channel);
+            } else if (offset < start.getOrDefault(channel, 0L)) {
+                settled.add(channel);
+            } else if (dead(channel) && !receivedBefore(task, channel, offset, entry, maxDelivered)) {
+                settled.add(channel);
+            }
+        });
         return settled;
     }
 
-    private boolean receivedBefore(String task, Instance cause, JepsenExport.TraceEntry entry,
+    private boolean receivedBefore(String task, Channel channel, long offset, JepsenExport.TraceEntry entry,
                                    Map<Channel, Long> maxDelivered) {
-        Long delivered = maxDelivered.get(cause.channel);
-        if (delivered != null && delivered > cause.position) {
+        Long delivered = maxDelivered.get(channel);
+        if (delivered != null && delivered > offset) {
             return true;
         }
-        for (Span span : receivedSpansBefore(task, cause.channel, entry)) {
-            if (span.contains(cause.position)) {
+        for (Span span : receivedSpansBefore(task, channel, entry)) {
+            if (span.contains(offset)) {
                 return true;
             }
         }
@@ -746,6 +969,69 @@ final class JepsenExportOracle {
     }
 
     // ---- final judgements ----
+
+    /** Safety 2, Safety 3 and Safety 1 over the task's committed deliveries. */
+    private void finalOrderChecks(String task) {
+        List<Position> delivered = deliveredByTask.getOrDefault(task, List.of());
+        Map<Position, Integer> firstIndex = firstIndexByTask.getOrDefault(task, Map.of());
+        for (int i = 0; i < delivered.size(); i++) {
+            int previous = firstIndex.get(delivered.get(i));
+            if (previous != i) {
+                violations.add("Safety 2: " + task + " delivered " + delivered.get(i) + " twice (indexes "
+                        + previous + " and " + i + ")");
+            }
+        }
+        Map<Channel, Long> lastPerChannel = new HashMap<>();
+        for (Position pos : delivered) {
+            Long last = lastPerChannel.put(pos.channel(), pos.offset());
+            if (last != null && pos.offset() <= last) {
+                violations.add("Safety 3: " + task + " delivered " + pos + " after position " + last
+                        + " of the same channel");
+            }
+        }
+        /*
+         * Per channel, the delivered positions in order with the latest first-delivery index
+         * among those up to each: a frontier's cause on that channel was delivered after the
+         * effect exactly when that index is past the effect's.
+         */
+        Map<Channel, long[]> offsetsByChannel = new HashMap<>();
+        Map<Channel, int[]> latestByChannel = new HashMap<>();
+        Map<Channel, TreeMap<Long, Integer>> byChannel = new HashMap<>();
+        firstIndex.forEach((pos, index) ->
+                byChannel.computeIfAbsent(pos.channel(), c -> new TreeMap<>()).put(pos.offset(), index));
+        byChannel.forEach((channel, positions) -> {
+            long[] offsets = new long[positions.size()];
+            int[] latest = new int[positions.size()];
+            int i = 0;
+            int max = -1;
+            for (Map.Entry<Long, Integer> e : positions.entrySet()) {
+                offsets[i] = e.getKey();
+                max = Math.max(max, e.getValue());
+                latest[i++] = max;
+            }
+            offsetsByChannel.put(channel, offsets);
+            latestByChannel.put(channel, latest);
+        });
+        for (int i = 0; i < delivered.size(); i++) {
+            Position effect = delivered.get(i);
+            int effectIndex = i;
+            trueCausesOf(effect.channel(), effect.offset(), null).forEach((channel, offset) -> {
+                long[] offsets = offsetsByChannel.get(channel);
+                if (offsets == null) {
+                    return;
+                }
+                int n = countAtOrBelow(offsets, offset);
+                if (n == 0) {
+                    return;
+                }
+                int causeIndex = latestByChannel.get(channel)[n - 1];
+                if (causeIndex > effectIndex) {
+                    violations.add("Safety 1: " + task + " delivered effect " + effect + " (index " + effectIndex
+                            + ") before its cause " + delivered.get(causeIndex) + " (index " + causeIndex + ")");
+                }
+            });
+        }
+    }
 
     private boolean refused(String task) {
         return firstRefusalByProcess.containsKey(processOf(task));
@@ -756,17 +1042,17 @@ final class JepsenExportOracle {
             return;
         }
         Map<Channel, Long> start = startByTask.getOrDefault(task, Map.of());
-        Set<Instance> exempt = exemptions(task, receivedFinally(task), start);
-        Map<Channel, List<Instance>> undelivered = oracle.undeliveredOwedByChannel(task);
-        List<Instance> stranded = new ArrayList<>();
-        undelivered.values().forEach(stranded::addAll);
-        stranded.sort(java.util.Comparator.comparing((Instance i) -> i.channel).thenComparingLong(i -> i.position));
-        for (Instance instance : stranded) {
-            if (!exempt.contains(instance)) {
-                violations.add("Liveness 1: " + task + " never delivered " + instance
-                        + ", which it received on a channel it declares at or above its start position");
+        Set<Position> exempt = exemptions(task, receivedFinally(task), start);
+        Set<Position> deliveredSet = new HashSet<>(deliveredByTask.getOrDefault(task, List.of()));
+        owed(task).forEach((channel, records) -> {
+            for (JepsenExport.Rec rec : records) {
+                Position pos = new Position(rec.channel(), rec.offset());
+                if (!deliveredSet.contains(pos) && !exempt.contains(pos)) {
+                    violations.add("Liveness 1: " + task + " never delivered " + rec.uid() + "(" + pos
+                            + "), which it received on a channel it declares at or above its start position");
+                }
             }
-        }
+        });
     }
 
     /**
@@ -774,40 +1060,40 @@ final class JepsenExportOracle {
      * their channel (Safety 7 and 3), and those held behind a stamp naming a position no
      * later record on that channel settles (wire-format constraint 8), transitively.
      */
-    private Set<Instance> exemptions(String task, Set<Channel> received, Map<Channel, Long> start) {
-        Set<Instance> exempt = new HashSet<>();
-        Map<Channel, List<Instance>> owed = new HashMap<>();
+    private Set<Position> exemptions(String task, Set<Channel> received, Map<Channel, Long> start) {
+        Set<Position> exempt = new HashSet<>();
+        Map<Channel, List<JepsenExport.Rec>> owed = new HashMap<>();
         for (Channel channel : received) {
             TreeMap<Long, JepsenExport.Rec> records = recordsByChannel.get(channel);
             if (records == null) {
                 continue;
             }
-            List<Instance> instances = new ArrayList<>();
+            List<JepsenExport.Rec> onChannel = new ArrayList<>();
             boolean behindUndecodable = false;
             for (JepsenExport.Rec rec : records.tailMap(start.getOrDefault(channel, 0L)).values()) {
-                Instance instance = instanceOf(rec.channel(), rec.offset(), rec.uid());
-                instances.add(instance);
+                onChannel.add(rec);
                 if (undecodableAt.getOrDefault(channel, Set.of()).contains(rec.offset())) {
                     behindUndecodable = true;
                 }
                 if (behindUndecodable) {
-                    exempt.add(instance);
+                    exempt.add(new Position(rec.channel(), rec.offset()));
                 }
             }
-            owed.put(channel, instances);
+            owed.put(channel, onChannel);
         }
         boolean changed = true;
         while (changed) {
             changed = false;
-            for (Map.Entry<Channel, List<Instance>> entry : owed.entrySet()) {
+            for (Map.Entry<Channel, List<JepsenExport.Rec>> entry : owed.entrySet()) {
                 boolean behindExempt = false;
-                for (Instance instance : entry.getValue()) {
-                    if (exempt.contains(instance)) {
+                for (JepsenExport.Rec rec : entry.getValue()) {
+                    Position pos = new Position(rec.channel(), rec.offset());
+                    if (exempt.contains(pos)) {
                         behindExempt = true;
                         continue;
                     }
-                    if (behindExempt || heldByUnsettledStamp(instance, received, start, exempt, owed)) {
-                        exempt.add(instance);
+                    if (behindExempt || heldByUnsettledStamp(rec, received, start, exempt, owed)) {
+                        exempt.add(pos);
                         behindExempt = true;
                         changed = true;
                     }
@@ -817,9 +1103,13 @@ final class JepsenExportOracle {
         return exempt;
     }
 
-    private boolean heldByUnsettledStamp(Instance instance, Set<Channel> received, Map<Channel, Long> start,
-                                         Set<Instance> exempt, Map<Channel, List<Instance>> owed) {
-        for (Map.Entry<Channel, Long> named : instance.meta.byChannel().entrySet()) {
+    private boolean heldByUnsettledStamp(JepsenExport.Rec rec, Set<Channel> received, Map<Channel, Long> start,
+                                         Set<Position> exempt, Map<Channel, List<JepsenExport.Rec>> owed) {
+        Causes meta = decodedMeta(rec);
+        if (meta == null) {
+            return false;
+        }
+        for (Map.Entry<Channel, Long> named : meta.byChannel().entrySet()) {
             Channel channel = named.getKey();
             long position = named.getValue();
             if (!received.contains(channel) || dead(channel) || position < start.getOrDefault(channel, 0L)) {
@@ -829,8 +1119,8 @@ final class JepsenExportOracle {
             if (last == null || last < position) {
                 return true;
             }
-            for (Instance candidate : owed.getOrDefault(channel, List.of())) {
-                if (candidate.position <= position && exempt.contains(candidate)) {
+            for (JepsenExport.Rec candidate : owed.getOrDefault(channel, List.of())) {
+                if (candidate.offset() <= position && exempt.contains(new Position(candidate.channel(), candidate.offset()))) {
                     return true;
                 }
             }
