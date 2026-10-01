@@ -41,8 +41,10 @@ import java.util.UUID;
  * <p>The judgements, cited as in {@code SPEC.md}: Safety 1 at delivery time and over
  * delivered pairs, Safety 2, Safety 3, Safety 7, Safety 8, Structural 12, 14 and 15,
  * over-expression, Liveness 1 at quiescence with the spec's exemptions, Host obligations 3
- * and 6 through the effects each step declared, Assumption 2, and Operational 1 and 6:
- * every refusal follows an injected fault that justifies it.
+ * and 6 through the effects each step declared, Host obligation 5 through the frontier each
+ * step expressed, which never falls along a task's trace unless the host lost committed
+ * state, Assumption 2, and Operational 1 and 6: every refusal follows an injected fault that
+ * justifies it.
  */
 final class JepsenExportOracle {
 
@@ -787,6 +789,7 @@ final class JepsenExportOracle {
          */
         Map<Channel, Long> enginePast = new HashMap<>();
         Map<Channel, Long> maxDelivered = new HashMap<>();
+        Map<Channel, Long> expressed = new HashMap<>();
         for (JepsenExport.TraceEntry entry : traceByTask.getOrDefault(task, List.of())) {
             Position pos = new Position(entry.channel(), entry.offset());
             String described = entry.uid() + "(" + pos + ")";
@@ -852,6 +855,23 @@ final class JepsenExportOracle {
                         + " is undecodable");
                 traceMeta = Causes.none();
             }
+            /*
+             * A task's expressed frontier only grows along its own trace: it is its committed
+             * state, and a step that expresses less than an earlier committed step did resumed
+             * from a state older than the one committed, which the host lost. A channel that
+             * no longer exists is the one exception: its causes no longer matter and may be
+             * discarded (Structural 13).
+             */
+            for (Map.Entry<Channel, Long> named : traceMeta.byChannel().entrySet()) {
+                Long before = expressed.get(named.getKey());
+                if (before != null && named.getValue() < before && !dead(named.getKey())) {
+                    violations.add("Host obligation 5: " + task + " expressed " + named.getKey() + "@" + named.getValue()
+                            + " at step " + entry.tp() + "@" + entry.to() + " after expressing " + before
+                            + " at an earlier committed step: it resumed from a state older than the one it had committed,"
+                            + " which the host lost");
+                }
+            }
+            traceMeta.byChannel().forEach((channel, position) -> expressed.merge(channel, position, Math::max));
             Position tracePos = new Position(traceChannel(entry), entry.to());
             checkExpression("trace:" + task + ":" + entry.to() + "(" + tracePos + ")", tracePos, traceMeta, past, upper, excused);
             for (JepsenExport.Effect effect : entry.effects()) {

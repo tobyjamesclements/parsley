@@ -51,7 +51,38 @@ table expects, after three attempts that found faults landing inside a partition
 under [the nemesis](#about-the-nemesis). A twenty-minute run on Kafka 3.7.0 at five sends a
 second, under partitions, broker and instance kills and pauses, retention and ten offset
 resets (56,352 trace entries, 47,554 records), judged valid in both checkers in 87 seconds.
-Kafka 3.7.0, the floor the spec names, behaved as 4.3.1 did in every run on it.
+Then an hour on each version with the same faults: 4.3.1 valid over 48,905 entries; 3.7.0
+with one violation the nemesis made (below). Kafka 3.7.0, the floor the spec names,
+behaved as 4.3.1 did in every run on it.
+
+### Under unclean leader election, Kafka's loss is named as Kafka's
+
+The labelled run (`--unclean-leader-election`, broker kills, pauses and partitions, ten
+minutes) is invalid, and the checkers say why. An unclean election truncated the joiner's
+ordering changelog, its group's committed offsets and the trace behind what it had
+committed, and the joiner resumed from the older state: its expressed frontier on one
+channel fell from 309 back to 232 along its own trace, it re-delivered records it had
+delivered before, and every later send under-expressed. Parsley cannot see this: the
+changelog's head is intact and the offsets agree with it, so nothing is missing from where
+it looks. Both checkers now report a frontier that falls along a task's trace as **Host
+obligation 5** (resumed from a state older than the one committed, which the host lost),
+118 times here, beside the 921 Structural 15 and 5 Liveness consequences, so the verdict
+attributes the run to the substrate rather than to the implementation. A channel that no
+longer exists is the one exception, since its causes may be discarded (Structural 13); the
+simulator's recreations exercise it. The rule runs in every run, and no clean run has
+tripped it.
+
+### A fault the nemesis did not mean
+
+The one violation in the hour on 3.7.0 was `POSITIONS_DISCARDED_UNREAD` at the splitter
+with no fault to justify it. A `reset-offsets` had timed out client-side inside a
+partition, but the broker applied the alter later; in between, a `discard-held-copy` read
+the still-unreset committed position and deleted the records before it, so when the late
+reset landed the group's position was below the log start, and the splitter refused
+exactly as Safety 8 says. Two lessons for anyone operating this: an admin request that
+times out may still happen, and a position read from one broker during a partition is one
+broker's opinion. The nemesis now reads a group's position as the lowest of every broker's
+view, a log start as the highest, and reads an alter back until the group shows it.
 
 Across every run: no Safety 1, 2 or 3 violation, no Structural 14 or 15 violation, no
 duplicate commit of an effect (Host obligation 6), no delivery from a channel outside the
@@ -212,7 +243,7 @@ What the fault injection learned, for whoever extends it.
 
 ## Not yet done
 
-- Clock skew as skew; more than three nodes; the labelled unclean-election run.
-- An hour-long run, which is only time now; the longest so far is twenty minutes.
+- Clock skew as skew; more than three nodes.
+- Anything longer than an hour, and the refusal-class faults inside an hour-long run.
 - A verdict on the topic-deletion finding: documentation, a named start-up condition, or
   both.
