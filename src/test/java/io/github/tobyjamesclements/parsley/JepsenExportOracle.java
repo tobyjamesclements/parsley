@@ -1221,7 +1221,10 @@ final class JepsenExportOracle {
      * SPEC Assumption 2, judged as the simulator judges it at every commit: a step committed
      * while a received channel's topic is dead and its name resolves to a live other id is a
      * step on the wrong log. On a cluster the host re-creates the task only later, so the
-     * judgement starts at the re-initialisation the fault records, if it records one.
+     * judgement starts at the re-initialisation the fault records, if it records one, and
+     * falls on the tasks attached to the dead incarnation: a lifetime an operator's reset
+     * started afterwards attached to the new one, which is the recovery the runbook
+     * prescribes.
      */
     private void recreations() {
         if (export.source == JepsenExport.Source.SIMULATOR) {
@@ -1249,9 +1252,14 @@ final class JepsenExportOracle {
                 continue;
             }
             Map<String, Long> ends = JepsenExport.ends(boundary);
+            String old = JepsenEdn.string(fault.details(), "old");
             for (Map.Entry<String, List<JepsenExport.TraceEntry>> byTask : traceByTask.entrySet()) {
-                JepsenExport.ProcessDecl decl = export.processes.get(processOf(byTask.getKey()));
-                if (decl == null || !decl.receives().contains(topic)) {
+                String task = byTask.getKey();
+                JepsenExport.ProcessDecl decl = export.processes.get(processOf(task));
+                boolean attached = old == null
+                        ? decl != null && decl.receives().contains(topic)
+                        : receivedEver(task).contains(new Channel(UUID.fromString(old), partitionOf(task)));
+                if (!attached) {
                     continue;
                 }
                 for (JepsenExport.TraceEntry entry : byTask.getValue()) {

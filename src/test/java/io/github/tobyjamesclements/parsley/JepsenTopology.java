@@ -108,9 +108,10 @@ final class JepsenTopology {
 
     /**
      * The forwarding rule: the effects of delivering {@code uid} on {@code topic} at
-     * {@code process}, excluding the trace record. Deterministic in its arguments, and
-     * bounded by {@link #MAX_HOPS}. {@code String.hashCode} is specified, so the choice is
-     * the same in every JVM and in the checker.
+     * {@code process} (its name, or its lifetime label), excluding the trace record.
+     * Deterministic in its arguments, and bounded by {@link #MAX_HOPS}.
+     * {@code String.hashCode} is specified, so the choice is the same in every JVM and in
+     * the checker.
      */
     static List<JepsenExport.Effect> effects(String process, String topic, String uid) {
         if (hops(uid) >= MAX_HOPS) {
@@ -118,7 +119,8 @@ final class JepsenTopology {
         }
         int hash = Math.floorMod(uid.hashCode(), 6);
         List<JepsenExport.Effect> effects = new ArrayList<>();
-        switch (process) {
+        int hashIndex = process.indexOf('#');
+        switch (hashIndex < 0 ? process : process.substring(0, hashIndex)) {
             case SPLITTER -> {
                 effects.add(new JepsenExport.Effect(A, forwardedUid(uid, process, A)));
                 effects.add(new JepsenExport.Effect(B, forwardedUid(uid, process, B)));
@@ -178,16 +180,40 @@ final class JepsenTopology {
      * record. Every process declares the trace topic as sent and none receives it.
      */
     static List<Process> processes(Set<String> dropped) {
+        return processes(dropped, Map.of(), Map.of());
+    }
+
+    /**
+     * The label a process's trace records and forwarded uids carry: its name, or
+     * {@code name#n} for its n-th lifetime after an operator's reset. A reset that starts
+     * from the earliest position delivers again what the lifetime before it delivered, and
+     * sends the effects again as new messages; the label keeps a checker from mistaking a
+     * lifetime's step for a superseded execution of the one before.
+     */
+    static String label(String name, Map<String, Integer> incarnations) {
+        int incarnation = incarnations.getOrDefault(name, 1);
+        return incarnation > 1 ? name + "#" + incarnation : name;
+    }
+
+    /**
+     * As {@link #processes(Set)}, with each process's lifetime label and the initial
+     * position its received topics start from where no committed position exists: an
+     * operator's reset chooses {@code LATEST} to start past an undecodable header.
+     */
+    static List<Process> processes(Set<String> dropped, Map<String, Integer> incarnations,
+                                   Map<String, Topic.InitialPosition> initialPositions) {
         Map<String, Topic<String, String>> topics = new LinkedHashMap<>();
         for (String name : TOPICS) {
             topics.put(name, topic(name));
         }
         List<Process> processes = new ArrayList<>();
         declaration(dropped).forEach((name, decl) -> {
+            String label = label(name, incarnations);
+            Topic.InitialPosition initial = initialPositions.getOrDefault(name, Topic.InitialPosition.EARLIEST);
             Process.Builder builder = Process.named(name);
             for (String received : decl.receives()) {
-                Topic<String, String> topic = topics.get(received);
-                builder.receives(topic, (delivery, state) -> handle(name, topics, delivery));
+                Topic<String, String> topic = topics.get(received).startingAt(initial);
+                builder.receives(topic, (delivery, state) -> handle(label, topics, delivery));
             }
             Topic<?, ?>[] sends = decl.sends().stream().map(topics::get).toArray(Topic<?, ?>[]::new);
             builder.sends(sends);

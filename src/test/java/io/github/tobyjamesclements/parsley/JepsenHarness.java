@@ -24,7 +24,8 @@ import static io.github.tobyjamesclements.parsley.JepsenEdn.map;
  * <pre>
  * java -jar parsley-jepsen-harness.jar run --bootstrap n1:9092 --prefix jepsen \
  *      --state-dir /var/lib/parsley --status-port 8080 --log-file /var/log/parsley.log \
- *      [--drop-topic loop] [--metadata-budget 262144] [--streams key=value ...]
+ *      [--drop-topic loop] [--incarnation selfer=2] [--initial-position selfer=latest]
+ *      [--metadata-budget 262144] [--streams key=value ...]
  * java -jar parsley-jepsen-harness.jar create-topics --bootstrap n1:9092 --partitions 3 \
  *      --replication 3 [--min-isr 2]
  * java -jar parsley-jepsen-harness.jar export --bootstrap n1:9092 --out run.edn \
@@ -79,7 +80,8 @@ public final class JepsenHarness {
             }
             String key = args[i].substring(2);
             String value = i + 1 < args.length && !args[i + 1].startsWith("--") ? args[++i] : "true";
-            if (key.equals("streams") || key.equals("drop-topic")) {
+            if (key.equals("streams") || key.equals("drop-topic") || key.equals("incarnation")
+                    || key.equals("initial-position")) {
                 opts.merge(key, value, (a, b) -> a + "," + b);
             } else {
                 opts.put(key, value);
@@ -99,6 +101,32 @@ public final class JepsenHarness {
     static Set<String> dropped(Map<String, String> opts) {
         String dropped = opts.get("drop-topic");
         return dropped == null ? Set.of() : Set.of(dropped.split(","));
+    }
+
+    /** {@code --incarnation selfer=2}: the lifetime each process runs as after an operator's reset. */
+    static Map<String, Integer> incarnations(Map<String, String> opts) {
+        Map<String, Integer> out = new LinkedHashMap<>();
+        pairs(opts.get("incarnation")).forEach((name, value) -> out.put(name, Integer.parseInt(value)));
+        return out;
+    }
+
+    /** {@code --initial-position selfer=latest}: where a process's received topics start without a committed position. */
+    static Map<String, Topic.InitialPosition> initialPositions(Map<String, String> opts) {
+        Map<String, Topic.InitialPosition> out = new LinkedHashMap<>();
+        pairs(opts.get("initial-position")).forEach((name, value) ->
+                out.put(name, Topic.InitialPosition.valueOf(value.toUpperCase())));
+        return out;
+    }
+
+    private static Map<String, String> pairs(String option) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (option != null) {
+            for (String pair : option.split(",")) {
+                int eq = pair.indexOf('=');
+                out.put(pair.substring(0, eq), pair.substring(eq + 1));
+            }
+        }
+        return out;
     }
 
     private static void configureLogging(Map<String, String> opts) {
@@ -179,7 +207,7 @@ public final class JepsenHarness {
         configureLogging(opts);
         org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(JepsenHarness.class);
         StatusView view = new StatusView();
-        List<Process> processes = JepsenTopology.processes(dropped(opts));
+        List<Process> processes = JepsenTopology.processes(dropped(opts), incarnations(opts), initialPositions(opts));
         view.processNames = processes.stream().map(Process::name).toList();
         HttpServer server = serveStatus(Integer.parseInt(opts.getOrDefault("status-port", "8080")), view);
         log.info("harness starting: bootstrap {} prefix {} processes {}", opts.get("bootstrap"), opts.get("prefix"),

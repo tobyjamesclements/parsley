@@ -15,11 +15,11 @@ has to be rediscovered. Criteria are cited as in `SPEC.md`.
 - The harness app from this repository's test tree (`JepsenHarness`, built by
   `./mvnw -Pjepsen-harness -DskipTests package`), one instance per node, all four processes
   of `JepsenTopology` (`splitter`, `joiner`, `cycler`, `selfer`) under the prefix `jepsen`.
-- Runs of two to ten minutes, external sends at two to five per second. Every run is judged
+- Runs of two minutes to an hour, external sends at two to twenty per second. Every run is judged
   twice over one export: by the Clojure checker (`checker.clj`) and by this repository's
   replay (`JepsenExportOracle`, `java -jar <harness> check`). The two never disagreed on a
   verdict once their rules were made the same.
-- Twenty-eight runs in all. The first clean run judged 7318 trace entries and 7318 committed
+- Forty-four runs in all. The first clean run judged 7318 trace entries and 7318 committed
   records valid in both checkers. The manufactured inversion (`--calibrate inversion`, an
   external producer that stamps less than it knows) was flagged by both: Safety 1 at
   delivery time and over the delivered pair, and Structural 15 on every downstream send
@@ -34,7 +34,7 @@ column is what happened.
 | Fault | Expected | Observed |
 |---|---|---|
 | Delete records past a lagging task's committed position (`src`, instances down, external sends continuing) | `POSITIONS_DISCARDED_UNREAD` | Came, at the splitter. Nothing delivered past the gap. |
-| Retention discards a held message's copy (records deleted up to the committed position, live) | No refusal | No refusal. |
+| Retention discards a held message's copy (records deleted up to the committed position, live; then retention itself, a minute's, across a hold) | No refusal; delivered from the ordering changelog in order | No refusal. With retention on its own clock the held record's copy was gone from the topic (log start past it) while the hold stood, and it was delivered in order from the changelog once the stamp settled. |
 | Delete a received topic while messages are held from it (`self`, live, then a restart) | `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES` | Did not come at first; see below. Came at the next start once Parsley made the diagnosis there, naming the topic and the held channels. |
 | Delete and recreate a received topic while the process is down (`c`) | `CHANNEL_IDENTITY_CHANGED` at the next start | Came, at the cycler's start: "topics [c] now resolve to different identities than this process's state was built against". |
 | Reset the group's offsets backwards while the process is down (one to five back) | Re-fed records dropped; no duplicate | No refusal, no duplicate delivery, three times. |
@@ -53,7 +53,15 @@ second, under partitions, broker and instance kills and pauses, retention and te
 resets (56,352 trace entries, 47,554 records), judged valid in both checkers in 87 seconds.
 Then an hour on each version with the same faults: 4.3.1 valid over 48,905 entries; 3.7.0
 with one violation the nemesis made (below). Kafka 3.7.0, the floor the spec names,
-behaved as 4.3.1 did in every run on it.
+behaved as 4.3.1 did in every run on it. Past the hour, four runs asked different
+questions of the same cluster, and all four judged valid in both checkers: retention on
+its own clock across a hold (above); a fault every fifteen seconds for a quarter of an
+hour, partitions, broker kills and pauses and instance kills and pauses overlapping (184
+faults, 14,212 entries); the runbook's reset after each refusal, with the process's next
+lifetime judged on its own (below); and twenty sends a second for ten minutes (133,171
+entries, 1,063 held out-of-contract stamps). With nothing refused or discarded a run's
+trace entries equal its committed records, since every record is received by exactly one
+process and traced once; retention and refusals are what separate the two counts.
 
 ### Under unclean leader election, Kafka's loss is named as Kafka's
 
@@ -163,6 +171,27 @@ Streams does not send `LeaveGroup` on close. A kill does the same. Altering the 
 offsets needs the group empty, so the runbook step "reset the group offsets" after a stop
 waits that long; a test that tries sooner fails with the group still stable.
 
+### After the runbook's reset, the next lifetime runs clean
+
+A refusal is terminal for the process, and `docs/runbooks.md` says what an operator does
+next: stop every instance, delete the group and its ordering changelog, wipe local state,
+recreate a deleted received topic, and start again from an initial position. The nemesis
+now does exactly that after each refusal-class fault (`--reset-after-refusal`), and the
+harness runs the process on as its next lifetime, labelled `name#2` in its trace and in
+the uids it forwards (`--incarnation`), from the earliest position or, after an
+undecodable header, from the latest (`--initial-position`). Two runs covered six of the
+seven refusals: `delete-topic` and `corrupt` (the selfer's reset recreated `self`; the
+splitter's started past the malformed record), and `truncate`, `delete-changelog`,
+`recreate-topic` and `restart-dropping`, each followed by its reset. Every lifetime
+bootstrapped, committed its start positions, ran to quiescence and judged valid in both
+checkers as a process of its own, from the positions its bootstrap committed: no causal
+inversion, no duplicate, no under-expression, in a lifetime that re-delivers what the one
+before it delivered and sends the effects again as new messages. The one thing the
+lifetime's start positions showed is worth knowing: a `latest` start committed the
+partitions' ends at bootstrap (107, 85, 86 on `src`) and an `earliest` one zero, except
+where the earlier lifetime's `truncate` had moved the log start (25), which is where
+`EARLIEST` begins.
+
 ## What the checkers got wrong, and the rules that fixed them
 
 These were false positives on a correct engine, and were not papered over: each fix is a
@@ -208,6 +237,11 @@ rule in both checkers with the reason in the code, and the simulator calibration
    seconds in Clojure and 1 in Java. `JepsenExportOracle` no longer replays through
    `Oracle`, whose sets are the simulator's business; it keeps the same rules in its own
    frontier model, and the calibration test holds it to the simulator oracle's verdicts.
+6. **A lifetime the reset attached to a recreated topic is not a task that went on.** The
+   cluster form of the Assumption 2 rule flagged, by topic name, every delivery after a
+   recreation by a process that received the topic, which caught the cycler's second
+   lifetime doing what the runbook prescribes. The rule now falls on the tasks that
+   received the dead incarnation; a task attached to the new one is judged like any other.
 
 ## About the nemesis
 
@@ -227,7 +261,14 @@ What the fault injection learned, for whoever extends it.
 - Jepsen's file-corruption nemesis already answers to `:truncate`; record truncation is
   `:truncate-records` on the wire.
 - A refusal is terminal, so a run schedules each refusal-class fault once, at a process no
-  other fault has; the plan is in `nemesis/refusal-targets`.
+  other fault has; the plan is in `nemesis/refusal-targets`. With `--reset-after-refusal`
+  the runbook's reset follows each, and three things about observing the lifetime it
+  starts were learned the hard way: a lifetime that attached to a recreated topic commits
+  under the new topic id, so the group's positions are keyed by the ids the reset found,
+  where the run's start ids served until then; a process whose declaration dropped a topic
+  commits nothing on it, so the reset does not wait for that; and what is observed of a
+  process while its reset is under way (a deleted group, a bootstrap committing under the
+  old name) belongs to neither lifetime and is set aside.
 
 ## About the environment
 
@@ -253,5 +294,6 @@ What the fault injection learned, for whoever extends it.
 ## Not yet done
 
 - Clock skew as skew; more than three nodes.
-- Anything longer than an hour, and the refusal-class faults inside an hour-long run.
+- Anything longer than an hour. The refusal-class faults with their resets inside an
+  hour-long run, and `add-partitions` followed by its reset.
 
