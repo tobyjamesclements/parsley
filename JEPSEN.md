@@ -35,7 +35,7 @@ column is what happened.
 |---|---|---|
 | Delete records past a lagging task's committed position (`src`, instances down, external sends continuing) | `POSITIONS_DISCARDED_UNREAD` | Came, at the splitter. Nothing delivered past the gap. |
 | Retention discards a held message's copy (records deleted up to the committed position, live) | No refusal | No refusal. |
-| Delete a received topic while messages are held from it (`self`, live) | `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES` | **Did not come.** See below. |
+| Delete a received topic while messages are held from it (`self`, live, then a restart) | `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES` | Did not come at first; see below. Came at the next start once Parsley made the diagnosis there, naming the topic and the held channels. |
 | Delete and recreate a received topic while the process is down (`c`) | `CHANNEL_IDENTITY_CHANGED` at the next start | Came, at the cycler's start: "topics [c] now resolve to different identities than this process's state was built against". |
 | Reset the group's offsets backwards while the process is down (one to five back) | Re-fed records dropped; no duplicate | No refusal, no duplicate delivery, three times. |
 | Delete the ordering changelog, keeping the group's offsets (local state wiped too) | `ORDERING_STATE_LOST` | Came, at the splitter and, in the mixed run, the joiner. |
@@ -101,11 +101,20 @@ missing, so no task is ever initialised. A restart afterwards refused to start a
 `IllegalStateException: declared topics could not be resolved`, which `docs/runbooks.md`
 classes as a prerequisite failure, not a refusal.
 
-So the row's refusal is unreachable through Kafka Streams 4.3.1 by plain deletion. The
-process does stop, and stays stopped, which is the fail-closed outcome; but the status says
-nothing Parsley-shaped about why, the runbook for the refusal does not apply, and the test
-reports a missing expected refusal. Whether the docs should say this, or the start-up
-resolution should name the condition, is a decision for this repository.
+So the row's refusal was unreachable through Kafka Streams 4.3.1 by plain deletion. The
+process did stop, and stayed stopped, which is the fail-closed outcome; but the status said
+nothing Parsley-shaped about why, the runbook for the refusal did not apply, and the test
+reported a missing expected refusal.
+
+The resolution kept the refusal and moved the diagnosis to where the host leaves room for
+it. At start, where a received topic no longer resolves, `StreamsRuntime` now reads the
+process's ordering state before giving up: the state knows the identity the name was bound
+to and which channels hold messages, so a missing received topic with held messages from
+it refuses `CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES`, naming the topic and the channels,
+and a missing topic with nothing held stays the prerequisite failure it was. The
+`delete-topic` fault restarts the instances after the deletion, and the run judges valid
+with the refusal where the table says. `docs/failing-closed.md` and the runbook say that a
+live deletion is reported by the host first and by Parsley at the next start.
 
 ### A start that refuses one process refused them all
 
@@ -245,5 +254,4 @@ What the fault injection learned, for whoever extends it.
 
 - Clock skew as skew; more than three nodes.
 - Anything longer than an hour, and the refusal-class faults inside an hour-long run.
-- A verdict on the topic-deletion finding: documentation, a named start-up condition, or
-  both.
+

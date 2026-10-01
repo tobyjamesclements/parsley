@@ -80,7 +80,7 @@ The start is all-or-nothing, so an exception from it means nothing is running.
 |---|---|---|
 | `FailClosedException` | A refusal the bootstrap could see: state, positions or a declaration that cannot be resumed against. The message names the reason and its remedy. | The reason's runbook below. |
 | `IllegalStateException` ending "Retry this start." | A broker's metadata view lagged, or a sibling instance was mid-start. | Retry. |
-| Any other `IllegalStateException` | A prerequisite is missing or the cluster could not be queried: a declared topic does not exist, the changelog could not be read, positions could not be listed. | Create the topic, restore connectivity, check the ACLs; then retry. |
+| Any other `IllegalStateException` | A prerequisite is missing or the cluster could not be queried: a declared topic does not exist, the changelog could not be read, positions could not be listed. A received topic that no longer exists while the state holds messages from it is not this: it refuses with [`CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES`](#channel_deleted_with_undelivered_messages). | Create the topic, restore connectivity, check the ACLs; then retry. |
 | `IllegalArgumentException` | The declaration is wrong: a duplicate name, a reserved name, two stores composing one changelog name. | Fix the declaration. |
 
 ### If a process stopped after start
@@ -522,14 +522,25 @@ before reusing one.
 #### CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES
 
 **Shape.** `<n> received message(s) from <channel> remain undelivered but the channel's
-topic no longer exists; their place in causal order can no longer be preserved`.
+topic no longer exists; their place in causal order can no longer be preserved` at task
+initialisation; `received topic '<name>' no longer exists while messages received from it
+remain undelivered on [<channels>]` at start.
 
 **What happened.** A received topic was deleted while this process held messages from it,
 which breaches the deletion-hygiene assumption: a topic is deleted only once nothing holds
 an undelivered message from it. The held messages cannot be delivered in order, and cannot
 be skipped. The refusal is raised at task initialisation, by the identity check that finds
 the topic gone — its name unknown in three answers half a second apart — while the task
-still holds messages from it.
+still holds messages from it; or at start, where the received topic no longer resolves and
+the ordering state still holds messages from the identity the name was bound to.
+
+On a live deletion, expect the host to speak first: Kafka Streams will not assign tasks for
+a topology whose source topic is missing, so the running thread stops with the host's own
+reason ("one or more source topics were missing during rebalance"), carried by the status as
+a stop with no refusal, and no task initialisation runs to raise this one. The next start is
+where this refusal is made, with the same message shape naming the topic and the channels
+still holding messages from it. A stop of that shape is this condition until the restart
+says otherwise.
 
 **Check.** The ordering changelog for what was held on that channel, before the reset
 deletes it: each held entry is keyed by channel and position and carries the message as

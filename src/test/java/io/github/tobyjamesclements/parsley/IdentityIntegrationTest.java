@@ -192,6 +192,90 @@ class IdentityIntegrationTest {
     }
 
     /**
+     * A received topic deleted while messages from it are held is diagnosed at the next
+     * start: the host stops the thread first on a live deletion, with its own reason, and
+     * a restart used to refuse as a missing prerequisite, as if the topic had never been
+     * created, with a runbook that says to create it. The ordering state knows the
+     * identity the name was bound to and that channels of it still hold messages, so the
+     * start refuses CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, whose runbook is the reset
+     * this condition needs.
+     */
+    @Test
+    void aReceivedTopicDeletedWhileHeldFromRefusesTheNextStartWithTheDeletionReason() throws Exception {
+        createTopics("dr-a", "dr-b");
+        Topic<String, String> a = Topic.of("dr-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("dr-b", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process p = Process.named("dr")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .receives(b, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .build();
+
+        produce("dr-a", "k", "H", causesHeader(Map.of(new Channel(topicId("dr-b"), 0), 9L)));
+        try (Parsley parsley = Parsley.start(config("dr"), p)) {
+            ClusterTestSupport.awaitFedAndHeld(admin, "dr-dr", "dr-a", delivered);
+        }
+        admin.deleteTopics(List.of("dr-a")).all().get(30, TimeUnit.SECONDS);
+        await("the topic to be gone", () -> {
+            try {
+                return !admin.listTopics().names().get(30, TimeUnit.SECONDS).contains("dr-a");
+            } catch (Exception e) {
+                return false;
+            }
+        }, Duration.ofSeconds(60));
+
+        FailClosedException refusal = assertThrows(FailClosedException.class, () -> Parsley.start(config("dr"), p),
+                "a start with messages held from a topic that no longer exists must refuse, not ask for the topic");
+        assertEquals(FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES, refusal.reason());
+        assertTrue(refusal.getMessage().contains("'dr-a'"), "the refusal names the topic: " + refusal.getMessage());
+        assertEquals(List.of(), List.copyOf(delivered), "nothing was delivered past the held message");
+    }
+
+    /**
+     * The refinement is only for held messages: a received topic deleted with nothing
+     * held from it leaves the state with no claim on it, and the next start refuses as the
+     * missing prerequisite it is, so the operator creates the topic and retries.
+     */
+    @Test
+    void aReceivedTopicDeletedWithNothingHeldStaysAMissingPrerequisiteAtTheNextStart() throws Exception {
+        createTopics("dn-a", "dn-b");
+        Topic<String, String> a = Topic.of("dn-a", Serdes.String(), Serdes.String());
+        Topic<String, String> b = Topic.of("dn-b", Serdes.String(), Serdes.String());
+        ConcurrentLinkedQueue<String> delivered = new ConcurrentLinkedQueue<>();
+        Process p = Process.named("dn")
+                .receives(a, (d, s) -> {
+                    delivered.add(d.value());
+                    return Effects.none();
+                })
+                .receives(b, (d, s) -> Effects.none())
+                .build();
+
+        produce("dn-a", "k", "plain");
+        try (Parsley parsley = Parsley.start(config("dn"), p)) {
+            await("the plain message to deliver", () -> delivered.size() == 1, Duration.ofSeconds(120));
+        }
+        admin.deleteTopics(List.of("dn-a")).all().get(30, TimeUnit.SECONDS);
+        await("the topic to be gone", () -> {
+            try {
+                return !admin.listTopics().names().get(30, TimeUnit.SECONDS).contains("dn-a");
+            } catch (Exception e) {
+                return false;
+            }
+        }, Duration.ofSeconds(60));
+
+        IllegalStateException refusal = assertThrows(IllegalStateException.class, () -> Parsley.start(config("dn"), p),
+                "with nothing held, a missing received topic is a prerequisite, not a refusal");
+        assertTrue(refusal.getMessage().contains("declared topics could not be resolved; refusing to start"),
+                refusal.getMessage());
+    }
+
+    /**
      * The identity classification a task's initialisation acts on, over a real broker
      *: a live topic is neither deleted nor recreated; a deleted one is deleted only
      * once its name is gone across three consistent answers; a topic recreated under its

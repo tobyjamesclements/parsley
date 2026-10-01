@@ -91,7 +91,8 @@ final class StreamsRuntime implements AutoCloseable {
      * @return the running runtime
      * @throws FailClosedException if a process cannot start without breaching the
      *         guarantee, for example when messages remain held on a channel it no longer
-     *         receives, or when a topic was recreated under a name it has state for
+     *         receives, when a topic was recreated under a name it has state for, or when
+     *         a received topic no longer exists while its state holds messages from it
      * @throws IllegalArgumentException if names collide or a topic uses a reserved name
      */
     static StreamsRuntime start(ParsleyConfig config, List<Process> definitions) {
@@ -101,7 +102,13 @@ final class StreamsRuntime implements AutoCloseable {
         Admin admin = Admin.create(clientProps);
         StreamsRuntime runtime = new StreamsRuntime(admin);
         try {
-            Map<String, ResolvedTopic> topics = runtime.resolveTopics(declaredTopics(definitions));
+            Map<String, ResolvedTopic> topics;
+            try {
+                topics = runtime.resolveTopics(declaredTopics(definitions));
+            } catch (IllegalStateException unresolved) {
+                runtime.refuseDeletedWithHeldMessages(config, definitions, clientProps, unresolved);
+                throw unresolved;
+            }
 
             for (Process definition : definitions) {
                 String applicationId = config.applicationIdPrefix() + "-" + definition.name();
@@ -556,6 +563,125 @@ final class StreamsRuntime implements AutoCloseable {
         }
         return new ResolvedTopic(
                 ResolvedTopic.toJavaUuid(description.topicId()), description.partitions().size());
+    }
+
+    /**
+     * Refines a resolution failure where it can: a received topic that no longer exists
+     * while this process's ordering state still holds messages from it is the
+     * {@code CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES} condition (SPEC Safety 9), not a
+     * prerequisite waiting to be created, and the runbook for it is a reset, not a retry.
+     *
+     * <p>The host reaches a live deletion first: Kafka Streams will not assign tasks for a
+     * topology whose source topic is missing, so the task initialisation that would have
+     * raised this refusal never runs, and the thread stops with the host's own diagnosis.
+     * The next start is the first place Parsley can say what happened. The state knows the
+     * identity the name was bound to and which channels hold messages, so the verdict
+     * needs no describe of the deleted topic. Where the failure was not a corroborated
+     * unknown topic, or no received topic is missing, or nothing is held from one, the
+     * resolution failure stands as it was.
+     *
+     * @param unresolved the resolution failure, left to the caller to rethrow
+     * @throws FailClosedException {@code CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES} for the
+     *         first process found holding messages from a received topic that no longer exists
+     */
+    private void refuseDeletedWithHeldMessages(ParsleyConfig config, List<Process> definitions,
+                                               Map<String, Object> clientProps, IllegalStateException unresolved) {
+        if (!chainHasUnknownTopic(unresolved)) {
+            return;
+        }
+        Set<String> missing = missingTopics(declaredTopics(definitions));
+        for (Process definition : definitions) {
+            List<String> missingInputs = new ArrayList<>(ProcessTopology.inputTopics(definition));
+            missingInputs.retainAll(missing);
+            if (missingInputs.isEmpty()) {
+                continue;
+            }
+            String applicationId = config.applicationIdPrefix() + "-" + definition.name();
+            java.util.Optional<TopicDescription> changelog = describeChangelog(applicationId);
+            if (changelog.isEmpty()) {
+                continue;
+            }
+            Map<byte[], byte[]> orderingState = readOrderingChangelog(applicationId, clientProps,
+                    changelog.get().partitions().size()).latest();
+            Map<String, UUID> bindings = OrderingStateCodec.nameBindings(orderingState);
+            Set<Channel> held = OrderingStateCodec.heldChannels(orderingState);
+            for (String name : missingInputs) {
+                UUID bound = bindings.get(name);
+                if (bound == null) {
+                    continue;
+                }
+                List<Channel> heldFromIt = new ArrayList<>();
+                for (Channel channel : held) {
+                    if (channel.topicId().equals(bound)) {
+                        heldFromIt.add(channel);
+                    }
+                }
+                if (!heldFromIt.isEmpty()) {
+                    throw new FailClosedException(FailClosedException.Reason.CHANNEL_DELETED_WITH_UNDELIVERED_MESSAGES,
+                            applicationId + ": received topic '" + name + "' no longer exists while messages received"
+                                    + " from it remain undelivered on " + heldFromIt + "; their place in causal order"
+                                    + " can no longer be preserved (SPEC Safety 9). The deletion breached the"
+                                    + " deletion-hygiene assumption (SPEC Assumption 17); reset this process's state"
+                                    + " deliberately to proceed.");
+                }
+            }
+        }
+    }
+
+    private static boolean chainHasUnknownTopic(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The declared names the broker reports unknown in three consistent answers half a
+     * second apart, the same evidence standard as the resolution itself; empty where any
+     * answer fails for another reason, since nothing is then concluded.
+     */
+    private Set<String> missingTopics(Set<String> names) {
+        Set<String> missing = null;
+        for (int answer = 0; answer < AdminTopicIdentitySource.CORROBORATING_ANSWERS; answer++) {
+            Set<String> unknownNow = new HashSet<>();
+            try {
+                for (Map.Entry<String, org.apache.kafka.common.KafkaFuture<TopicDescription>> entry
+                        : admin.describeTopics(names).topicNameValues().entrySet()) {
+                    try {
+                        entry.getValue().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    } catch (java.util.concurrent.ExecutionException e) {
+                        if (!(e.getCause() instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException)) {
+                            return Set.of();
+                        }
+                        unknownNow.add(entry.getKey());
+                    }
+                }
+            } catch (InterruptedException interrupted) {
+                Thread.currentThread().interrupt();
+                return Set.of();
+            } catch (Exception e) {
+                return Set.of();
+            }
+            if (missing == null) {
+                missing = unknownNow;
+            } else {
+                missing.retainAll(unknownNow);
+            }
+            if (missing.isEmpty()) {
+                return Set.of();
+            }
+            if (answer < AdminTopicIdentitySource.CORROBORATING_ANSWERS - 1) {
+                try {
+                    Thread.sleep(CORROBORATION_BACKOFF.toMillis());
+                } catch (InterruptedException interrupted) {
+                    Thread.currentThread().interrupt();
+                    return Set.of();
+                }
+            }
+        }
+        return missing;
     }
 
     private Map<String, ResolvedTopic> resolveTopics(Set<String> names) {
